@@ -1,0 +1,10 @@
+ISIRO
+Copyright 2025-2026 Isiro, Inc.
+
+This product includes software developed at Isiro, Inc.
+(https://isiro.ai/).
+
+This repository contains documentation, scripts, and benchmark harness for
+the ISIRO product. The ISIRO Runtime, Compiler, and .tic format are
+proprietary software governed by the ISIRO EULA (https://isiro.ai/eula)
+and are NOT covered by the Apache-2.0 license in this repository.

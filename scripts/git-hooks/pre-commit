@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pre-commit hook: blocks commits that do not belong in this public tree.
+# Install:
+#   ln -sf "$(git rev-parse --show-toplevel)/scripts/git-hooks/pre-commit" .git/hooks/pre-commit
+
+set -euo pipefail
+
+ERRORS=0
+
+fail() {
+  echo "PRE-COMMIT BLOCKED: $1" >&2
+  ERRORS=$((ERRORS + 1))
+}
+
+# Check staged files only
+STAGED=$(git diff --cached --name-only --diff-filter=ACM)
+
+if [[ -z "$STAGED" ]]; then
+  exit 0
+fi
+
+# No engine/kernel source files
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  case "$f" in
+    *.cu|*.cuh|*.cpp|*.cc|*.cxx|*.hpp|*.h|*.hxx)
+      fail "engine/kernel source file staged: $f"
+      ;;
+  esac
+done <<< "$STAGED"
+
+# No secrets/credentials files
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  case "$(basename "$f")" in
+    .env|*.pem|*.key|credentials.json|.release.env)
+      fail "secrets/credentials file staged: $f"
+      ;;
+  esac
+done <<< "$STAGED"
+
+# No disallowed internal path names in staged text
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  case "$f" in
+    *.png|*.jpg|*.jpeg|*.gif|*.webp|*.pdf|*.zip|*.gz|*.xz|*.whl|*.so)
+      continue
+      ;;
+  esac
+  # Split so this file does not contain the disallowed token as one literal.
+  _ref="isiro"'-core'
+  if git show ":$f" 2>/dev/null | grep -qF "$_ref"; then
+    fail "disallowed path reference in staged file: $f"
+  fi
+  unset _ref
+done <<< "$STAGED"
+
+# No files larger than 1MB
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  size=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
+  if [[ "$size" -gt 1048576 ]]; then
+    fail "file >1MB staged: $f (${size} bytes)"
+  fi
+done <<< "$STAGED"
+
+if [[ "$ERRORS" -gt 0 ]]; then
+  echo "" >&2
+  echo "$ERRORS public-tree safety violation(s). Commit blocked." >&2
+  exit 1
+fi

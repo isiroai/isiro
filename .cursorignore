@@ -1,0 +1,38 @@
+# Local user notes stay gitignored but must remain @-taggable / agent-readable.
+!user/
+!user/**
+
+# Local scratch bench outputs (often 100G+; never agent context).
+# published/ stays readable (reports / methodology).
+benchmarks/results/scratch/
+benchmarks/**/scratch/
+**/results/scratch/
+
+# Weights / local installs
+models/
+.venv/
+dist/
+build/
+__pycache__/
+*.egg-info/
+
+# Profiler dumps if any land under public tree
+**/*.ncu-rep
+**/*.nsys-rep
+**/*.qdrep
+**/*.sqlite
+**/*.capture.log
+
+# --- token budget (agent hard-block) ---
+*.so
+*.so.*
+**/*.cubin
+**/*.pt
+**/*.pth
+**/*.safetensors
+**/*.onnx
+**/*.gguf
+node_modules/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

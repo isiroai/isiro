@@ -1,0 +1,20 @@
+{
+  "completed": 200,
+  "failed": 0,
+  "duration": 12.5,
+  "total_input_tokens": 25600,
+  "total_output_tokens": 12800,
+  "median_ttft_ms": 10.0,
+  "percentiles_ttft_ms": [[50, 10.0], [95, 15.0], [99, 20.0]],
+  "median_itl_ms": 2.0,
+  "percentiles_itl_ms": [[50, 2.0], [95, 3.0], [99, 4.0]],
+  "median_tpot_ms": 2.1,
+  "percentiles_tpot_ms": [[50, 2.1], [95, 3.1], [99, 4.1]],
+  "p50_tpot_ms": 2.1,
+  "p95_tpot_ms": 3.1,
+  "p99_tpot_ms": 4.1,
+  "median_e2el_ms": 140.0,
+  "percentiles_e2el_ms": [[50, 140.0], [95, 180.0], [99, 220.0]],
+  "output_throughput": 1024.5,
+  "request_throughput": 16.0
+}

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Story diagram for README (comfortable layout). Transparent canvas. No numeric savings. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="379.85397" viewBox="0 0 1280 379.85397" role="img" aria-labelledby="title desc">
+  <title id="title">ISIRO: baseline weights to .tic with bit-exact decode</title>
+  <desc id="desc">Baseline model compiles once into a compact .tic bundle, then serve with bit-exact weights. Same output. No quantization.</desc>
+  <g transform="translate(128.0229,0.0000) scale(1.37628250)">
+    <!-- Baseline model -->
+    <g>
+      <rect x="16" y="28" width="148" height="220" rx="12" fill="#0c0e10" stroke="#2a3036" stroke-width="0.75"/>
+      <text x="90.0" y="56" text-anchor="middle" fill="#d4d4d8" font-size="11" font-weight="500" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">Baseline model</text>
+      <rect x="40.0" y="70" width="100" height="18" rx="5" fill="#3a4250"/>
+      <rect x="40.0" y="98" width="100" height="18" rx="5" fill="#454e5e"/>
+      <rect x="40.0" y="126" width="100" height="18" rx="5" fill="#505a6c"/>
+      <rect x="40.0" y="154" width="100" height="18" rx="5" fill="#3a4250"/>
+      <rect x="40.0" y="182" width="100" height="18" rx="5" fill="#454e5e"/>
+      <text x="90.0" y="232" text-anchor="middle" fill="#71717a" font-size="10" font-weight="400" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">Large in memory</text>
+    </g>
+    <!-- compile once -->
+    <g>
+      <text x="240.0" y="122.0" text-anchor="middle" fill="#8b9cff" fill-opacity="0.72" font-size="10" font-weight="500" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">compile once</text>
+      <g aria-hidden="true">
+      <line x1="196.0" y1="138.0" x2="278.0" y2="138.0" stroke="#8b9cff" stroke-opacity="0.72" stroke-width="0.75" stroke-linecap="round"/>
+      <polygon points="277.0,134.0 284.0,138.0 277.0,142.0" fill="#8b9cff" fill-opacity="0.72"/>
+    </g>
+    </g>
+    <!-- .tic bundle -->
+    <g>
+      <rect x="316" y="56" width="148" height="164" rx="12" fill="#12181a" stroke="#2a9aad" stroke-width="1"/>
+      <text x="390.0" y="84" text-anchor="middle" fill="#d4d4d8" font-size="11" font-weight="500" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">.tic bundle</text>
+      <rect x="362.0" y="98" width="56" height="18" rx="5" fill="#2a9aad"/>
+      <rect x="362.0" y="126" width="56" height="18" rx="5" fill="#4bb3c0"/>
+      <rect x="362.0" y="154" width="56" height="18" rx="5" fill="#7acad4"/>
+      <text x="390.0" y="204" text-anchor="middle" fill="#71717a" font-size="10" font-weight="400" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">Smaller in memory</text>
+    </g>
+    <!-- serve -->
+    <g>
+      <text x="540.0" y="122.0" text-anchor="middle" fill="#8b9cff" fill-opacity="0.72" font-size="10" font-weight="500" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">serve</text>
+      <g aria-hidden="true">
+      <line x1="496.0" y1="138.0" x2="578.0" y2="138.0" stroke="#8b9cff" stroke-opacity="0.72" stroke-width="0.75" stroke-linecap="round"/>
+      <polygon points="577.0,134.0 584.0,138.0 577.0,142.0" fill="#8b9cff" fill-opacity="0.72"/>
+    </g>
+    </g>
+    <!-- bit-exact seal -->
+    <g>
+      <rect x="616" y="56" width="112" height="164" rx="12" fill="#0c0e10" stroke="#2a3036" stroke-width="0.75"/>
+      <circle cx="672.0" cy="116.0" r="18" fill="none" stroke="#4a9e88" stroke-width="1.5"/>
+      <path d="M 665.5 116.5 L 670.5 121.5 L 679.5 111.5" fill="none" stroke="#4a9e88" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="672.0" y="150.0" text-anchor="middle" fill="#d4d4d8" font-size="11" font-weight="500" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">Bit-exact</text>
+      <text x="672.0" y="164.0" text-anchor="middle" fill="#d4d4d8" font-size="11" font-weight="500" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">Same output</text>
+      <text x="672.0" y="178.0" text-anchor="middle" fill="#d4d4d8" font-size="11" font-weight="500" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">No quantization</text>
+    </g>
+  </g>
+</svg>
