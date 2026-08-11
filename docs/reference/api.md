@@ -11,7 +11,7 @@ anchorPrefixes:
 
 `isiro serve` owns the inference API on port 8000. It is OpenAI-compatible, so you can use OpenAI clients and SDKs with it. Prometheus `/metrics` is on the same port.
 
-Base URL: `http://127.0.0.1:8000/v1`
+Base URL: `http://HOST:8000/v1` (e.g. on localhost, `http://127.0.0.1:8000/v1`)
 
 Smoke test:
 
