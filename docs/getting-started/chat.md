@@ -9,7 +9,7 @@ anchorPrefixes:
 
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-After [isiro serve](/docs/getting-started/run) is running, you can chat with the model through any client that speaks the OpenAI API at `http://<host>:8000/v1`. For example `curl`, an SDK, or a chat UI. One option is [Open WebUI](https://openwebui.com) (third-party); a Docker sample is below if you want to try it.
+After [isiro serve](/docs/getting-started/run) is running, you can chat with the model through any client that speaks the OpenAI API at `http://HOST:8000/v1` (e.g. on localhost, `http://127.0.0.1:8000/v1`). For example `curl`, an SDK, or a chat UI. One option is [Open WebUI](https://openwebui.com) (third-party); a Docker sample is below if you want to try it.
 
 **Linux (Docker Engine)** sample. Host networking lets the container reach the API on `127.0.0.1:8000` directly:
 
@@ -33,7 +33,7 @@ docker run -d -p 3000:8080 \
   ghcr.io/open-webui/open-webui:v0.9.6
 ```
 
-1. Open [http://localhost:3000](http://localhost:3000)
+1. Open `http://localhost:3000`
 2. Create a local admin account
 3. Select your model if it is not already selected, then chat
 
@@ -62,7 +62,7 @@ On Linux, "no models" / a slow UI usually means the container cannot reach the s
 docker exec open-webui curl -sf http://127.0.0.1:8000/v1/models
 ```
 
-If that returns your model list, refresh [http://localhost:3000](http://localhost:3000). If you first tried the Docker Desktop command and it saved a bad connection, remove the container and volume (`docker rm -f open-webui && docker volume rm open-webui`) before re-running the host-networking command.
+If that returns your model list, refresh `http://localhost:3000`. If you first tried the Docker Desktop command and it saved a bad connection, remove the container and volume (`docker rm -f open-webui && docker volume rm open-webui`) before re-running the host-networking command.
 
 The sample pins Open WebUI `v0.9.6`. Newer 0.10.x builds can leave chat replies blank with some OpenAI-compatible backends; stick to the pinned tag unless you have a reason to upgrade.
 
