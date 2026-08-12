@@ -43,7 +43,7 @@ source .venv/bin/activate
 pip install --upgrade huggingface_hub
 hf download Qwen/Qwen2.5-7B-Instruct --local-dir Qwen2.5-7B-Instruct
 
-# Compile to .tic bundle (requires [compiler access](https://isiro.ai/compiler))
+# Compile to .tic bundle (request compiler: https://isiro.ai/compiler)
 isiro compile Qwen2.5-7B-Instruct --model-id Qwen/Qwen2.5-7B-Instruct -j 8
 
 # Serve (vLLM supported today)
