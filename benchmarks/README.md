@@ -57,6 +57,17 @@ benchmarks/run_ab.sh {model} --both-graph-modes
 
 `SYSTEM_ID` comes from that model's `common.env` (or GPU auto-detect).
 
+Long prefix (KV-bound ITL vs vendor FA). Use the overlay and profile; keep
+prefix caching off. Report ITL as `e2e_itl_vs_fa`. That serve meter is not
+Part B `bf16/sak` and is not v0.1.0 `v10/v11`.
+
+```bash
+# e.g. 16k prefix on a 32k window (5090 7B). Try 32k, then 64k if it fits.
+benchmarks/run_ab.sh qwen2.5-7b-instruct \
+  --config benchmarks/qwen2.5-7b-instruct/longctx.env \
+  --profiles=generation-16384-256
+```
+
 ## Output
 
 After a launch finishes, open the timestamped report:

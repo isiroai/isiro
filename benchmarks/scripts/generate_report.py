@@ -467,6 +467,11 @@ def _section_d(
                 "Non-KV GPU memory; a smaller Non-KV slice that still "
                 "delivers high tok/s scores higher."
             ),
+            (
+                "Serve ITL vs vendor FA is e2e_itl_vs_fa (this table). "
+                "It is not Part B bf16/sak (kernel K@Q) and is not "
+                "v0.1.0 v10/v11."
+            ),
             "",
         ]
     )

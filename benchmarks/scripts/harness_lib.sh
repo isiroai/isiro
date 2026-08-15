@@ -194,7 +194,7 @@ EQUALIZE_OUTPUT_TOKENS="${EQUALIZE_OUTPUT_TOKENS:-64}"
 
 # Profile selection. Public default is decode-only. TTFT names remain allowed
 # for eng iteration via --profiles=... or ISIRO_BENCH_FULL_PROFILES=1.
-ALL_PROFILES=(ttft-128 ttft-512 ttft-2048 generation-32-256)
+ALL_PROFILES=(ttft-128 ttft-512 ttft-2048 generation-32-256 generation-16384-256)
 DEFAULT_PROFILES=(generation-32-256)
 SELECTED_PROFILES=("${DEFAULT_PROFILES[@]}")
 if [[ "${ISIRO_BENCH_FULL_PROFILES:-0}" == "1" ]]; then
@@ -1039,6 +1039,7 @@ ttft-128 128 64
 ttft-512 512 64
 ttft-2048 2048 64
 generation-32-256 32 256
+generation-16384-256 16384 256
 PROFILES
 }
 
