@@ -48,7 +48,13 @@ from compare_ab import (  # noqa: E402
     build_equal_batch_block,
     fold_serve_output_match,
 )
-from generate_report import _graph_mode, render, sanitize, write_report  # noqa: E402
+from generate_report import (  # noqa: E402
+    _graph_mode,
+    bytes_gb,
+    render,
+    sanitize,
+    write_report,
+)
 from launch_ab import (  # noqa: E402
     resolve_system_id,
 )
@@ -559,6 +565,13 @@ class BenchmarkTests(unittest.TestCase):
         lose["kv_cache"]["tic_memory_bytes_measured"] = 90
         lose_errs = validate_capacity_memory_story(lose)
         self.assertTrue(any("§B fail" in e and "KV memory" in e for e in lose_errs), lose_errs)
+
+    def test_qwen_aug15_kv_gb_is_si_not_vllm_gib(self) -> None:
+        """Report 17.94 GB is bytes/1e9 from 312896 tokens, not a GiB log."""
+        bpt = 28 * 4 * 128 * 2 * 2
+        tokens = 312_896
+        self.assertEqual(bytes_gb(tokens * bpt), "17.94 GB")
+        self.assertAlmostEqual(tokens * bpt / 1024**3, 16.71, places=2)
 
     def test_equal_batch_reuse_is_mode_agnostic(self) -> None:
         text = (SCRIPTS / "harness_lib.sh").read_text(encoding="utf-8")
