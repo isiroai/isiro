@@ -74,6 +74,10 @@ After a launch finishes, open the timestamped report:
 
 `benchmarks/{model}/{system_id}-report-<UTC>.md`
 
+Those filenames stay local (gitignored) so a customer run does not look like
+a published result. The run UTC stays in the report body. To publish, copy
+to `{system_id}-report.md` (no stamp in the filename) and commit that.
+
 Logs and other run artifacts are under gitignored `benchmarks/scratch/`.
 
 ## Methodology

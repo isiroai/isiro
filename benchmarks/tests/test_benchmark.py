@@ -973,6 +973,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertTrue(dest.is_file())
             names = {p.name for p in dest.parent.iterdir()}
             self.assertEqual(names, {"rtx-5090-report-20260811T120000Z.md"})
+            self.assertNotIn("rtx-5090-report.md", names)
             self.assertFalse((dest.parent / "report.md").exists())
             self.assertFalse((dest.parent / "tic").exists())
             self.assertFalse((dest.parent / "isiro").exists())
@@ -991,6 +992,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("vllm bench serve", text)
         self.assertIn("{model}/{system_id}-report-<UTC>.md", text)
         self.assertIn("benchmarks/{model}/{system_id}-report-<UTC>.md", text)
+        self.assertIn("{system_id}-report.md", text)
         self.assertNotIn("benchmarks/scratch/<run-id>/report.md", text)
         self.assertIn("benchmarks/scratch/", text)
         self.assertNotIn("Rename to `report.md`", text)
@@ -1022,6 +1024,26 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("throughput", text.lower())
         self.assertIn("generation", text.lower())
         self.assertIn("latency", text.lower())
+
+    def test_gitignore_timestamped_reports_not_official_name(self) -> None:
+        ignore = (ROOT.parent / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("*-report-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T*Z.md", ignore)
+        stamped = (
+            "benchmarks/qwen2.5-7b-instruct/rtx-5090-report-20260815T033111Z.md"
+        )
+        official = "benchmarks/qwen2.5-7b-instruct/rtx-5090-report.md"
+        chk = subprocess.run(
+            ["git", "check-ignore", "-q", stamped],
+            cwd=ROOT.parent,
+            check=False,
+        )
+        self.assertEqual(chk.returncode, 0, "timestamped report must be ignored")
+        chk_off = subprocess.run(
+            ["git", "check-ignore", "-q", official],
+            cwd=ROOT.parent,
+            check=False,
+        )
+        self.assertEqual(chk_off.returncode, 1, "official report name must be commitable")
 
     def test_scripts_omit_invent_layout_jargon(self) -> None:
         private_tree = "isiro" + "-core"
