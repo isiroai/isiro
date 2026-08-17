@@ -35,7 +35,7 @@ for arg in "$@"; do
       ;;
     --no-reuse-baseline) NO_REUSE_BASELINE=1 ;;
     --graphs|--graph-on) GRAPHS_ON=1 ;;
-    --eager|--graph-off)
+    --enforce-eager|--eager|--graph-off)
       GRAPHS_ON=0
       EAGER_EXPLICIT=1
       ;;
@@ -53,11 +53,10 @@ for arg in "$@"; do
       exit 2
       ;;
     -h|--help)
-      echo "usage: benchmarks/run_ab.sh {model} [--dry-run] [--graph-on|--graph-off] [--no-reuse-baseline] [--profiles=...]" >&2
+      echo "usage: benchmarks/run_ab.sh {model} [--dry-run] [--enforce-eager] [--no-reuse-baseline] [--profiles=...]" >&2
       echo "  ISIRO_BENCH_CONFIG=path/to/common.env  (default: ${HERE}/common.env)" >&2
-      echo "  Public path: capacity-primary A/B; Graph ON by default." >&2
-      echo "  --graph-on: product default (matched outer CUDA graphs A/B)." >&2
-      echo "  --graph-off: matched graphs-OFF A/B (--eager is an alias)." >&2
+      echo "  Public path: capacity-primary A/B; eager prefill, graph decode." >&2
+      echo "  --enforce-eager: full eager A/B (same meaning as vLLM)." >&2
       echo "  Prefer: benchmarks/run_ab.sh <model> --both-graph-modes to record both." >&2
       echo "  --profiles=generation-32-256: default." >&2
       exit 0
@@ -337,6 +336,18 @@ TIC_SERVE=(
   --host 0.0.0.0 --port "${API_PORT}"
   --max-model-len "${SERVE_MAX_MODEL_LEN}"
 )
+
+# Sets TIC_PID. Appends --enforce-eager when SERVE_ENFORCE_EAGER=true.
+start_tic_serve() {
+  local log="$1"
+  unset ISIRO_SERVE_CUDA_GRAPHS
+  if [[ "${SERVE_ENFORCE_EAGER}" == "true" ]]; then
+    "${TIC_SERVE[@]}" --enforce-eager >"${log}" 2>&1 &
+  else
+    "${TIC_SERVE[@]}" >"${log}" 2>&1 &
+  fi
+  TIC_PID=$!
+}
 VERIFY=(
   "${ISIRO_SERVE_BIN}" verify "${TIC_MODEL_DIR}/model.tic"
 )
@@ -620,7 +631,7 @@ text = upsert(text, "tensor_parallel_size", tp)
 text = upsert(text, "max_num_seqs", max_seqs)
 text = upsert(text, "no_enable_prefix_caching", "true")
 # enforce_eager is a forbidden serve.yaml key (isiro serve controls it).
-# Product default is outer graphs ON; eager A/B sets ISIRO_SERVE_CUDA_GRAPHS=0
+# Product default is outer graphs ON; eager A/B sets ISIRO_SERVE_ENFORCE_EAGER=1
 # on the serve process env (see the TIC serve launch), so it is not written here.
 open(target, "w", encoding="utf-8").write(text)
 PY
@@ -1206,7 +1217,7 @@ probe_tic_max_seqs() {
   SERVE_MAX_NUM_SEQS="${seqs}"
   prepare_tic_bundle
   # Capacity probes stay eager for fast boot; timed serve uses GRAPH_MODE below.
-  export ISIRO_SERVE_CUDA_GRAPHS=0
+  export ISIRO_SERVE_ENFORCE_EAGER=1
   SERVE_ENFORCE_EAGER="true"
   if [[ -n "${TIC_PID}" ]] && kill -0 "${TIC_PID}" 2>/dev/null; then
     kill "${TIC_PID}" 2>/dev/null || true
@@ -1216,8 +1227,7 @@ probe_tic_max_seqs() {
   fuser -k "${API_PORT}/tcp" >/dev/null 2>&1 || true
   ensure_api_port_free
   : >"${log}"
-  "${TIC_SERVE[@]}" >"${log}" 2>&1 &
-  TIC_PID=$!
+  start_tic_serve "${log}"
   if wait_ready "${log}"; then
     kill "${TIC_PID}" 2>/dev/null || true
     wait "${TIC_PID}" 2>/dev/null || true
@@ -1442,9 +1452,9 @@ scale_tic_seqs_from_measured_kv() {
   prepare_tic_bundle
   # Matched probe uses the timed graph mode (not eager capacity-search probes).
   if [[ "${SERVE_ENFORCE_EAGER}" == "false" ]]; then
-    export ISIRO_SERVE_CUDA_GRAPHS=1
+    export ISIRO_SERVE_ENFORCE_EAGER=0
   else
-    export ISIRO_SERVE_CUDA_GRAPHS=0
+    export ISIRO_SERVE_ENFORCE_EAGER=1
   fi
   probe_log="${LOG_DIR}/capacity-kv-measured-probe.log"
   if [[ -n "${TIC_PID}" ]] && kill -0 "${TIC_PID}" 2>/dev/null; then
@@ -1456,9 +1466,8 @@ scale_tic_seqs_from_measured_kv() {
   ensure_api_port_free
   : >"${probe_log}"
   echo "capacity KV-measured probe: max_num_seqs=${BASELINE_CAPACITY_SEQS} (matched)" >&2
-  "${TIC_SERVE[@]}" >"${probe_log}" 2>&1 &
-  probe_pid=$!
-  TIC_PID="${probe_pid}"
+  start_tic_serve "${probe_log}"
+  probe_pid="${TIC_PID}"
   if ! wait_ready "${probe_log}" "${probe_pid}"; then
     echo "TIC KV-measured probe failed; see ${probe_log}" >&2
     kill "${probe_pid}" 2>/dev/null || true
@@ -1596,11 +1605,11 @@ fi
 prepare_tic_bundle
 
 # Select the TIC CUDA-graph mode to match the baseline A/B.
-# Product serve defaults to outer graphs ON; --eager sets ISIRO_SERVE_CUDA_GRAPHS=0.
+# Product serve defaults to outer graphs ON; --enforce-eager sets ISIRO_SERVE_ENFORCE_EAGER=1.
 if [[ "${SERVE_ENFORCE_EAGER}" == "false" ]]; then
-  export ISIRO_SERVE_CUDA_GRAPHS=1
+  export ISIRO_SERVE_ENFORCE_EAGER=0
 else
-  export ISIRO_SERVE_CUDA_GRAPHS=0
+  export ISIRO_SERVE_ENFORCE_EAGER=1
 fi
 # Drop inherited fused-kernel override env from parent shells so serve A/B stays clean.
 while IFS= read -r _knob; do
@@ -1645,8 +1654,7 @@ ISIRO_HBM_RECLAIM_FLAG="${LOG_DIR}/isiro-hbm-reclaim.flag"
 rm -f "${ISIRO_HBM_RECLAIM_FLAG}"
 export ISIRO_HBM_RECLAIM_FLAG
 : >"${LOG_DIR}/isiro-serve.log"
-"${TIC_SERVE[@]}" >"${LOG_DIR}/isiro-serve.log" 2>&1 &
-TIC_PID=$!
+start_tic_serve "${LOG_DIR}/isiro-serve.log"
 # SERV-0101 often means a still-dying prior holder; one delayed retry only.
 if ! wait_ready "${LOG_DIR}/isiro-serve.log" "${TIC_PID}"; then
   echo "TIC serve not ready; delayed retry after port cleanup" >&2
@@ -1656,8 +1664,7 @@ if ! wait_ready "${LOG_DIR}/isiro-serve.log" "${TIC_PID}"; then
   sleep 8
   ensure_api_port_free
   : >"${LOG_DIR}/isiro-serve.log"
-  "${TIC_SERVE[@]}" >"${LOG_DIR}/isiro-serve.log" 2>&1 &
-  TIC_PID=$!
+  start_tic_serve "${LOG_DIR}/isiro-serve.log"
   wait_ready "${LOG_DIR}/isiro-serve.log" "${TIC_PID}" || {
     echo "TIC serve failed; see ${LOG_DIR}/isiro-serve.log" >&2
     if [[ "${CAPACITY_KV_SCALE}" -eq 1 ]]; then
@@ -1812,16 +1819,15 @@ PY
     BENCH_MAX_CONCURRENCY="${matched_conc}"
     prepare_tic_bundle
     if [[ "${SERVE_ENFORCE_EAGER}" == "false" ]]; then
-      export ISIRO_SERVE_CUDA_GRAPHS=1
+      export ISIRO_SERVE_ENFORCE_EAGER=0
     else
-      export ISIRO_SERVE_CUDA_GRAPHS=0
+      export ISIRO_SERVE_ENFORCE_EAGER=1
     fi
     fuser -k "${API_PORT}/tcp" >/dev/null 2>&1 || true
     sleep 3
     ensure_api_port_free
     : >"${LOG_DIR}/equal-batch-isiro-serve.log"
-    "${TIC_SERVE[@]}" >"${LOG_DIR}/equal-batch-isiro-serve.log" 2>&1 &
-    TIC_PID=$!
+    start_tic_serve "${LOG_DIR}/equal-batch-isiro-serve.log"
     if ! wait_ready "${LOG_DIR}/equal-batch-isiro-serve.log" "${TIC_PID}"; then
       echo "equal-batch TIC serve not ready; delayed retry" >&2
       kill "${TIC_PID}" 2>/dev/null || true
@@ -1830,8 +1836,7 @@ PY
       sleep 5
       ensure_api_port_free
       : >"${LOG_DIR}/equal-batch-isiro-serve.log"
-      "${TIC_SERVE[@]}" >"${LOG_DIR}/equal-batch-isiro-serve.log" 2>&1 &
-      TIC_PID=$!
+      start_tic_serve "${LOG_DIR}/equal-batch-isiro-serve.log"
       wait_ready "${LOG_DIR}/equal-batch-isiro-serve.log" "${TIC_PID}" || {
         echo "equal-batch TIC serve failed; see ${LOG_DIR}/equal-batch-isiro-serve.log" >&2
         tail -n 80 "${LOG_DIR}/equal-batch-isiro-serve.log" >&2 || true

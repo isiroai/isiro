@@ -48,7 +48,7 @@ from compare_ab import (  # noqa: E402
     build_equal_batch_block,
     fold_serve_output_match,
 )
-from generate_report import render, sanitize, write_report  # noqa: E402
+from generate_report import _graph_mode, render, sanitize, write_report  # noqa: E402
 from launch_ab import (  # noqa: E402
     resolve_system_id,
 )
@@ -627,8 +627,18 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("Footprint-adjusted tok/s ratio", report)
             self.assertNotIn("matched A/B", report)
             self.assertNotIn("ISIRO_SERVE_CUDA_GRAPHS", report)
+            self.assertNotIn("ISIRO_SERVE_ENFORCE_EAGER", report)
             self.assertNotIn("Fairness gate", report)
             self.assertIn("Fairness check", report)
+
+    def test_graph_mode_defaults_to_graphs_when_unset(self) -> None:
+        self.assertEqual(_graph_mode({"baseline_serve": ["vllm", "serve"]}), "graphs")
+        self.assertEqual(
+            _graph_mode({"baseline_serve": ["vllm", "serve", "--enforce-eager"]}),
+            "eager",
+        )
+        self.assertEqual(_graph_mode({"enforce_eager": False}), "graphs")
+        self.assertEqual(_graph_mode({"enforce_eager": True}), "eager")
 
     def test_report_publish(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -774,7 +784,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("system_id=rtx-5090", result.stdout)
         self.assertIn("ISIRO_VERIFY_REFERENCE=1", result.stdout)
         self.assertIn("ISIRO_BENCH_EQUAL_BATCH=1", result.stdout)
-        self.assertIn("--graph-on", result.stdout)
+        self.assertNotIn("--graph-on", result.stdout)
 
     def test_launch_both_graph_modes_dry_meta(self) -> None:
         env = {
@@ -800,8 +810,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("eager:", result.stdout)
         self.assertIn("graphs:", result.stdout)
-        self.assertIn("--graph-off", result.stdout)
-        self.assertIn("--graph-on", result.stdout)
+        self.assertIn("--enforce-eager", result.stdout)
+        self.assertNotIn("--graph-on", result.stdout)
 
     def test_launch_rejects_both_with_graphs(self) -> None:
         result = subprocess.run(
@@ -814,6 +824,26 @@ class BenchmarkTests(unittest.TestCase):
                 "rtx-5090",
                 "--both-graph-modes",
                 "--graph-on",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(ROOT.parent),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pass only one of", result.stderr)
+
+    def test_launch_rejects_both_with_enforce_eager(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "launch_ab.py"),
+                "qwen2.5-7b-instruct",
+                "--dry-run",
+                "--system-id",
+                "rtx-5090",
+                "--both-graph-modes",
+                "--enforce-eager",
             ],
             capture_output=True,
             text=True,
@@ -952,7 +982,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("benchmarks/scratch/", text)
         self.assertNotIn("Rename to `report.md`", text)
         self.assertIn("benchmarks/run_ab.sh {model}\n", text)
-        self.assertIn("benchmarks/run_ab.sh {model} --graph-off", text)
+        self.assertIn("benchmarks/run_ab.sh {model} --enforce-eager", text)
         self.assertIn("benchmarks/run_ab.sh {model} --both-graph-modes", text)
         self.assertNotIn("benchmarks/run_ab.sh {model} --smoke", text)
         self.assertIn("benchmarks/common.env.example", text)
@@ -970,6 +1000,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertNotIn("## Results", text)
         self.assertNotIn("promote_run", text)
         self.assertNotIn("ISIRO_SERVE_CUDA_GRAPHS", text)
+        self.assertNotIn("ISIRO_SERVE_ENFORCE_EAGER", text)
         self.assertNotIn("results/published", text)
         self.assertNotIn("decode-32-256", text)
         self.assertIn("correctness", text.lower())
@@ -1091,9 +1122,13 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("<details>", report)
             self.assertNotIn("<summary>", report)
             self.assertNotIn("ISIRO_SERVE_CUDA_GRAPHS", report)
+            self.assertNotIn("ISIRO_SERVE_ENFORCE_EAGER", report)
             self.assertNotIn("matched A/B", report)
-            self.assertIn("CUDA graphs on (product default; `--graph-on`).", report)
-            self.assertIn("CUDA graphs off (`--graph-off`).", report)
+            self.assertIn(
+                "Product default: eager prefill, graph decode.",
+                report,
+            )
+            self.assertIn("Full eager (`--enforce-eager`).", report)
             # Dual mode uses full 1A-1E / 2A-2E tables (both visible).
             self.assertEqual(
                 report.count("## 1C. Generation (input 32 / output 256)"), 1
@@ -1132,7 +1167,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("Weight bit-exactness", report)
             self.assertIn("4/4 prompts, temp=0, token IDs equal", report)
             self.assertIn(
-                "ON (CUDA graphs); OFF (eager)",
+                "ON (eager prefill, graph decode); OFF (eager)",
                 report,
             )
 

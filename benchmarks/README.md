@@ -49,8 +49,8 @@ benchmarks/run_ab.sh {model}
 Other modes:
 
 ```bash
-# matches Graph OFF section of the report
-benchmarks/run_ab.sh {model} --graph-off
+# matches the report Graph OFF / full eager section
+benchmarks/run_ab.sh {model} --enforce-eager
 # matches the report (Graph ON & Graph OFF)
 benchmarks/run_ab.sh {model} --both-graph-modes
 ```

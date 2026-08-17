@@ -143,7 +143,7 @@ def _graph_mode(commands: dict[str, Any]) -> str:
     if enforce_eager is None and baseline_command:
         enforce_eager = "--enforce-eager" in baseline_command
     if enforce_eager is None:
-        enforce_eager = True
+        enforce_eager = False
     return "eager" if enforce_eager else "graphs"
 
 
@@ -593,10 +593,12 @@ def _section_g(
 ) -> list[str]:
     reused = commands.get("baseline_reused_from")
     if has_companion_graphs:
-        graph_cell = "ON (CUDA graphs); OFF (eager)"
+        graph_cell = "ON (eager prefill, graph decode); OFF (eager)"
     else:
         graph_cell = (
-            "ON (CUDA graphs)" if graph_mode == "graphs" else "OFF (eager)"
+            "ON (eager prefill, graph decode)"
+            if graph_mode == "graphs"
+            else "OFF (eager)"
         )
     # capacity scaling is explained in the Capacity sections, not Config.
     _ = capacity
@@ -681,7 +683,7 @@ def render(run_dir: Path, companion_run_dir: Path | None = None) -> str:
             [
                 "## Graph ON (CUDA graphs)",
                 "",
-                "CUDA graphs on (product default; `--graph-on`).",
+                "Product default: eager prefill, graph decode.",
                 "",
             ]
         )
@@ -691,7 +693,7 @@ def render(run_dir: Path, companion_run_dir: Path | None = None) -> str:
             [
                 "## Graph OFF (eager)",
                 "",
-                "CUDA graphs off (`--graph-off`).",
+                "Full eager (`--enforce-eager`).",
                 "",
             ]
         )
@@ -702,7 +704,7 @@ def render(run_dir: Path, companion_run_dir: Path | None = None) -> str:
                 [
                     "## Graph OFF (eager)",
                     "",
-                    "CUDA graphs off (`--graph-off`).",
+                    "Full eager (`--enforce-eager`).",
                     "",
                 ]
             )
@@ -711,7 +713,7 @@ def render(run_dir: Path, companion_run_dir: Path | None = None) -> str:
                 [
                     "## Graph ON (CUDA graphs)",
                     "",
-                    "CUDA graphs on (product default; `--graph-on`).",
+                    "Product default: eager prefill, graph decode.",
                     "",
                 ]
             )
