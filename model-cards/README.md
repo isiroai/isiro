@@ -12,3 +12,4 @@ Hub model cards for a few sample [`.tic`](https://isiro.ai/docs/tic) models with
 | [Gemma 4 12B IT](gemma-4-12B-it-TIC/README.md) | BF16 | Multimodal | 23.92 GB | **17.05 GB (28.7%)** |
 | [Qwen3.5 27B](Qwen3.5-27B-TIC/README.md) | BF16 | Multimodal | 55.56 GB | **39.57 GB (28.8%)** |
 | [Qwen3.5 35B A3B](Qwen3.5-35B-A3B-TIC/README.md) | BF16 | Multimodal, MoE | 71.90 GB | **51.27 GB (28.7%)** |
+| [Qwen3.8 27B](Qwen3.8-27B-TIC/README.md) | BF16 | Multimodal | 55.56 GB | **39.57 GB (28.8%)** |
