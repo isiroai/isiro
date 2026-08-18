@@ -28,6 +28,9 @@ Get [compiler access](https://isiro.ai/compiler).
 Create a model directory under `benchmarks/`. Copy the example env into a
 local `common.env` in that directory, then set `BASELINE_MODEL_DIR`,
 `TIC_MODEL_DIR`, `MODEL_ID`, and any other parameters in the file.
+Leave `ISIRO_FORMAT` and `ISIRO_RUNTIME` as `auto` (the example default)
+to read compiler from the `.tic` header and runtime from `isiro --help`.
+Set either to a semver only when you want to pin.
 
 ```bash
 cp benchmarks/common.env.example benchmarks/{model}/common.env

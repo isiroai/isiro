@@ -149,6 +149,11 @@ def main() -> int:
     parser.add_argument("--precision", default="bf16")
     parser.add_argument("--system-id", default="rtx-5090")
     parser.add_argument("--isiro-format", default="v0.1.0")
+    parser.add_argument(
+        "--isiro-runtime",
+        default="",
+        help="Serve / runtime semver. Defaults to --isiro-format.",
+    )
     parser.add_argument("--out", type=Path)
     parser.add_argument(
         "--experiment-kind",
@@ -246,6 +251,8 @@ def main() -> int:
         "precision": args.precision,
         "system_id": args.system_id,
         "isiro_format": args.isiro_format,
+        "isiro_compiler": args.isiro_format,
+        "isiro_runtime": args.isiro_runtime or args.isiro_format,
         "experiment_kind": experiment_kind,
         "publish_quality": publish_quality,
         "smoke": smoke,

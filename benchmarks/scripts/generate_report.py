@@ -166,6 +166,21 @@ def _latency_row(
     return f"| {label} | {number(b, digits)} | {number(t, digits)} |"
 
 
+def _compiler_runtime_versions(summary: dict[str, Any]) -> tuple[str, str]:
+    compiler = str(summary.get("isiro_compiler") or summary.get("isiro_format") or "")
+    runtime = str(summary.get("isiro_runtime") or compiler)
+    return compiler, runtime
+
+
+def _report_subtitle(summary: dict[str, Any]) -> str:
+    compiler, runtime = _compiler_runtime_versions(summary)
+    return (
+        f"`{summary['precision']}` | `{summary['system_id']}` | "
+        f"compiler `{compiler}` | runtime `{runtime}` | "
+        f"{_human_recorded_at(summary.get('recorded_at'))}"
+    )
+
+
 def _section_intro(
     summary: dict[str, Any],
     graph_mode: str,
@@ -178,10 +193,7 @@ def _section_intro(
     return [
         f"# ISIRO Benchmark Report: `{model}`",
         "",
-        (
-            f"`{summary['precision']}` | `{summary['system_id']}` | "
-            f"`{summary['isiro_format']}` | {_human_recorded_at(summary.get('recorded_at'))}"
-        ),
+        _report_subtitle(summary),
         "",
         "Tooling: **`vllm bench serve`**.",
         "",
@@ -602,6 +614,7 @@ def _section_g(
         )
     # capacity scaling is explained in the Capacity sections, not Config.
     _ = capacity
+    compiler, runtime = _compiler_runtime_versions(summary)
     lines = [
         "## Config",
         "",
@@ -609,6 +622,8 @@ def _section_g(
         "|------|-------|",
         f"| System | `{summary.get('system_id', '')}` |",
         f"| Graph modes | {graph_cell} |",
+        f"| Compiler | `{compiler}` |",
+        f"| Runtime | `{runtime}` |",
         f"| vLLM | {environment.get('vllm_version', '')} |",
         (
             f"| GPU | {environment.get('gpu_model', '')} x "

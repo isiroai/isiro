@@ -58,6 +58,11 @@ from generate_report import (  # noqa: E402
 from launch_ab import (  # noqa: E402
     resolve_system_id,
 )
+from probe_isiro_versions import (  # noqa: E402
+    resolve_versions,
+    runtime_version_from_help,
+    tic_compiler_version,
+)
 from serve_output_match import compare_captures  # noqa: E402
 
 
@@ -96,6 +101,8 @@ def _sample_summary(
         "precision": "bf16",
         "system_id": "rtx-5090",
         "isiro_format": "v0.1.0",
+        "isiro_compiler": "v0.1.0",
+        "isiro_runtime": "v0.1.0",
         "experiment_kind": experiment_kind,
         "publish_quality": False,
         "smoke": True,
@@ -461,6 +468,32 @@ class BenchmarkTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             kv_token_capacity_ratio(0, 100)
+
+    def test_probe_isiro_versions_auto_and_pin(self) -> None:
+        import struct
+
+        header = json.dumps({"__metadata__": {"tic_format": "v0.1.1"}}).encode()
+        body = b"TIC\x00" + (b"\x00" * 8) + header + struct.pack("<Q", len(header)) + b"THDR"
+        with tempfile.TemporaryDirectory() as temp:
+            tic = Path(temp) / "model.tic"
+            tic.write_bytes(body)
+            self.assertEqual(tic_compiler_version(tic), "v0.1.1")
+            self.assertEqual(
+                runtime_version_from_help("ISIRO Runtime v0.1.1\n\nUsage"),
+                "v0.1.1",
+            )
+            compiler, runtime = resolve_versions(
+                tic_path=tic,
+                format_override="auto",
+                runtime_override="v0.1.0",
+            )
+            self.assertEqual((compiler, runtime), ("v0.1.1", "v0.1.0"))
+            pinned, _ = resolve_versions(
+                tic_path=tic,
+                format_override="v0.1.0",
+                runtime_override="v0.1.0",
+            )
+            self.assertEqual(pinned, "v0.1.0")
 
     def test_scale_seqs_from_kv_estimate(self) -> None:
         # ~12.71 GiB KV + ~4 GiB freed weights ≈ 1.31x → 32 scales above baseline
@@ -1150,7 +1183,10 @@ class BenchmarkTests(unittest.TestCase):
             report = render(eager, companion_run_dir=graphs)
             self.assertIn("Tooling: **`vllm bench serve`**.", report)
             self.assertIn("# ISIRO Benchmark Report: `qwen2.5-7b-instruct`", report)
-            self.assertIn("`bf16` | `rtx-5090` |", report)
+            self.assertIn(
+                "`bf16` | `rtx-5090` | compiler `v0.1.0` | runtime `v0.1.0` |",
+                report,
+            )
             self.assertRegex(report, r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC")
             self.assertIn("## Graph ON (CUDA graphs)", report)
             self.assertIn("## Graph OFF (eager)", report)
@@ -1205,6 +1241,24 @@ class BenchmarkTests(unittest.TestCase):
                 "ON (eager prefill, graph decode); OFF (eager)",
                 report,
             )
+            self.assertIn("| Compiler | `v0.1.0` |", report)
+            self.assertIn("| Runtime | `v0.1.0` |", report)
+
+    def test_report_compiler_runtime_can_differ(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            summary = _sample_summary()
+            summary["isiro_compiler"] = "v0.1.0"
+            summary["isiro_format"] = "v0.1.0"
+            summary["isiro_runtime"] = "v0.1.1"
+            _write_run(run, summary)
+            report = render(run)
+            self.assertIn(
+                "`bf16` | `rtx-5090` | compiler `v0.1.0` | runtime `v0.1.1` |",
+                report,
+            )
+            self.assertIn("| Compiler | `v0.1.0` |", report)
+            self.assertIn("| Runtime | `v0.1.1` |", report)
 
     def test_fold_serve_output_match_isiro(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

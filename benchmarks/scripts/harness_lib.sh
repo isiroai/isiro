@@ -117,6 +117,20 @@ case "${PRECISION}" in
     ;;
 esac
 
+# Compiler from the .tic header; runtime from `isiro --help`.
+# Set ISIRO_FORMAT / ISIRO_RUNTIME to a semver to pin; auto (default) probes.
+_TIC_FOR_VERSION="${TIC_MODEL_DIR}/model.tic"
+if [[ ! -f "${_TIC_FOR_VERSION}" ]]; then
+  _TIC_FOR_VERSION="$(find "${TIC_MODEL_DIR}" -maxdepth 1 -name '*.tic' -print -quit 2>/dev/null || true)"
+fi
+eval "$(
+  python3 "${BENCH_ROOT}/scripts/probe_isiro_versions.py" \
+    --tic "${_TIC_FOR_VERSION}" \
+    --format-override "${ISIRO_FORMAT:-auto}" \
+    --runtime-override "${ISIRO_RUNTIME:-auto}"
+)"
+echo "versions: compiler=${ISIRO_FORMAT} runtime=${ISIRO_RUNTIME}" >&2
+
 # Precision confusion guard: the config file basename encodes the intended
 # precision (common.env => bf16, common.env.fp8 => fp8). A stale
 # ISIRO_BENCH_CONFIG in the shell has silently routed "bf16" runs to the FP8
@@ -535,8 +549,24 @@ else
   echo "verify: running isiro verify..." >&2
 fi
 echo "verify: log ${LOG_DIR}/verify.log" >&2
+# Hop1 remat is in the compiler checkout. The verify image wheel is hop2-only.
+# Scope ISIRO_REPO_SRC to this verify only (do not leak into isiro serve).
+_VERIFY_REPO_SRC=""
+for _cand in \
+  "${ISIRO_CORE_SRC:-}" \
+  "${REPO_ROOT}/../isiro-core/src" \
+  "${HOME}/repos/isiroai/isiro-core/src"; do
+  if [[ -n "${_cand}" && -d "${_cand}/isiro_encoder" ]]; then
+    _VERIFY_REPO_SRC="$(cd "${_cand}" && pwd)"
+    break
+  fi
+done
 set +e
-"${VERIFY[@]}" >"${LOG_DIR}/verify.log" 2>&1
+if [[ -n "${_VERIFY_REPO_SRC}" ]]; then
+  ISIRO_REPO_SRC="${_VERIFY_REPO_SRC}" "${VERIFY[@]}" >"${LOG_DIR}/verify.log" 2>&1
+else
+  "${VERIFY[@]}" >"${LOG_DIR}/verify.log" 2>&1
+fi
 VERIFY_EXIT=$?
 set -e
 python3 - "${RUN_DIR}/verify.json" "${VERIFY_EXIT}" "${BASELINE_MODEL_DIR}" \
@@ -904,7 +934,7 @@ capture_environment() {
     --substrate "${substrate}" \
     --repo "${REPO_ROOT}" \
     --version-url "${API_URL}/version" \
-    --isiro-version "${ISIRO_FORMAT}" \
+    --isiro-version "${ISIRO_RUNTIME:-${ISIRO_FORMAT}}" \
     --quiet-host \
     "${image_arg[@]}" \
     "${identity_arg[@]}"
@@ -1899,6 +1929,7 @@ python3 "${BENCH_ROOT}/scripts/compare_ab.py" \
   --precision "${PRECISION}" \
   --system-id "${SYSTEM_ID}" \
   --isiro-format "${ISIRO_FORMAT}" \
+  --isiro-runtime "${ISIRO_RUNTIME:-${ISIRO_FORMAT}}" \
   --experiment-kind "${EXPERIMENT_KIND}"
 
 # Model report is written by launch_ab after the full launch finishes.
