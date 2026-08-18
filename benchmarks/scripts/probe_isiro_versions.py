@@ -51,10 +51,16 @@ def tic_compiler_version(path: Path) -> str:
     if not isinstance(meta, dict):
         meta = {}
     for blob in (meta, header):
-        raw = blob.get("tic_format") or blob.get("format")
-        if isinstance(raw, str) and raw.strip():
-            return raw.strip()
-    raise ValueError(f"no tic_format in header: {path}")
+        for key in ("codec", "tic_format", "format"):
+            raw = blob.get(key)
+            if isinstance(raw, str) and raw.strip().startswith("v"):
+                return raw.strip()
+    layers = header.get("layers")
+    if isinstance(layers, dict) and any(
+        isinstance(layer, dict) and layer.get("hop1") for layer in layers.values()
+    ):
+        return "v0.1.1"
+    raise ValueError(f"no compiler version in header: {path}")
 
 
 def runtime_version_from_help(text: str) -> str:

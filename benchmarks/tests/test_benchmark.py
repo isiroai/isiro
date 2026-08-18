@@ -51,8 +51,10 @@ from compare_ab import (  # noqa: E402
 from generate_report import (  # noqa: E402
     _graph_mode,
     bytes_gb,
+    normalized_gpu_gain_pct,
     render,
     sanitize,
+    vllm_visible_budget,
     write_report,
 )
 from launch_ab import (  # noqa: E402
@@ -472,7 +474,9 @@ class BenchmarkTests(unittest.TestCase):
     def test_probe_isiro_versions_auto_and_pin(self) -> None:
         import struct
 
-        header = json.dumps({"__metadata__": {"tic_format": "v0.1.1"}}).encode()
+        header = json.dumps(
+            {"__metadata__": {"codec": "v0.1.1", "tic_format": "v0.1.0"}}
+        ).encode()
         body = b"TIC\x00" + (b"\x00" * 8) + header + struct.pack("<Q", len(header)) + b"THDR"
         with tempfile.TemporaryDirectory() as temp:
             tic = Path(temp) / "model.tic"
@@ -494,6 +498,26 @@ class BenchmarkTests(unittest.TestCase):
                 runtime_override="v0.1.0",
             )
             self.assertEqual(pinned, "v0.1.0")
+
+    def test_kv_norm_uses_vllm_budget_not_nvidia_smi(self) -> None:
+        # Same vLLM Non-KV+KV on both sides; TIC nvidia-smi process is fatter.
+        # KV % must stay the raw vLLM ratio, not the smi-scaled 21% trap.
+        b_non, t_non = 16.65e9, 12.79e9
+        b_kv, t_kv = 13.65e9, 17.51e9
+        b_smi, t_smi = 30.33e9, 32.05e9
+        budget_b = vllm_visible_budget(b_non, b_kv)
+        budget_t = vllm_visible_budget(t_non, t_kv)
+        kv_vllm = normalized_gpu_gain_pct(
+            b_kv, t_kv, baseline_total=budget_b, tic_total=budget_t
+        )
+        kv_smi = normalized_gpu_gain_pct(
+            b_kv, t_kv, baseline_total=b_smi, tic_total=t_smi
+        )
+        self.assertIsNotNone(kv_vllm)
+        self.assertIsNotNone(kv_smi)
+        self.assertGreater(kv_vllm, 27.0)
+        self.assertLess(kv_smi, 22.0)
+        self.assertAlmostEqual(kv_vllm, (17.51 / 13.65 - 1.0) * 100.0, places=1)
 
     def test_scale_seqs_from_kv_estimate(self) -> None:
         # ~12.71 GiB KV + ~4 GiB freed weights ≈ 1.31x → 32 scales above baseline
@@ -734,6 +758,11 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("| Loaded model size |", report)
             self.assertIn("Norm savings %", report)
             self.assertIn(
+                "Norm savings % scales TIC to the Baseline vLLM budget",
+                report,
+            )
+            self.assertIn("nvidia-smi total is not part of that scale", report)
+            self.assertNotIn(
                 "Norm savings % scales TIC to the Baseline total GPU",
                 report,
             )
