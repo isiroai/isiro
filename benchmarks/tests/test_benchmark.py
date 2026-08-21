@@ -611,7 +611,8 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("## 1E. Equal-batch", report)
             self.assertNotIn("capacity benefit not active", report)
             self.assertIn("Output tok/s", report)
-            self.assertIn("Tooling: **`vllm bench serve`**.", report)
+            self.assertIn("Tooling:", report)
+            self.assertIn("- **`vllm bench serve`** (tok/s, ITL)", report)
             self.assertIn("| Graph modes | OFF (eager) |", report)
             self.assertNotIn(
                 "Graph mode: `eager` (product default is eager; graphs is opt-in).",
@@ -953,8 +954,9 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("benchmarks/scratch/", text)
         self.assertNotIn("Rename to `report.md`", text)
         self.assertIn("benchmarks/run_ab.sh {model}\n", text)
+        self.assertIn("# matches the report (Graph ON default)", text)
         self.assertIn("benchmarks/run_ab.sh {model} --graph-off", text)
-        self.assertIn("benchmarks/run_ab.sh {model} --both-graph-modes", text)
+        self.assertNotIn("benchmarks/run_ab.sh {model} --both-graph-modes", text)
         self.assertNotIn("benchmarks/run_ab.sh {model} --smoke", text)
         self.assertIn("benchmarks/common.env.example", text)
         self.assertIn("BASELINE_MODEL_DIR", text)
@@ -1083,7 +1085,8 @@ class BenchmarkTests(unittest.TestCase):
                 encoding="utf-8",
             )
             report = render(eager, companion_run_dir=graphs)
-            self.assertIn("Tooling: **`vllm bench serve`**.", report)
+            self.assertIn("Tooling:", report)
+            self.assertIn("- **`vllm bench serve`** (tok/s, ITL)", report)
             self.assertIn("# ISIRO Benchmark Report: `qwen2.5-7b-instruct`", report)
             self.assertIn("`bf16` | `rtx-5090` |", report)
             self.assertRegex(report, r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC")

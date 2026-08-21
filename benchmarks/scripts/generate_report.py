@@ -183,7 +183,19 @@ def _section_intro(
             f"`{summary['isiro_format']}` | {_human_recorded_at(summary.get('recorded_at'))}"
         ),
         "",
-        "Tooling: **`vllm bench serve`**.",
+        "Tooling:",
+        "",
+        "- **`vllm bench serve`** (tok/s, ITL)",
+        *(
+            [
+                "- Needle-in-a-haystack (single fact; Kamradt / RULER style) "
+                "for long-context recall",
+            ]
+            if (summary.get("needle_haystack") or {}).get("rows")
+            else []
+        ),
+        "",
+        "Compared:",
         "",
         (
             "- **Baseline:** vLLM (`vllm serve` / Docker "
@@ -711,6 +723,15 @@ def render(run_dir: Path, companion_run_dir: Path | None = None) -> str:
                 ]
             )
         lines.extend(_mode_sections(summary, prefix="1"))
+    haystack = (
+        summary.get("needle_haystack")
+        if isinstance(summary.get("needle_haystack"), dict)
+        else None
+    )
+    if haystack and haystack.get("image"):
+        from needle_haystack import report_lines
+
+        lines.extend(report_lines(str(haystack["image"])))
     lines.extend(
         _section_g(
             summary,
@@ -820,6 +841,20 @@ def write_report(
         staged_companion = _stage_sanitized_tree(
             run_dir, temp, companion_run_dir=companion_run_dir
         )
+        haystack_jsonl = run_dir / "needle_haystack.jsonl"
+        if haystack_jsonl.is_file():
+            from needle_haystack import load_jsonl, render_heatmap
+
+            image = output.parent / f"{output.stem}-needle-haystack.svg"
+            render_heatmap(load_jsonl(haystack_jsonl), image)
+            summary_path = temp / "summary.json"
+            if summary_path.is_file():
+                summary = load_json(summary_path)
+                summary["needle_haystack"] = {
+                    "rows": True,
+                    "image": image.name,
+                }
+                write_json(summary_path, summary)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(
             render(temp, companion_run_dir=staged_companion),

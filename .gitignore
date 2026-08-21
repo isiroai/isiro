@@ -34,3 +34,7 @@ benchmarks/*/private/
 # benchmarks/{model}/{system_id}-report.md only.
 benchmarks/**/*-report-*T*Z.md
 *_mock.md
+*_mock.png
+*_mock.svg
+benchmarks/**/*-needle-haystack.svg
+benchmarks/**/*-needle-haystack.png

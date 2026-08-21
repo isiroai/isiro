@@ -42,22 +42,23 @@ timestamped report.
 
 ```bash
 # e.g. benchmarks/run_ab.sh qwen2.5-7b-instruct
-# matches Graph ON section of the report
+# matches the report (Graph ON default)
 benchmarks/run_ab.sh {model}
 ```
 
 Other modes:
 
 ```bash
-# matches Graph OFF section of the report
+# optional Graph OFF
 benchmarks/run_ab.sh {model} --graph-off
-# matches the report (Graph ON & Graph OFF)
-benchmarks/run_ab.sh {model} --both-graph-modes
 ```
 
 `SYSTEM_ID` comes from that model's `common.env` (or GPU auto-detect).
 
 ## Output
+
+Needle-in-a-haystack uses `benchmarks/scripts/needle_haystack.py` (JSONL + heatmap).
+`vllm bench serve` stays the tok/s tool.
 
 Harness writes a timestamped copy (gitignored):
 
