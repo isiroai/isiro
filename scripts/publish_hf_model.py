@@ -8,6 +8,13 @@ model-cards/<repo-basename>/README.md under this repository.
 
 Uploads every file in the bundle directory (compile layout as-is). The Hub
 README is always overlaid from model-cards SSOT (bundle README.md is skipped).
+
+Transfer (huggingface_hub >=1.x): Xet is the upload path when hf_xet is
+installed. HF_HUB_ENABLE_HF_TRANSFER is unused. Do not set
+HF_HUB_DISABLE_XET=1 on push (falls back to LFS + sha256). Optional faster
+push: HF_XET_HIGH_PERFORMANCE=1 with Xet left on. Downloads are the other
+way around: HF_HUB_DISABLE_XET=1 + max_workers=8 was the hang-free ~58 MB/s
+path. See .cursor/rules/hf-hub-transfer.mdc.
 """
 
 from __future__ import annotations

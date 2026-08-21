@@ -30,3 +30,5 @@ benchmarks/scratch/
 benchmarks/*/common.env*
 !benchmarks/*/common.env.example
 benchmarks/*/private/
+# Timestamped harness reports (local runs). Published snapshots stay tracked.
+benchmarks/**/*-report-*T*Z.md
