@@ -59,9 +59,13 @@ benchmarks/run_ab.sh {model} --both-graph-modes
 
 ## Output
 
-After a launch finishes, open the timestamped report:
+Harness writes a timestamped copy (gitignored):
 
 `benchmarks/{model}/{system_id}-report-<UTC>.md`
+
+The published snapshot (tracked) is:
+
+`benchmarks/{model}/{system_id}-report.md`
 
 Logs and other run artifacts are under gitignored `benchmarks/scratch/`.
 

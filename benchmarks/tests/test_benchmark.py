@@ -948,6 +948,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("vllm bench serve", text)
         self.assertIn("{model}/{system_id}-report-<UTC>.md", text)
         self.assertIn("benchmarks/{model}/{system_id}-report-<UTC>.md", text)
+        self.assertIn("benchmarks/{model}/{system_id}-report.md", text)
         self.assertNotIn("benchmarks/scratch/<run-id>/report.md", text)
         self.assertIn("benchmarks/scratch/", text)
         self.assertNotIn("Rename to `report.md`", text)
