@@ -663,9 +663,12 @@ class BenchmarkTests(unittest.TestCase):
                 report,
             )
             self.assertIn(
-                "KV token capacity is vLLM-reported (`GPU KV cache size`",
+                "KV token capacity is vLLM-reported full-attn tokens",
                 report,
             )
+            self.assertIn("reserved GPU pool", report)
+            self.assertIn("overflow to host memory", report)
+            self.assertIn("GiB KV", report)
             self.assertNotIn("weight-estimate KV-scaled timed point", report)
             self.assertNotIn("TIC concurrency scale", report)
             self.assertNotIn("SKU / `system_id`", report)

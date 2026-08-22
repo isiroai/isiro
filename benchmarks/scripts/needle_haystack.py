@@ -587,19 +587,34 @@ def kv_sweep_table_lines(rows: list[dict[str, Any]]) -> list[str]:
         refused = any(item.get("refuse") or item.get("oom") for item in items)
         if panel == "tic":
             setup, policy = "**TIC**", "Product"
+            size_cell = f"{size:g}†"
         elif tic_fixed is not None and abs(size - tic_fixed) < 1e-6:
             setup, policy = "**Baseline**", "Same size as TIC"
+            size_cell = f"{size:g}"
         elif fill_size is not None and abs(size - fill_size) < 1e-6:
             setup, policy = "**Baseline**", "Default fill"
+            size_cell = f"{size:g}"
         else:
             setup, policy = "**Baseline**", "Larger KV"
+            size_cell = f"{size:g}"
         flag = lambda ok: "yes" if ok else "no"
         lines.append(
-            f"| {setup} | {policy} | {size:g} | {flag(completes)} | "
+            f"| {setup} | {policy} | {size_cell} | {flag(completes)} | "
             f"**{flag(recalled)}** | {flag(refused)} |"
         )
     lines.append("")
+    lines.extend(kv_overflow_footnote_lines())
     return lines
+
+
+def kv_overflow_footnote_lines() -> list[str]:
+    return [
+        (
+            "† Reserved pool on the GPU. Tokens that do not fit overflow "
+            "to host memory."
+        ),
+        "",
+    ]
 
 
 def report_lines(

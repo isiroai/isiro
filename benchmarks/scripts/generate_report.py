@@ -50,6 +50,51 @@ def bytes_gb(value: Any) -> str:
     return "null" if value is None else f"{int(value) / 1e9:.2f} GB"
 
 
+def pool_gib(
+    memory_bytes: Any,
+    tokens: Any = None,
+    *,
+    peer_bytes: Any = None,
+    peer_tokens: Any = None,
+) -> float | None:
+    """GiB for this serve's reserved GPU KV pool (1024**3)."""
+    if isinstance(memory_bytes, (int, float)) and float(memory_bytes) > 0:
+        return float(memory_bytes) / float(1024**3)
+    if (
+        isinstance(tokens, (int, float))
+        and float(tokens) > 0
+        and isinstance(peer_bytes, (int, float))
+        and isinstance(peer_tokens, (int, float))
+        and float(peer_bytes) > 0
+        and float(peer_tokens) > 0
+    ):
+        return (float(tokens) * float(peer_bytes) / float(peer_tokens)) / float(
+            1024**3
+        )
+    return None
+
+
+def tokens_with_pool(
+    tokens: Any,
+    gib: float | None,
+    *,
+    extra: str = "",
+    dagger: bool = False,
+) -> str:
+    parts = [number(tokens, 0)]
+    bits: list[str] = []
+    if gib is not None:
+        bits.append(f"{gib:.2f} GiB KV")
+    if extra:
+        bits.append(extra)
+    if bits:
+        parts.append(f"({', '.join(bits)})")
+    text = " ".join(parts)
+    if dagger:
+        text += "†"
+    return text
+
+
 def bold_win(text: str, *, win: bool) -> str:
     return f"**{text}**" if win else text
 
@@ -341,11 +386,22 @@ def _section_c(
     kv: dict[str, Any],
     *,
     prefix: str = "1",
+    overflow_note: bool = False,
 ) -> list[str]:
     b_seqs = (capacity.get("baseline") or {}).get("max_num_seqs")
     t_seqs = (capacity.get("tic") or {}).get("max_num_seqs")
     scale_mode = str(capacity.get("seqs_scale_mode") or "")
-    if scale_mode == "kv_measured":
+    seqs_matched = (
+        isinstance(b_seqs, (int, float))
+        and isinstance(t_seqs, (int, float))
+        and int(b_seqs) == int(t_seqs)
+    )
+    if seqs_matched:
+        scale_blurb = (
+            f"TIC `max_num_seqs` matches Baseline ({number(b_seqs, 0)}). "
+            "Not scaled from lock-vs-fill KV token capacity."
+        )
+    elif scale_mode == "kv_measured":
         scale_blurb = (
             "TIC `max_num_seqs` = round(baseline × TIC/Baseline KV token "
             "capacity) from a matched vLLM KV measurement."
@@ -359,38 +415,61 @@ def _section_c(
         scale_blurb = "TIC `max_num_seqs` matches the configured baseline batch."
     batch_ratio = f"{number(capacity.get('batch_ratio_derived'))}x"
     kv_token_ratio_val = capacity.get("kv_token_capacity_ratio_measured")
-    kv_token_ratio = f"{number(kv_token_ratio_val)}x"
+    kv_token_ratio = (
+        f"{number(kv_token_ratio_val)}x"
+        if isinstance(kv_token_ratio_val, (int, float))
+        else ""
+    )
     kv_token_win = (
         isinstance(kv_token_ratio_val, (int, float))
         and float(kv_token_ratio_val) > 1.0
     )
-    seqs_tic = (
-        f"{bold_win(number(t_seqs, 0), win=True)} "
-        f"({bold_win(batch_ratio, win=True)})"
+    seqs_win = (
+        isinstance(t_seqs, (int, float))
+        and isinstance(b_seqs, (int, float))
+        and int(t_seqs) > int(b_seqs)
     )
-    tokens_tic = (
-        f"{bold_win(number(kv.get('tic_tokens_measured'), 0), win=kv_token_win)} "
-        f"({bold_win(kv_token_ratio, win=kv_token_win)})"
+    seqs_tic = (
+        f"{bold_win(number(t_seqs, 0), win=seqs_win)} "
+        f"({bold_win(batch_ratio, win=seqs_win)})"
+    )
+    b_tokens = kv.get("baseline_tokens_measured")
+    t_tokens = kv.get("tic_tokens_measured")
+    b_gib = pool_gib(kv.get("baseline_memory_bytes_measured"), b_tokens)
+    t_gib = pool_gib(
+        kv.get("tic_memory_bytes_measured"),
+        t_tokens,
+        peer_bytes=kv.get("baseline_memory_bytes_measured"),
+        peer_tokens=b_tokens,
+    )
+    tokens_base = tokens_with_pool(b_tokens, b_gib)
+    tokens_tic = bold_win(
+        tokens_with_pool(
+            t_tokens, t_gib, extra=kv_token_ratio, dagger=True
+        ),
+        win=kv_token_win,
     )
     if str(capacity.get("kv_measured_source") or "") == "timed_asymmetric":
         tokens_tic = f"{tokens_tic}; asymmetric timed seqs"
-    return [
+    lines = [
         "## C. Capacity",
         "",
         scale_blurb,
         "",
-        "KV token capacity is vLLM-reported (`GPU KV cache size` in serve logs).",
+        "KV token capacity is vLLM-reported full-attn tokens in this serve's "
+        "reserved GPU pool.",
         "",
         "| Metric | Baseline | TIC |",
         "|--------|----------|-----|",
         f"| `max_num_seqs` | {number(b_seqs, 0)} | {seqs_tic} |",
-        (
-            "| KV token capacity | "
-            f"{number(kv.get('baseline_tokens_measured'), 0)} | "
-            f"{tokens_tic} |"
-        ),
+        f"| KV token capacity | {tokens_base} | {tokens_tic} |",
         "",
     ]
+    if overflow_note:
+        from needle_haystack import kv_overflow_footnote_lines
+
+        lines.extend(kv_overflow_footnote_lines())
+    return lines
 
 
 def _compact_pct(lat: dict[str, Any], stem: str) -> str:
@@ -512,7 +591,14 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
         ]
     )
     if capacity is not None and experiment_kind == "capacity":
-        lines.extend(_section_c(capacity, kv, prefix="1"))
+        lines.extend(
+            _section_c(
+                capacity,
+                kv,
+                prefix="1",
+                overflow_note=not bool(haystack_rows),
+            )
+        )
         lines.extend(_section_d(capacity, decode_rows))
     else:
         lines.extend(_section_d(None, decode_rows))

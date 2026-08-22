@@ -205,6 +205,8 @@ class NeedleHaystackTests(unittest.TestCase):
         )
         self.assertIn("Same size as TIC", table)
         self.assertIn("Default fill", table)
+        self.assertIn("1.75†", table)
+        self.assertIn("overflow to host memory", table)
         self.assertNotIn("First size that recalls", table)
 
     def test_runner_dry_run_lists_discover_steps(self) -> None:
