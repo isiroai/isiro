@@ -11,6 +11,15 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+try:
+    import seaborn as _seaborn  # noqa: F401
+    import matplotlib as _matplotlib  # noqa: F401
+    import pandas as _pandas  # noqa: F401
+
+    HAS_PLOT = True
+except ImportError:
+    HAS_PLOT = False
+
 from needle_haystack import (  # noqa: E402
     NEEDLE,
     build_messages,
@@ -43,8 +52,13 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertIn(NEEDLE, msgs[0]["content"])
         self.assertIn("special magic number", msgs[0]["content"])
 
-    def test_jsonl_roundtrip_and_svg(self) -> None:
+    @unittest.skipUnless(HAS_PLOT, "matplotlib seaborn pandas required")
+    def test_jsonl_roundtrip_and_png(self) -> None:
         rows = mock_rows()
+        tic_sizes = {
+            r["kv_cache_gib"] for r in rows if r["panel"] == "tic"
+        }
+        self.assertEqual(tic_sizes, {1.09})
         self.assertTrue(any(r["panel"] == "tic" and r["hit"] for r in rows))
         self.assertTrue(
             any(
@@ -52,6 +66,8 @@ class NeedleHaystackTests(unittest.TestCase):
                 for r in rows
             )
         )
+        depths = {r["depth_percent"] for r in rows}
+        self.assertTrue({0, 50, 100}.issubset(depths))
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "needle_haystack.jsonl"
             write_jsonl(path, rows)
@@ -61,16 +77,13 @@ class NeedleHaystackTests(unittest.TestCase):
             self.assertIn("response_completes", loaded[0])
             self.assertNotIn("dest_gib", loaded[0])
             self.assertNotIn("continue_ok", loaded[0])
-            svg = Path(tmp) / "heat.svg"
-            render_heatmap(loaded, svg)
-            text = svg.read_text(encoding="utf-8")
-            self.assertIn("<svg", text)
-            self.assertIn("TIC", text)
-            self.assertIn("Baseline", text)
-            self.assertIn("#2ca02c", text)
-            self.assertIn("#d62728", text)
+            png = Path(tmp) / "heat.png"
+            render_heatmap(loaded, png)
+            self.assertTrue(png.is_file())
+            self.assertGreater(png.stat().st_size, 1000)
 
-    def test_write_report_embeds_heatmap_svg(self) -> None:
+    @unittest.skipUnless(HAS_PLOT, "matplotlib seaborn pandas required")
+    def test_write_report_embeds_heatmap_png(self) -> None:
         from generate_report import write_report
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -124,9 +137,9 @@ class NeedleHaystackTests(unittest.TestCase):
             text = dest.read_text(encoding="utf-8")
             self.assertIn("## B. Needle-in-a-haystack", text)
             self.assertIn("### KV cache", text)
-            self.assertIn("rtx-5090-report-needle-haystack.svg", text)
+            self.assertIn("rtx-5090-report-needle-haystack.png", text)
             self.assertTrue(
-                (dest.parent / "rtx-5090-report-needle-haystack.svg").is_file()
+                (dest.parent / "rtx-5090-report-needle-haystack.png").is_file()
             )
 
     def test_row_score_from_hit(self) -> None:

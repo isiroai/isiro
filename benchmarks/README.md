@@ -58,6 +58,7 @@ benchmarks/run_ab.sh {model} --graph-off
 ## Output
 
 Needle-in-a-haystack uses `benchmarks/scripts/needle_haystack.py` (JSONL + the heatmap).
+The heatmap is seaborn from that JSONL (`benchmarks/requirements-plot.txt`).
 `vllm bench serve` stays the tok/s tool.
 
 Harness writes a timestamped copy (gitignored):

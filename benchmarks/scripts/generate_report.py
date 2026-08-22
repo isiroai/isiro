@@ -634,7 +634,7 @@ def write_report(run_dir: Path, output: Path) -> Path:
             from needle_haystack import load_jsonl, render_heatmap
 
             rows = load_jsonl(haystack_jsonl)
-            image = output.parent / f"{output.stem}-needle-haystack.svg"
+            image = output.parent / f"{output.stem}-needle-haystack.png"
             render_heatmap(rows, image)
             summary_path = temp / "summary.json"
             if summary_path.is_file():

@@ -23,7 +23,7 @@ HAYSTACK_LINE = (
     "We like to go to the park and sit on a bench. "
 )
 
-DEFAULT_DEPTHS = (10, 50, 90)
+DEFAULT_DEPTHS = (0, 10, 25, 50, 75, 90, 100)
 
 
 def score_hit(completion: str, needle: str = NEEDLE) -> bool:
@@ -204,137 +204,106 @@ def _panel_label(panel: str) -> str:
     return str(panel)
 
 
-def _cell_color(score: float) -> str:
-    if score >= 0.85:
-        return "#2ca02c"
-    if score <= 0.15:
-        return "#d62728"
-    return "#ffbf00"
+def _panel_alias(name: str) -> str | None:
+    key = str(name or "").lower()
+    if key in ("tic", "isiro"):
+        return "tic"
+    if key in ("vanilla", "baseline"):
+        return "baseline"
+    return None
 
 
-def render_svg(rows: list[dict[str, Any]], dest: Path) -> Path:
-    """Paired heatmap SVG. No extra dependency."""
-    panels = ("tic", "vanilla")
-    by_panel: dict[str, list[dict[str, Any]]] = {name: [] for name in panels}
+def _panel_rows(rows: list[dict[str, Any]], panel: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     for item in rows:
-        name = str(item.get("panel") or "").lower()
-        if name in ("isiro", "tic"):
-            by_panel["tic"].append(item)
-        elif name in ("vanilla", "baseline"):
-            by_panel["vanilla"].append(item)
-    sizes = sorted(
-        {
-            round(_kv_cache_gib(item), 4)
-            for item in rows
-            if _has_kv_cache_gib(item)
-        }
-    )
-    depths = sorted(
-        {
-            round(float(item["depth_percent"]), 4)
-            for item in rows
-            if "depth_percent" in item
-        }
-    )
-    if not sizes or not depths:
-        raise ValueError("rows need kv_cache_gib and depth_percent")
-    lookup: dict[tuple[str, float, float], float] = {}
-    for name, items in by_panel.items():
-        for item in items:
-            key = (
-                name,
-                round(_kv_cache_gib(item), 4),
-                round(float(item["depth_percent"]), 4),
-            )
-            lookup[key] = float(item.get("score", 1.0 if item.get("hit") else 0.0))
+        if _panel_alias(str(item.get("panel") or "")) != panel:
+            continue
+        if not _has_kv_cache_gib(item) or "depth_percent" not in item:
+            continue
+        out.append(item)
+    return out
 
-    cell_w, cell_h = 56, 28
-    left, top = 72, 36
-    gap = 36
-    grid_w = len(sizes) * cell_w
-    grid_h = len(depths) * cell_h
-    width = left + grid_w * 2 + gap + 24
-    height = top + grid_h + 48
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">',
-        '<rect width="100%" height="100%" fill="#ffffff"/>',
-        '<text x="72" y="20" font-size="12" font-family="sans-serif">'
-        "Needle-in-a-haystack: KV cache GiB x needle depth</text>",
-    ]
-    for p_i, panel in enumerate(panels):
-        ox = left + p_i * (grid_w + gap)
-        parts.append(
-            f'<text x="{ox}" y="{top - 8}" font-size="11" '
-            f'font-family="sans-serif">{_panel_label(panel)}</text>'
-        )
-        for x_i, kv_gib in enumerate(sizes):
-            parts.append(
-                f'<text x="{ox + x_i * cell_w + 4}" y="{top + grid_h + 14}" '
-                f'font-size="9" font-family="sans-serif">{kv_gib:g}</text>'
-            )
-        for y_i, depth in enumerate(reversed(depths)):
-            parts.append(
-                f'<text x="{ox - 28}" y="{top + y_i * cell_h + 18}" '
-                f'font-size="9" font-family="sans-serif">{depth:g}%</text>'
-            )
-            for x_i, kv_gib in enumerate(sizes):
-                score = lookup.get((panel, kv_gib, depth))
-                fill = "#cccccc" if score is None else _cell_color(score)
-                x = ox + x_i * cell_w
-                y = top + y_i * cell_h
-                parts.append(
-                    f'<rect x="{x}" y="{y}" width="{cell_w - 2}" '
-                    f'height="{cell_h - 2}" fill="{fill}" stroke="#333333"/>'
-                )
-    parts.append("</svg>")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text("\n".join(parts) + "\n", encoding="utf-8")
-    return dest
+
+def _pivot_panel(items: list[dict[str, Any]]):
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "depth": [round(float(item["depth_percent"]), 4) for item in items],
+            "kv": [round(_kv_cache_gib(item), 4) for item in items],
+            "score": [
+                float(item.get("score", 1.0 if item.get("hit") else 0.0))
+                for item in items
+            ],
+        }
+    )
+    pivot = frame.pivot_table(
+        index="depth", columns="kv", values="score", aggfunc="mean"
+    )
+    return pivot.sort_index(ascending=False)
 
 
 def render_heatmap(rows: list[dict[str, Any]], dest: Path) -> Path:
+    """JSONL pivot to seaborn heatmap. Product path; no hand-rolled SVG."""
+    try:
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        from matplotlib.colors import Normalize
+        from matplotlib.cm import ScalarMappable
+    except ImportError as exc:
+        raise SystemExit(
+            "heatmap needs matplotlib, seaborn, and pandas; "
+            "install matplotlib seaborn pandas"
+        ) from exc
+
     dest = Path(dest)
-    if dest.suffix.lower() in {".png", ".pdf"}:
-        try:
-            return _render_matplotlib(rows, dest)
-        except ImportError:
-            svg = dest.with_suffix(".svg")
-            return render_svg(rows, svg)
-    return render_svg(rows, dest)
-
-
-def _render_matplotlib(rows: list[dict[str, Any]], dest: Path) -> Path:
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    sizes = sorted({round(_kv_cache_gib(r), 4) for r in rows})
-    depths = sorted({round(float(r["depth_percent"]), 4) for r in rows})
-    fig, axes = plt.subplots(1, 2, figsize=(8, 3.2), constrained_layout=True)
-    for ax, panel in zip(axes, ("tic", "vanilla")):
-        grid = np.full((len(depths), len(sizes)), float("nan"))
-        aliases = ("tic", "isiro") if panel == "tic" else ("vanilla", "baseline")
-        for item in rows:
-            name = str(item.get("panel") or "").lower()
-            if name not in aliases:
-                continue
-            yi = depths.index(round(float(item["depth_percent"]), 4))
-            xi = sizes.index(round(_kv_cache_gib(item), 4))
-            grid[yi, xi] = float(item.get("score", 1.0 if item.get("hit") else 0.0))
-        im = ax.imshow(
-            grid[::-1],
+    panels = [name for name in ("tic", "baseline") if _panel_rows(rows, name)]
+    if not panels:
+        raise ValueError("rows need panel, kv_cache_gib, and depth_percent")
+    pivots = {name: _pivot_panel(_panel_rows(rows, name)) for name in panels}
+    widths = [max(1, pivots[name].shape[1]) for name in panels]
+    fig = plt.figure(figsize=(2.4 + 1.35 * sum(widths), 4.8))
+    spec = fig.add_gridspec(
+        1,
+        len(panels) + 1,
+        width_ratios=[*widths, 0.18],
+        wspace=0.22,
+    )
+    axes = [fig.add_subplot(spec[0, i]) for i in range(len(panels))]
+    cax = fig.add_subplot(spec[0, -1])
+    for i, (ax, name) in enumerate(zip(axes, panels)):
+        pivot = pivots[name]
+        sns.heatmap(
+            pivot,
+            ax=ax,
             vmin=0.0,
             vmax=1.0,
             cmap="RdYlGn",
-            aspect="auto",
+            annot=True,
+            fmt=".0f",
+            cbar=False,
+            linewidths=0.4,
+            linecolor="white",
+            xticklabels=[f"{col:.2f}" for col in pivot.columns],
+            yticklabels=[f"{idx:g}" for idx in pivot.index],
+            square=False,
         )
-        ax.set_title(_panel_label(panel))
-        ax.set_xticks(range(len(sizes)), [f"{d:g}" for d in sizes])
-        ax.set_yticks(range(len(depths)), [f"{d:g}" for d in reversed(depths)])
-        ax.set_xlabel("KV cache GiB")
-        ax.set_ylabel("needle depth %")
-        fig.colorbar(im, ax=ax, fraction=0.046)
+        ax.set_title(_panel_label(name))
+        ax.set_xlabel("KV cache (GiB)")
+        if i == 0:
+            ax.set_ylabel("Needle depth (%)")
+        else:
+            ax.set_ylabel("")
+            ax.tick_params(left=False, labelleft=False)
+    fig.colorbar(
+        ScalarMappable(norm=Normalize(0.0, 1.0), cmap="RdYlGn"),
+        cax=cax,
+        label="Recall",
+    )
+    fig.suptitle("Needle-in-a-haystack", y=0.98)
+    fig.subplots_adjust(left=0.10, right=0.90, top=0.86, bottom=0.16, wspace=0.28)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(dest, dpi=120)
+    fig.savefig(dest, dpi=160)
     plt.close(fig)
     return dest
 
@@ -450,7 +419,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Needle-in-a-haystack grid probe and plot"
     )
     parser.add_argument("--jsonl", type=Path, help="Read or write JSONL rows")
-    parser.add_argument("--out", type=Path, help="Heatmap SVG or PNG")
+    parser.add_argument("--out", type=Path, help="Heatmap PNG (seaborn)")
     parser.add_argument("--mock", action="store_true", help="Render mock Qwen-class rows")
     parser.add_argument("--probe-url", default="", help="OpenAI-compatible base URL")
     parser.add_argument("--model", default="")

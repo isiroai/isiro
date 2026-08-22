@@ -38,5 +38,6 @@ benchmarks/**/*-report-*T*Z.md
 *_mock.md
 *_mock.png
 *_mock.svg
+*_mock.jsonl
 benchmarks/**/*-needle-haystack.svg
 benchmarks/**/*-needle-haystack.png
