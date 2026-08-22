@@ -37,6 +37,8 @@ from needle_haystack import (  # noqa: E402
     rows_for_heatmap,
     row,
     score_hit,
+    figure_unstarted_note,
+    start_fail_rows,
     story_tokens_for_max_len,
     tic_pool_smaller_than_fill,
     write_jsonl,
@@ -65,7 +67,7 @@ class NeedleHaystackTests(unittest.TestCase):
     @unittest.skipUnless(HAS_PLOT, "matplotlib seaborn pandas required")
     def test_jsonl_roundtrip_and_png(self) -> None:
         rows = mock_rows()
-        self.assertEqual(len(rows), 224)
+        self.assertEqual(len(rows), 169)
         tic_sizes = {
             r["kv_cache_gib"] for r in rows if r["panel"] == "tic"
         }
@@ -73,10 +75,17 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertTrue(all(r["hit"] for r in rows if r["panel"] == "tic"))
         self.assertTrue(
             any(
+                r.get("start_fail")
+                and r["panel"] == "vanilla"
+                and r["kv_cache_gib"] == 1.09
+                for r in rows
+            )
+        )
+        self.assertFalse(
+            any(
                 r["panel"] == "vanilla"
                 and r["kv_cache_gib"] == 1.09
-                and r["context_tokens"] >= 4000
-                and not r["hit"]
+                and not r.get("start_fail")
                 for r in rows
             )
         )
@@ -165,6 +174,7 @@ class NeedleHaystackTests(unittest.TestCase):
                 "Figure. Fact retrieval by KV cache (needle-in-a-haystack).",
                 text,
             )
+            self.assertIn("The Baseline serve would not start at 1.09 GiB.", text)
             self.assertIn("### KV cache", text)
             self.assertIn("rtx-5090-report-needle-haystack.png", text)
             self.assertTrue(
@@ -172,6 +182,18 @@ class NeedleHaystackTests(unittest.TestCase):
             )
 
     def test_discover_helpers_are_measured_not_fixed(self) -> None:
+        self.assertEqual(
+            figure_unstarted_note(1.09),
+            "Baseline did not start at 1.09 GiB, so it is not shown.",
+        )
+        self.assertEqual(
+            figure_unstarted_note([1.09, 2.18]),
+            "Baseline did not start at 1.09 GiB or 2.18 GiB, so they are not shown.",
+        )
+        self.assertEqual(
+            figure_unstarted_note([1.09, 2.18, 4.36]),
+            "Baseline did not start at 1.09 GiB, 2.18 GiB, or 4.36 GiB, so they are not shown.",
+        )
         self.assertEqual(chars_for_context_tokens(1000), 4000)
         self.assertEqual(STORY_CONTEXT_TOKENS, 16000)
         self.assertEqual(context_bins_for_max_len(8192)[-1], 4000)
@@ -201,6 +223,19 @@ class NeedleHaystackTests(unittest.TestCase):
             max_model_len=32768,
         )
         self.assertEqual({int(item["context_tokens"]) for item in cropped}, {24000})
+        heat = rows_for_heatmap(
+            start_fail_rows(panel="vanilla", kv_cache_gib=1.09)
+            + [
+                row(
+                    panel="tic",
+                    kv_cache_gib=1.09,
+                    depth_percent=50,
+                    hit=True,
+                    context_tokens=16000,
+                )
+            ]
+        )
+        self.assertFalse(any(item.get("start_fail") for item in heat))
         cands = first_recall_candidates(1.09, cap=13.65)
         self.assertGreaterEqual(cands[0], 2.0)
         self.assertLess(cands[-1], 13.65)
@@ -224,6 +259,7 @@ class NeedleHaystackTests(unittest.TestCase):
         steps = "\n".join(niah_discover_steps())
         self.assertIn("scrape GPU KV cache size", steps)
         self.assertIn("first recall", steps)
+        self.assertIn("start-fail", steps)
         self.assertIn("any model", steps)
         self.assertNotIn("4.00", steps)
         self.assertNotIn("2.5", steps)
@@ -231,22 +267,74 @@ class NeedleHaystackTests(unittest.TestCase):
         table = "\n".join(
             kv_sweep_table_lines(
                 [
-                    row(panel="tic", kv_cache_gib=1.75, depth_percent=50, hit=True),
-                    row(panel="vanilla", kv_cache_gib=1.75, depth_percent=50, hit=True),
-                    row(panel="vanilla", kv_cache_gib=13.48, depth_percent=50, hit=True),
+                    row(
+                        panel="tic",
+                        kv_cache_gib=1.09,
+                        depth_percent=50,
+                        hit=True,
+                        context_tokens=STORY_CONTEXT_TOKENS,
+                    ),
+                    *start_fail_rows(panel="vanilla", kv_cache_gib=1.09),
+                    row(
+                        panel="vanilla",
+                        kv_cache_gib=2.18,
+                        depth_percent=50,
+                        hit=True,
+                        context_tokens=STORY_CONTEXT_TOKENS,
+                    ),
+                    row(
+                        panel="vanilla",
+                        kv_cache_gib=13.48,
+                        depth_percent=50,
+                        hit=True,
+                        context_tokens=STORY_CONTEXT_TOKENS,
+                    ),
                 ],
                 reserved_gib=1.09,
             )
         )
-        self.assertIn("| **TIC** | Fixed |", table)
-        self.assertIn("Same size as TIC", table)
+        self.assertIn("| **TIC** | Fixed | 1.09 | yes | yes | yes |", table)
+        self.assertIn(
+            "| **Baseline** | Same size as TIC | 1.09 | no | no | no |",
+            table,
+        )
+        self.assertIn("| **Baseline** | Larger KV | 2.18 | yes | yes | yes |", table)
+        self.assertIn("Started without OOM", table)
+        self.assertNotIn("Rejected or OOM", table)
         self.assertIn("Default fill", table)
-        self.assertIn("| **TIC** | Fixed | 1.75 |", table)
-        self.assertNotIn("1.75†", table)
+        self.assertNotIn("1.75", table)
+        self.assertNotIn("Needle compare is", table)
         self.assertNotIn("overflow to host memory", table)
-        self.assertIn("Needle compare is 1.75 GiB on both sides.", table)
+        self.assertIn("on every setup that starts.", table)
         self.assertIn("The Baseline serve would not start at 1.09 GiB.", table)
+        two = "\n".join(
+            kv_sweep_table_lines(
+                [
+                    row(
+                        panel="tic",
+                        kv_cache_gib=1.09,
+                        depth_percent=50,
+                        hit=True,
+                        context_tokens=STORY_CONTEXT_TOKENS,
+                    ),
+                    *start_fail_rows(panel="vanilla", kv_cache_gib=1.09),
+                    *start_fail_rows(panel="vanilla", kv_cache_gib=2.18),
+                    row(
+                        panel="vanilla",
+                        kv_cache_gib=4.36,
+                        depth_percent=50,
+                        hit=True,
+                        context_tokens=STORY_CONTEXT_TOKENS,
+                    ),
+                ]
+            )
+        )
+        self.assertIn(
+            "The Baseline serve would not start at 1.09 GiB or 2.18 GiB.",
+            two,
+        )
         self.assertNotIn("TIC reserved pool on this serve", table)
+        self.assertNotIn("did not retrieve", table)
         self.assertNotIn("First size that recalls", table)
         self.assertIn("## B. Needle-in-a-haystack (context tokens × depth)", table)
 
@@ -282,8 +370,9 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertIn("max_model_len=32768", out)
         self.assertIn("scrape GPU KV cache size", out)
         self.assertIn("not a fixed 4.00", out)
+        self.assertIn("Do not grow TIC so Baseline can start.", out)
         self.assertIn("fill scrape and compare", out)
-        self.assertIn("fill grid, TIC grid, same-size grid", out)
+        self.assertIn("same-size start or start-fail", out)
         self.assertNotIn("dest_gib", out)
         self.assertNotIn("dest-from-live", out)
         script = (ROOT / "scripts" / "run_needle_haystack.sh").read_text(

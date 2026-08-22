@@ -3,7 +3,7 @@
 """Needle-in-a-haystack grid: JSONL probe + heatmap (TIC vs baseline).
 
 Protocol is single-needle (Kamradt / RULER style).
-Each panel is one KV cache size. X is context tokens. Y is needle depth %.
+Each panel is one KV cache size that started. X is context tokens. Y is needle depth %.
 """
 
 from __future__ import annotations
@@ -30,6 +30,40 @@ STORY_CONTEXT_TOKENS = 16000
 CHARS_PER_TOKEN = 4
 # Haystack bin plus needle, question, chat template, and a short reply.
 WINDOW_RESERVE_TOKENS = 1024
+FIGURE_TITLE = (
+    "Fact retrieval by KV cache and context length (needle-in-a-haystack)"
+)
+def format_gib_list(sizes: Iterable[float]) -> str:
+    vals = [f"{float(size):g} GiB" for size in sorted({round(float(s), 4) for s in sizes})]
+    if not vals:
+        return ""
+    if len(vals) == 1:
+        return vals[0]
+    if len(vals) == 2:
+        return f"{vals[0]} or {vals[1]}"
+    return f"{', '.join(vals[:-1])}, or {vals[-1]}"
+
+
+def figure_unstarted_note(kv_cache_gib: float | Iterable[float]) -> str:
+    if isinstance(kv_cache_gib, (int, float)):
+        sizes = [float(kv_cache_gib)]
+    else:
+        sizes = [float(item) for item in kv_cache_gib]
+    label = format_gib_list(sizes)
+    unique = sorted({round(float(item), 4) for item in sizes})
+    if len(unique) <= 1:
+        return f"Baseline did not start at {label}, so it is not shown."
+    return f"Baseline did not start at {label}, so they are not shown."
+
+
+def _start_fail_gibs(rows: Iterable[dict[str, Any]]) -> list[float]:
+    return sorted(
+        {
+            round(float(item["kv_cache_gib"]), 4)
+            for item in rows
+            if item.get("start_fail") and "kv_cache_gib" in item
+        }
+    )
 
 
 def score_hit(completion: str, needle: str = NEEDLE) -> bool:
@@ -95,7 +129,7 @@ def rows_for_heatmap(
     max_model_len: int | None = None,
 ) -> list[dict[str, Any]]:
     """Drop bins that cannot fit the window, or that never completed."""
-    items = list(rows)
+    items = [item for item in rows if not item.get("start_fail")]
     if isinstance(max_model_len, (int, float)) and int(max_model_len) > 0:
         allowed = set(context_bins_for_max_len(int(max_model_len)))
         items = [
@@ -172,8 +206,8 @@ def niah_discover_steps() -> list[str]:
         "TIC product serve; scrape GPU KV cache size; full grid (1 serve)",
         "Baseline default fill; scrape GPU KV cache size; full grid (1 serve)",
         "Refuse if TIC KV is not smaller than Baseline fill (any model)",
-        "Baseline same size as TIC; full grid (1 serve)",
-        "Baseline double KV until first recall; full grid only on the hit serve",
+        "Baseline same size as TIC; record start-fail if serve does not start; else full grid",
+        "Baseline double KV until first recall; skip sizes that do not start; full grid on the hit serve",
     ]
 
 
@@ -245,6 +279,27 @@ def row(
     if extra:
         out.update(extra)
     return out
+
+
+def start_fail_rows(
+    *,
+    panel: str,
+    kv_cache_gib: float,
+    story_tokens: int = STORY_CONTEXT_TOKENS,
+) -> list[dict[str, Any]]:
+    """One story row when Baseline does not start at this lock. Not a recall miss."""
+    return [
+        row(
+            panel=panel,
+            kv_cache_gib=kv_cache_gib,
+            depth_percent=50,
+            hit=False,
+            context_tokens=int(story_tokens),
+            response_completes=False,
+            refuse=True,
+            extra={"start_fail": True},
+        )
+    ]
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -420,7 +475,12 @@ def _setup_groups(rows: list[dict[str, Any]]) -> list[tuple[str, float, list[dic
     groups: dict[tuple[str, float], list[dict[str, Any]]] = {}
     for item in rows:
         alias = _panel_alias(str(item.get("panel") or ""))
-        if alias is None or not _has_kv_cache_gib(item) or "depth_percent" not in item:
+        if (
+            alias is None
+            or not _has_kv_cache_gib(item)
+            or "depth_percent" not in item
+            or item.get("start_fail")
+        ):
             continue
         key = (alias, round(_kv_cache_gib(item), 4))
         groups.setdefault(key, []).append(item)
@@ -474,6 +534,7 @@ def render_heatmap(
     max_model_len: int | None = None,
 ) -> Path:
     """JSONL pivot to seaborn heatmap. Product path is PNG."""
+    unstarted_gibs = _start_fail_gibs(rows)
     rows = rows_for_heatmap(rows, max_model_len)
     try:
         import matplotlib.pyplot as plt
@@ -535,32 +596,37 @@ def render_heatmap(
     cax.set_frame_on(False)
     for spine in cax.spines.values():
         spine.set_visible(False)
-    fig.suptitle(
-        "Fact retrieval by KV cache and context length (needle-in-a-haystack)",
-        y=0.98,
-    )
+    fig.suptitle(FIGURE_TITLE, y=0.98, fontsize=11, va="top")
+    if unstarted_gibs:
+        fig.text(
+            0.5,
+            0.935,
+            figure_unstarted_note(unstarted_gibs),
+            ha="center",
+            va="top",
+            fontsize=8,
+            color="#333333",
+        )
     fig.subplots_adjust(left=0.06, right=0.94, top=0.84, bottom=0.18, wspace=0.16)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(dest, dpi=160)
+    fig.savefig(dest, dpi=160, bbox_inches="tight", pad_inches=0.26)
     plt.close(fig)
     return dest
 
 
-def _mock_hit(*, panel: str, kv_cache_gib: float, context_tokens: int) -> bool:
-    if panel == "tic":
-        return True
-    if abs(kv_cache_gib - 1.09) < 1e-6:
-        return context_tokens <= 2000
-    if abs(kv_cache_gib - 4.00) < 1e-6:
-        return context_tokens <= 16000
-    return True
-
-
 def mock_rows() -> list[dict[str, Any]]:
-    """Qwen-class KV cache story for the report mock figure."""
-    setups = (("tic", 1.09), ("vanilla", 1.09), ("vanilla", 4.00), ("vanilla", 13.65))
-    rows: list[dict[str, Any]] = []
-    for panel, kv_cache_gib in setups:
+    """Qwen-class story: product TIC lock, Baseline start-fail, then sizes that start."""
+    tic_gib = 1.09
+    fill_gib = 13.48
+    first_start = first_recall_candidates(tic_gib, cap=fill_gib)[0]
+    rows: list[dict[str, Any]] = start_fail_rows(
+        panel="vanilla", kv_cache_gib=tic_gib
+    )
+    for panel, kv_cache_gib in (
+        ("tic", tic_gib),
+        ("vanilla", first_start),
+        ("vanilla", fill_gib),
+    ):
         for depth in DEFAULT_DEPTHS:
             for context_tokens in DEFAULT_CONTEXT_TOKENS:
                 rows.append(
@@ -569,11 +635,7 @@ def mock_rows() -> list[dict[str, Any]]:
                         kv_cache_gib=kv_cache_gib,
                         depth_percent=depth,
                         context_tokens=context_tokens,
-                        hit=_mock_hit(
-                            panel=panel,
-                            kv_cache_gib=kv_cache_gib,
-                            context_tokens=context_tokens,
-                        ),
+                        hit=True,
                     )
                 )
     return rows
@@ -609,23 +671,41 @@ def kv_sweep_table_lines(
     if not groups:
         return []
     tic_fixed = tic_sizes[0] if tic_sizes else None
-    intro = "Same long prompt, needle, and question on every setup."
-    if (
-        reserved_gib is not None
-        and tic_fixed is not None
-        and abs(float(reserved_gib) - float(tic_fixed)) > 0.02
-    ):
+    start_lock = (
+        round(float(reserved_gib), 4) if reserved_gib is not None else None
+    )
+    if start_lock is not None and ("baseline", start_lock) not in groups:
+        for item in start_fail_rows(panel="baseline", kv_cache_gib=start_lock):
+            groups.setdefault(("baseline", start_lock), []).append(item)
+    has_start_fail = any(
+        item.get("start_fail")
+        for items in groups.values()
+        for item in items
+    )
+    intro = (
+        "Same long prompt, needle, and question on every setup that starts."
+    )
+    fail_gibs = sorted(
+        {
+            size
+            for (panel, size), items in groups.items()
+            if panel == "baseline" and any(item.get("start_fail") for item in items)
+        }
+    )
+    if start_lock is not None and start_lock not in fail_gibs and has_start_fail:
+        fail_gibs = sorted({*fail_gibs, start_lock})
+    if fail_gibs:
         intro = (
-            f"{intro} Needle compare is {tic_fixed:g} GiB on both sides. "
-            f"The Baseline serve would not start at {reserved_gib:.2f} GiB."
+            f"{intro} The Baseline serve would not start at "
+            f"{format_gib_list(fail_gibs)}."
         )
     lines = [
         "## B. Needle-in-a-haystack (context tokens × depth)",
         "",
         intro,
         "",
-        "| Setup | KV cache | Size (GiB) | Response completes | Fact retrieved (needle) | Rejected or OOM |",
-        "|-------|----------|------------|--------------------|-------------------------|-----------------|",
+        "| Setup | KV cache | Size (GiB) | Response completes | Fact retrieved (needle) | Started without OOM |",
+        "|-------|----------|------------|--------------------|-------------------------|---------------------|",
     ]
     baseline_sizes = sorted(size for panel, size in groups if panel == "baseline")
     fill_size = baseline_sizes[-1] if baseline_sizes else None
@@ -639,9 +719,15 @@ def kv_sweep_table_lines(
             == STORY_CONTEXT_TOKENS
         ]
         fold = story or items
-        completes = any(item.get("response_completes", True) for item in fold)
-        recalled = any(item.get("hit") for item in fold)
-        refused = any(item.get("refuse") or item.get("oom") for item in items)
+        start_fail = any(item.get("start_fail") for item in items)
+        if start_fail:
+            completes, recalled, refused = False, False, True
+        else:
+            completes = any(item.get("response_completes", True) for item in fold)
+            recalled = any(item.get("hit") for item in fold)
+            refused = (not completes) and any(
+                item.get("refuse") or item.get("oom") for item in fold
+            )
         if panel == "tic":
             setup, policy = "**TIC**", "Fixed"
             size_cell = f"{size:g}"
@@ -657,7 +743,7 @@ def kv_sweep_table_lines(
         flag = lambda ok: "yes" if ok else "no"
         lines.append(
             f"| {setup} | {policy} | {size_cell} | {flag(completes)} | "
-            f"**{flag(recalled)}** | {flag(refused)} |"
+            f"{flag(recalled)} | {flag(not refused)} |"
         )
     lines.append("")
     return lines
@@ -684,7 +770,7 @@ def report_lines(
     lines.extend(
         [
             (
-                "Each panel is one KV cache size. X is context tokens. "
+                "X is context tokens. "
                 "Y is needle depth % (0 = start of prompt, 100 = end). "
                 "Color is recall."
             ),
@@ -719,6 +805,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-model-len", type=int, default=0)
     parser.add_argument("--plan", action="store_true", help="Print discover steps")
     parser.add_argument("--parse-log", type=Path, help="Print scraped KV GiB from a serve log")
+    parser.add_argument(
+        "--record-start-fail",
+        action="store_true",
+        help="Append a Baseline start-fail story row (serve did not start)",
+    )
     args = parser.parse_args(argv)
 
     if args.plan:
@@ -727,6 +818,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.parse_log:
         print(f"{parse_kv_cache_gib(args.parse_log.read_text(encoding='utf-8', errors='replace')):.4f}")
+        return 0
+    if args.record_start_fail:
+        if args.kv_cache_gib <= 0 or not args.jsonl:
+            raise SystemExit("--record-start-fail needs --kv-cache-gib and --jsonl")
+        rows = start_fail_rows(
+            panel=args.panel,
+            kv_cache_gib=args.kv_cache_gib,
+            story_tokens=int(args.story_tokens),
+        )
+        existing = load_jsonl(args.jsonl) if args.jsonl.is_file() else []
+        write_jsonl(args.jsonl, existing + rows)
         return 0
 
     rows: list[dict[str, Any]] = []

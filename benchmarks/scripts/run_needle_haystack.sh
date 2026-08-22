@@ -81,9 +81,10 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "max_model_len=${NIAH_MAX_MODEL_LEN}"
   python3 "${NIAH_PY}" --plan
   echo "TIC KV is scraped from product serve (model-shaped pool, not a fixed GiB)."
-  echo "Baseline same-size and first-recall locks use that scrape (not a fixed 4.00)."
+  echo "Needle stays on that product lock. Do not grow TIC so Baseline can start."
+  echo "Baseline same-size records a start-fail row if the serve does not start (not a fixed 4.00)."
   echo "Default fill scrapes GPU KV cache size at gpu_memory_utilization=${SERVE_GPU_MEMORY_UTILIZATION}."
-  echo "Serve order: TIC scrape, fill scrape and compare, fill grid, TIC grid, same-size grid, double-until-recall (full grid on hit only)."
+  echo "Serve order: TIC scrape, fill scrape and compare, fill grid, TIC grid, same-size start or start-fail, double-until-recall (full grid on hit only)."
   exit 0
 fi
 
@@ -291,7 +292,20 @@ start_baseline() {
   fi
   : >"${log}"
   "${args[@]}" >"${log}" 2>&1 &
-  wait_ready "${log}"
+  if wait_ready "${log}"; then
+    return 0
+  fi
+  return 1
+}
+
+record_start_fail() {
+  local gib="$1"
+  python3 "${NIAH_PY}" \
+    --record-start-fail \
+    --panel vanilla \
+    --kv-cache-gib "${gib}" \
+    --story-tokens "${STORY_TOKENS}" \
+    --jsonl "${JSONL}"
 }
 
 probe_full() {
@@ -388,7 +402,10 @@ echo "TIC KV cache: ${TIC_GIB} GiB (scraped)" >&2
 stop_all
 
 FILL_LOG="${LOG_DIR}/baseline-fill-serve.log"
-start_baseline "${FILL_LOG}"
+if ! start_baseline "${FILL_LOG}"; then
+  echo "Baseline default fill did not start; see ${FILL_LOG}" >&2
+  exit 2
+fi
 FILL_GIB="$(scrape_kv_gib "${FILL_LOG}")"
 echo "Baseline default fill: ${FILL_GIB} GiB (scraped)" >&2
 require_tic_smaller_than_fill "${TIC_GIB}" "${FILL_GIB}"
@@ -401,11 +418,19 @@ stop_all
 
 TIC_BYTES="$(python3 -c "import sys; sys.path.insert(0, '${HERE}'); from needle_haystack import gib_to_bytes; print(gib_to_bytes(float('${TIC_GIB}')))")"
 SAME_LOG="${LOG_DIR}/baseline-same-serve.log"
-start_baseline "${SAME_LOG}" "${TIC_BYTES}"
-SAME_GIB="$(scrape_kv_gib "${SAME_LOG}")"
-echo "Baseline same size as TIC: ${SAME_GIB} GiB (scraped)" >&2
-probe_full vanilla "${SAME_GIB}"
-if jsonl_story_hit "${SAME_GIB}"; then
+SAME_STARTED=0
+if start_baseline "${SAME_LOG}" "${TIC_BYTES}"; then
+  SAME_GIB="$(scrape_kv_gib "${SAME_LOG}")"
+  echo "Baseline same size as TIC: ${SAME_GIB} GiB (scraped)" >&2
+  probe_full vanilla "${SAME_GIB}"
+  SAME_STARTED=1
+else
+  SAME_GIB="${TIC_GIB}"
+  echo "Baseline would not start at ${TIC_GIB} GiB (same size as TIC)" >&2
+  record_start_fail "${TIC_GIB}"
+  stop_all
+fi
+if [[ "${SAME_STARTED}" -eq 1 ]] && jsonl_story_hit "${SAME_GIB}"; then
   FIRST_RECALL_GIB="${SAME_GIB}"
   echo "First recall is same size as TIC ${SAME_GIB} GiB" >&2
   stop_all
@@ -425,7 +450,12 @@ for x in first_recall_candidates(float('${TIC_GIB}'), cap=float('${FILL_GIB}')):
     CAND_BYTES="$(python3 -c "import sys; sys.path.insert(0, '${HERE}'); from needle_haystack import gib_to_bytes; print(gib_to_bytes(float('${cand}')))")"
     CAND_LOG="${LOG_DIR}/baseline-sweep-${cand}.log"
     echo "Baseline sweep lock ${cand} GiB" >&2
-    start_baseline "${CAND_LOG}" "${CAND_BYTES}"
+    if ! start_baseline "${CAND_LOG}" "${CAND_BYTES}"; then
+      echo "Baseline would not start at ${cand} GiB; continue sweep" >&2
+      record_start_fail "${cand}"
+      stop_all
+      continue
+    fi
     MEAS="$(scrape_kv_gib "${CAND_LOG}")"
     probe_story vanilla "${MEAS}"
     if story_hit "${MEAS}"; then
