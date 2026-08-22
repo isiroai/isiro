@@ -344,13 +344,7 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
         return [
             "## A. GPU memory",
             "",
-            "### Excluding KV Cache",
-            "",
-            "GPU memory for loaded weights is vLLM-reported after load. "
-            "GPU memory excluding KV cache is omitted when vLLM did not "
-            "print Total non KV cache memory (product KV lock skips that profile).",
-            "",
-            "Savings % uses `1 - TIC/Baseline`.",
+            "### Weights",
             "",
             "| Metric | Baseline | TIC | Savings % |",
             "|--------|----------|-----|-----------|",
@@ -365,12 +359,7 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
     return [
         "## A. GPU memory",
         "",
-        "### Excluding KV Cache",
-        "",
-        "GPU memory for loaded weights and GPU memory excluding KV cache are "
-        "vLLM-reported after load. Weight footprint only.",
-        "",
-        "Savings % uses `1 - TIC/Baseline`.",
+        "### Weights",
         "",
         "| Metric | Baseline | TIC | Savings % |",
         "|--------|----------|-----|-----------|",
