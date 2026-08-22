@@ -286,6 +286,28 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
     non_pct = _simple_savings_pct(b_non, t_non)
     load_cell = number(load_pct) + "%" if load_pct is not None else "null"
     non_cell = number(non_pct) + "%" if non_pct is not None else "null"
+    if t_non is None or b_non is None:
+        return [
+            "## A. GPU memory",
+            "",
+            "### Excluding KV Cache",
+            "",
+            "Loaded model size is vLLM-reported after load. "
+            "GPU memory excluding KV cache is omitted when vLLM did not "
+            "print Total non KV cache memory (product KV lock skips that profile).",
+            "",
+            "Savings % uses `1 - TIC/Baseline`.",
+            "",
+            "| Metric | Baseline | TIC | Savings % |",
+            "|--------|----------|-----|-----------|",
+            (
+                "| Loaded model size | "
+                f"{bytes_gb(b_load)} | "
+                f"{bold_win(bytes_gb(t_load), win=load_win)} | "
+                f"{bold_win(load_cell, win=load_win)} |"
+            ),
+            "",
+        ]
     return [
         "## A. GPU memory",
         "",

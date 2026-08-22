@@ -46,16 +46,32 @@ def chars_for_context_tokens(context_tokens: int) -> int:
 
 
 def parse_kv_cache_gib(log_text: str) -> float:
-    """vLLM serve log: Available KV cache memory in GiB."""
+    """Measured KV pool in GiB from a serve log.
+
+    Prefer vLLM ``Available KV cache memory``. Product TIC logs may only
+    print ``vendor_pool_bytes`` when DEBUG is off.
+    """
     import re
 
     match = re.search(
         r"Available KV cache memory:\s*([0-9.]+)\s*GiB",
         log_text,
     )
-    if not match:
-        raise ValueError("Available KV cache memory not found in serve log")
-    return float(match.group(1))
+    if match:
+        return float(match.group(1))
+    reserved = re.search(
+        r"reserved\s+([0-9.]+)\s*GiB memory for KV Cache",
+        log_text,
+    )
+    if reserved:
+        return float(reserved.group(1))
+    pool = re.search(r"vendor_pool_bytes=(\d+)", log_text)
+    if pool:
+        return int(pool.group(1)) / float(1024**3)
+    locked = re.search(r"kv_cache_memory_bytes['\"]?\s*[:=]\s*(\d+)", log_text)
+    if locked:
+        return int(locked.group(1)) / float(1024**3)
+    raise ValueError("Available KV cache memory not found in serve log")
 
 
 def gib_to_bytes(kv_cache_gib: float) -> int:
@@ -266,7 +282,7 @@ def _one_probe(
     except Exception as exc:
         response_completes = False
         text = str(exc).lower()
-        refuse = "http" in text or "refuse" in text
+        refuse = "refuse" in text or "rejected" in text
         oom = "out of memory" in text or "oom" in text
     return row(
         panel=panel,
@@ -546,17 +562,17 @@ def kv_sweep_table_lines(rows: list[dict[str, Any]]) -> list[str]:
     lines = [
         "### KV cache",
         "",
-        "TIC keeps one small KV cache. Baseline KV cache grows across the rows.",
+        "TIC is one measured KV size. Baseline rows are the same lock, then "
+        "any larger locks we ran, including default fill.",
         "",
-        "Same long prompt, needle, and question on every setup. The prompt is "
-        "longer than TIC's fixed cache. Prompt length stays fixed as Baseline's "
-        "KV grows, so the same prefill can fit on the larger rows.",
+        "Same long prompt, needle, and question on every setup.",
         "",
         "| Setup | KV cache | Size (GiB) | Response completes | Fact retrieved (needle) | Rejected or OOM |",
         "|-------|----------|------------|--------------------|-------------------------|-----------------|",
     ]
+    baseline_sizes = sorted(size for panel, size in groups if panel == "baseline")
+    fill_size = baseline_sizes[-1] if baseline_sizes else None
     order = sorted(groups, key=lambda key: (0 if key[0] == "tic" else 1, key[1]))
-    seen_baseline_hit = False
     for panel, size in order:
         items = groups[(panel, size)]
         story = [
@@ -570,16 +586,13 @@ def kv_sweep_table_lines(rows: list[dict[str, Any]]) -> list[str]:
         recalled = any(item.get("hit") for item in fold)
         refused = any(item.get("refuse") or item.get("oom") for item in items)
         if panel == "tic":
-            setup, policy = "**TIC**", "Fixed"
+            setup, policy = "**TIC**", "Product"
         elif tic_fixed is not None and abs(size - tic_fixed) < 1e-6:
             setup, policy = "**Baseline**", "Same size as TIC"
-        elif recalled and not seen_baseline_hit:
-            setup, policy = "**Baseline**", "First size that recalls"
-            seen_baseline_hit = True
+        elif fill_size is not None and abs(size - fill_size) < 1e-6:
+            setup, policy = "**Baseline**", "Default fill"
         else:
             setup, policy = "**Baseline**", "Larger KV"
-            if recalled:
-                seen_baseline_hit = True
         flag = lambda ok: "yes" if ok else "no"
         lines.append(
             f"| {setup} | {policy} | {size:g} | {flag(completes)} | "

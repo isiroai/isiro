@@ -122,6 +122,21 @@ def _report_stamp(run_dir: Path, system_id: str) -> str:
     return stamp
 
 
+def _report_python() -> str:
+    candidates = [sys.executable, "/tmp/isiro-plot-venv/bin/python"]
+    for py in candidates:
+        if not py or not Path(py).is_file():
+            continue
+        check = subprocess.run(
+            [py, "-c", "import matplotlib, seaborn, pandas"],
+            check=False,
+            capture_output=True,
+        )
+        if check.returncode == 0:
+            return py
+    return sys.executable
+
+
 def _write_model_report(
     *,
     root: Path,
@@ -133,7 +148,7 @@ def _write_model_report(
     report_out = model_dir / f"{system_id}-report-{stamp}.md"
     report_out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        sys.executable,
+        _report_python(),
         str(root / "benchmarks" / "scripts" / "generate_report.py"),
         "--run-dir",
         str(run_dir),
@@ -259,9 +274,14 @@ def main(argv: list[str] | None = None) -> int:
         runs = (("graphs", True, False),)
 
     scratch_root = root / "benchmarks" / "scratch"
-    run_dir = scratch_root / (
-        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{system_id}"
-    )
+    existing = os.environ.get("ISIRO_BENCH_RUN_DIR", "").strip()
+    if existing:
+        run_dir = Path(existing)
+        run_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        run_dir = scratch_root / (
+            datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{system_id}"
+        )
     child_env["ISIRO_BENCH_RUN_DIR"] = str(run_dir)
 
     needle_cmd = ["bash", str(run_needle), model]

@@ -83,7 +83,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "TIC KV is scraped from product serve (model-shaped pool, not a fixed GiB)."
   echo "Baseline same-size and first-recall locks use that scrape (not a fixed 4.00)."
   echo "Default fill scrapes GPU KV cache size at gpu_memory_utilization=${SERVE_GPU_MEMORY_UTILIZATION}."
-  echo "Serve order: TIC grid, fill grid, same-size grid, double-until-recall (full grid on hit only)."
+  echo "Serve order: TIC scrape, fill scrape and compare, fill grid, TIC grid, same-size grid, double-until-recall (full grid on hit only)."
   exit 0
 fi
 
@@ -251,6 +251,8 @@ start_tic() {
   prepare_tic_bundle
   stop_all
   export ISIRO_SERVE_CUDA_GRAPHS=0
+  : "${VLLM_LOGGING_LEVEL:=DEBUG}"
+  export VLLM_LOGGING_LEVEL
   : >"${log}"
   "${ISIRO_SERVE_BIN}" serve "${TIC_BENCH_BUNDLE}" --target vllm \
     --host 0.0.0.0 --port "${API_PORT}" \
@@ -383,7 +385,6 @@ TIC_LOG="${LOG_DIR}/tic-serve.log"
 start_tic "${TIC_LOG}"
 TIC_GIB="$(scrape_kv_gib "${TIC_LOG}")"
 echo "TIC KV cache: ${TIC_GIB} GiB (scraped)" >&2
-probe_full tic "${TIC_GIB}"
 stop_all
 
 FILL_LOG="${LOG_DIR}/baseline-fill-serve.log"
@@ -392,6 +393,10 @@ FILL_GIB="$(scrape_kv_gib "${FILL_LOG}")"
 echo "Baseline default fill: ${FILL_GIB} GiB (scraped)" >&2
 require_tic_smaller_than_fill "${TIC_GIB}" "${FILL_GIB}"
 probe_full vanilla "${FILL_GIB}"
+stop_all
+
+start_tic "${TIC_LOG}"
+probe_full tic "${TIC_GIB}"
 stop_all
 
 TIC_BYTES="$(python3 -c "import sys; sys.path.insert(0, '${HERE}'); from needle_haystack import gib_to_bytes; print(gib_to_bytes(float('${TIC_GIB}')))")"

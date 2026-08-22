@@ -28,6 +28,7 @@ from needle_haystack import (  # noqa: E402
     context_bins_for_max_len,
     first_recall_candidates,
     insert_needle,
+    kv_sweep_table_lines,
     load_jsonl,
     mock_rows,
     niah_discover_steps,
@@ -177,6 +178,15 @@ class NeedleHaystackTests(unittest.TestCase):
             "Available KV cache memory: 1.09 GiB\nGPU KV cache size: 12,345 tokens\n"
         )
         self.assertAlmostEqual(gib, 1.09)
+        locked = parse_kv_cache_gib(
+            "kv-set on W=512 pages=1 vendor_sw=4608 family=ks vendor_pool_bytes=1879048192\n"
+        )
+        self.assertAlmostEqual(locked, 1.75)
+        same = parse_kv_cache_gib(
+            "reserved 1.75 GiB memory for KV Cache as specified by "
+            "kv_cache_memory_bytes config\nGPU KV cache size: 32,768 tokens\n"
+        )
+        self.assertAlmostEqual(same, 1.75)
         steps = "\n".join(niah_discover_steps())
         self.assertIn("scrape GPU KV cache size", steps)
         self.assertIn("first recall", steps)
@@ -184,6 +194,18 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertNotIn("4.00", steps)
         self.assertNotIn("2.5", steps)
         self.assertNotIn("dest_gib", steps)
+        table = "\n".join(
+            kv_sweep_table_lines(
+                [
+                    row(panel="tic", kv_cache_gib=1.75, depth_percent=50, hit=True),
+                    row(panel="vanilla", kv_cache_gib=1.75, depth_percent=50, hit=True),
+                    row(panel="vanilla", kv_cache_gib=13.48, depth_percent=50, hit=True),
+                ]
+            )
+        )
+        self.assertIn("Same size as TIC", table)
+        self.assertIn("Default fill", table)
+        self.assertNotIn("First size that recalls", table)
 
     def test_runner_dry_run_lists_discover_steps(self) -> None:
         import os
@@ -217,7 +239,8 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertIn("max_model_len=32768", out)
         self.assertIn("scrape GPU KV cache size", out)
         self.assertIn("not a fixed 4.00", out)
-        self.assertIn("TIC grid, fill grid, same-size grid", out)
+        self.assertIn("fill scrape and compare", out)
+        self.assertIn("fill grid, TIC grid, same-size grid", out)
         self.assertNotIn("dest_gib", out)
         self.assertNotIn("dest-from-live", out)
         script = (ROOT / "scripts" / "run_needle_haystack.sh").read_text(
