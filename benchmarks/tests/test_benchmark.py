@@ -48,7 +48,7 @@ from compare_ab import (  # noqa: E402
     build_equal_batch_block,
     fold_serve_output_match,
 )
-from generate_report import render, sanitize, write_report  # noqa: E402
+from generate_report import pct_of_baseline, render, sanitize, write_report  # noqa: E402
 from launch_ab import (  # noqa: E402
     resolve_system_id,
 )
@@ -456,6 +456,11 @@ class BenchmarkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             kv_token_capacity_ratio(0, 100)
 
+    def test_pct_of_baseline_from_token_ratio(self) -> None:
+        self.assertEqual(pct_of_baseline(20480 / 238064), "9% of Baseline")
+        self.assertEqual(pct_of_baseline(294048 / 238064), "124% of Baseline")
+        self.assertEqual(pct_of_baseline(None), "")
+
     def test_scale_seqs_from_kv_estimate(self) -> None:
         # ~12.71 GiB KV + ~4 GiB freed weights ≈ 1.31x → 32 scales above baseline
         kv_b = int(12.71 * 1024**3)
@@ -657,9 +662,9 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("## Config", report)
             self.assertNotIn("## G. Config", report)
             self.assertNotIn("## G. Config / fairness / reproduce", report)
-            self.assertIn("`max_num_seqs`", report)
+            self.assertIn("| Batch |", report)
             self.assertIn(
-                "TIC `max_num_seqs` = round(baseline × estimated KV ratio)",
+                "TIC batch = round(Baseline batch × estimated KV ratio)",
                 report,
             )
             self.assertIn(
@@ -669,6 +674,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("reserved GPU pool", report)
             self.assertIn("overflow to host memory", report)
             self.assertIn("GiB KV", report)
+            self.assertIn("% of Baseline", report)
             self.assertNotIn("weight-estimate KV-scaled timed point", report)
             self.assertNotIn("TIC concurrency scale", report)
             self.assertNotIn("SKU / `system_id`", report)

@@ -203,6 +203,7 @@ class NeedleHaystackTests(unittest.TestCase):
                 ]
             )
         )
+        self.assertIn("| **TIC** | Fixed |", table)
         self.assertIn("Same size as TIC", table)
         self.assertIn("Default fill", table)
         self.assertIn("1.75†", table)

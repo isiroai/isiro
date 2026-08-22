@@ -74,6 +74,13 @@ def pool_gib(
     return None
 
 
+def pct_of_baseline(ratio: Any) -> str:
+    """TIC / Baseline as a percent of Baseline (not an Nx multiplier)."""
+    if not isinstance(ratio, (int, float)):
+        return ""
+    return f"{round(float(ratio) * 100):.0f}% of Baseline"
+
+
 def tokens_with_pool(
     tokens: Any,
     gib: float | None,
@@ -398,28 +405,24 @@ def _section_c(
     )
     if seqs_matched:
         scale_blurb = (
-            f"TIC `max_num_seqs` matches Baseline ({number(b_seqs, 0)}). "
-            "Not scaled from lock-vs-fill KV token capacity."
+            f"Batch is {number(b_seqs, 0)} on both sides. "
+            "Not scaled from KV token capacity."
         )
     elif scale_mode == "kv_measured":
         scale_blurb = (
-            "TIC `max_num_seqs` = round(baseline × TIC/Baseline KV token "
+            "TIC batch = round(Baseline batch × TIC/Baseline KV token "
             "capacity) from a matched vLLM KV measurement."
         )
     elif scale_mode == "kv_estimate":
         scale_blurb = (
-            "TIC `max_num_seqs` = round(baseline × estimated KV ratio), "
+            "TIC batch = round(Baseline batch × estimated KV ratio), "
             "where estimated KV adds on-disk weight savings to Baseline KV."
         )
     else:
-        scale_blurb = "TIC `max_num_seqs` matches the configured baseline batch."
+        scale_blurb = "TIC batch matches the configured Baseline batch."
     batch_ratio = f"{number(capacity.get('batch_ratio_derived'))}x"
     kv_token_ratio_val = capacity.get("kv_token_capacity_ratio_measured")
-    kv_token_ratio = (
-        f"{number(kv_token_ratio_val)}x"
-        if isinstance(kv_token_ratio_val, (int, float))
-        else ""
-    )
+    kv_token_ratio = pct_of_baseline(kv_token_ratio_val)
     kv_token_win = (
         isinstance(kv_token_ratio_val, (int, float))
         and float(kv_token_ratio_val) > 1.0
@@ -429,10 +432,9 @@ def _section_c(
         and isinstance(b_seqs, (int, float))
         and int(t_seqs) > int(b_seqs)
     )
-    seqs_tic = (
-        f"{bold_win(number(t_seqs, 0), win=seqs_win)} "
-        f"({bold_win(batch_ratio, win=seqs_win)})"
-    )
+    seqs_tic = bold_win(number(t_seqs, 0), win=seqs_win)
+    if not seqs_matched:
+        seqs_tic = f"{seqs_tic} ({bold_win(batch_ratio, win=seqs_win)})"
     b_tokens = kv.get("baseline_tokens_measured")
     t_tokens = kv.get("tic_tokens_measured")
     b_gib = pool_gib(kv.get("baseline_memory_bytes_measured"), b_tokens)
@@ -461,7 +463,7 @@ def _section_c(
         "",
         "| Metric | Baseline | TIC |",
         "|--------|----------|-----|",
-        f"| `max_num_seqs` | {number(b_seqs, 0)} | {seqs_tic} |",
+        f"| Batch | {number(b_seqs, 0)} | {seqs_tic} |",
         f"| KV token capacity | {tokens_base} | {tokens_tic} |",
         "",
     ]

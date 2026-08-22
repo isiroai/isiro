@@ -586,7 +586,7 @@ def kv_sweep_table_lines(rows: list[dict[str, Any]]) -> list[str]:
         recalled = any(item.get("hit") for item in fold)
         refused = any(item.get("refuse") or item.get("oom") for item in items)
         if panel == "tic":
-            setup, policy = "**TIC**", "Product"
+            setup, policy = "**TIC**", "Fixed"
             size_cell = f"{size:g}†"
         elif tic_fixed is not None and abs(size - tic_fixed) < 1e-6:
             setup, policy = "**Baseline**", "Same size as TIC"
