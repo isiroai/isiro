@@ -32,7 +32,9 @@ from needle_haystack import (  # noqa: E402
     load_jsonl,
     mock_rows,
     niah_discover_steps,
+    needle_window_tokens,
     parse_kv_cache_gib,
+    parse_kv_cache_tokens,
     render_heatmap,
     rows_for_heatmap,
     row,
@@ -201,6 +203,28 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertIn(24000, context_bins_for_max_len(32768))
         self.assertEqual(story_tokens_for_max_len(8192), 4000)
         self.assertEqual(story_tokens_for_max_len(32768), 16000)
+        self.assertEqual(needle_window_tokens(20480), 20480)
+        self.assertEqual(needle_window_tokens(20480, cap=32768), 20480)
+        self.assertEqual(needle_window_tokens(20480, cap=8192), 8192)
+        qwen_bins = context_bins_for_max_len(20480)
+        self.assertIn(16000, qwen_bins)
+        self.assertNotIn(24000, qwen_bins)
+        self.assertNotIn(32000, qwen_bins)
+        self.assertEqual(story_tokens_for_max_len(20480), 16000)
+        self.assertEqual(
+            parse_kv_cache_tokens(
+                "KV pool: 1.09 GiB (20480 tokens, last-W spec)\n"
+                "ValueError: To serve at least one request with the model's "
+                "max seq len (32768), (1.75 GiB KV cache is needed, which is "
+                "larger than the available KV cache memory (1.09 GiB). "
+                "estimated maximum model length is 20480.\n"
+            ),
+            20480,
+        )
+        self.assertEqual(
+            parse_kv_cache_tokens("GPU KV cache size: 20,480 tokens\n"),
+            20480,
+        )
         cropped = rows_for_heatmap(
             [
                 row(
@@ -256,8 +280,14 @@ class NeedleHaystackTests(unittest.TestCase):
             "kv_cache_memory_bytes config\nGPU KV cache size: 32,768 tokens\n"
         )
         self.assertAlmostEqual(same, 1.75)
+        product = parse_kv_cache_gib(
+            "KV pool: 1.09 GiB (20480 tokens, last-W spec)\n"
+            "GPU KV cache size: 20,480 tokens\n"
+        )
+        self.assertAlmostEqual(product, 1.09)
         steps = "\n".join(niah_discover_steps())
         self.assertIn("scrape GPU KV cache size", steps)
+        self.assertIn("window follows pool tokens", steps)
         self.assertIn("first recall", steps)
         self.assertIn("start-fail", steps)
         self.assertIn("any model", steps)
@@ -307,6 +337,31 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertNotIn("overflow to host memory", table)
         self.assertIn("on every setup that starts.", table)
         self.assertIn("The Baseline serve would not start at 1.09 GiB.", table)
+        snapped = "\n".join(
+            kv_sweep_table_lines(
+                [
+                    row(
+                        panel="tic",
+                        kv_cache_gib=1.09,
+                        depth_percent=50,
+                        hit=True,
+                        context_tokens=STORY_CONTEXT_TOKENS,
+                    ),
+                    *start_fail_rows(panel="vanilla", kv_cache_gib=1.09),
+                    row(
+                        panel="vanilla",
+                        kv_cache_gib=2.18,
+                        depth_percent=50,
+                        hit=True,
+                        context_tokens=STORY_CONTEXT_TOKENS,
+                    ),
+                ],
+                reserved_gib=1.0934,
+            )
+        )
+        self.assertIn("| **Baseline** | Same size as TIC | 1.09 | no | no | no |", snapped)
+        self.assertNotIn("1.0934", snapped)
+        self.assertIn("The Baseline serve would not start at 1.09 GiB.", snapped)
         two = "\n".join(
             kv_sweep_table_lines(
                 [
@@ -366,19 +421,32 @@ class NeedleHaystackTests(unittest.TestCase):
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         out = completed.stdout
-        self.assertIn("max_num_seqs=1", out)
-        self.assertIn("max_model_len=32768", out)
+        self.assertIn("max_num_seqs=product", out)
+        self.assertIn("do not overlay 1", out)
+        self.assertIn("max_model_len follows scraped GPU KV tokens", out)
         self.assertIn("scrape GPU KV cache size", out)
         self.assertIn("not a fixed 4.00", out)
-        self.assertIn("Do not grow TIC so Baseline can start.", out)
+        self.assertIn("Do not grow TIC to 1.75.", out)
+        self.assertIn("same lock and the same window", out)
         self.assertIn("fill scrape and compare", out)
         self.assertIn("same-size start or start-fail", out)
+        self.assertNotIn("max_num_seqs=1", out)
+        self.assertNotIn("max_model_len=32768", out)
         self.assertNotIn("dest_gib", out)
         self.assertNotIn("dest-from-live", out)
         script = (ROOT / "scripts" / "run_needle_haystack.sh").read_text(
             encoding="utf-8"
         )
         self.assertNotIn("TIC_PRODUCT_KV_GIB_MAX", script)
+        self.assertNotIn('upsert(text, "max_num_seqs"', script)
+        self.assertNotIn("NIAH_MAX_NUM_SEQS=1", script)
+        self.assertIn("estimated maximum model length", script)
+        self.assertIn("gib_to_bytes", script)
+        self.assertNotIn("bytes_for_pool_tokens", script)
+        fails = start_fail_rows(panel="vanilla", kv_cache_gib=1.09)
+        self.assertTrue(all(item.get("start_fail") for item in fails))
+        self.assertTrue(all(item.get("refuse") for item in fails))
+        self.assertFalse(any(item.get("hit") for item in fails))
         for banned in (
             "dest_gib",
             "dest-from-live",

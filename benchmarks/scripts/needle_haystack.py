@@ -101,6 +101,9 @@ def parse_kv_cache_gib(log_text: str) -> float:
     )
     if reserved:
         return float(reserved.group(1))
+    kv_pool = re.search(r"KV pool:\s*([0-9.]+)\s*GiB", log_text)
+    if kv_pool:
+        return float(kv_pool.group(1))
     pool = re.search(r"vendor_pool_bytes=(\d+)", log_text)
     if pool:
         return int(pool.group(1)) / float(1024**3)
@@ -108,6 +111,33 @@ def parse_kv_cache_gib(log_text: str) -> float:
     if locked:
         return int(locked.group(1)) / float(1024**3)
     raise ValueError("Available KV cache memory not found in serve log")
+
+
+def parse_kv_cache_tokens(log_text: str) -> int:
+    """GPU KV token count from a serve log (ready or SERV-0301)."""
+    import re
+
+    gpu = re.search(r"GPU KV cache size:\s*([0-9,]+)\s*tokens", log_text)
+    if gpu:
+        return int(gpu.group(1).replace(",", ""))
+    pool = re.search(
+        r"KV pool:\s*[0-9.]+\s*GiB\s*\(([0-9,]+)\s*tokens",
+        log_text,
+    )
+    if pool:
+        return int(pool.group(1).replace(",", ""))
+    est = re.search(r"estimated maximum model length is\s*([0-9,]+)", log_text)
+    if est:
+        return int(est.group(1).replace(",", ""))
+    raise ValueError("GPU KV token count not found in serve log")
+
+
+def needle_window_tokens(pool_tokens: int, cap: int | None = None) -> int:
+    """Advertise a window the GPU pool can start. Do not grow the lock."""
+    window = max(1, int(pool_tokens))
+    if cap is not None and int(cap) > 0:
+        window = min(window, int(cap))
+    return window
 
 
 def gib_to_bytes(kv_cache_gib: float) -> int:
@@ -203,7 +233,7 @@ def first_recall_candidates(
 
 def niah_discover_steps() -> list[str]:
     return [
-        "TIC product serve; scrape GPU KV cache size; full grid (1 serve)",
+        "TIC product serve; scrape GPU KV cache size; window follows pool tokens; full grid (1 serve)",
         "Baseline default fill; scrape GPU KV cache size; full grid (1 serve)",
         "Refuse if TIC KV is not smaller than Baseline fill (any model)",
         "Baseline same size as TIC; record start-fail if serve does not start; else full grid",
@@ -674,6 +704,13 @@ def kv_sweep_table_lines(
     start_lock = (
         round(float(reserved_gib), 4) if reserved_gib is not None else None
     )
+    # Measured TIC bytes can print as 1.0934 next to a 1.09 scrape. Same lock.
+    if (
+        start_lock is not None
+        and tic_fixed is not None
+        and abs(start_lock - tic_fixed) < 0.05
+    ):
+        start_lock = tic_fixed
     if start_lock is not None and ("baseline", start_lock) not in groups:
         for item in start_fail_rows(panel="baseline", kv_cache_gib=start_lock):
             groups.setdefault(("baseline", start_lock), []).append(item)
@@ -806,6 +843,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plan", action="store_true", help="Print discover steps")
     parser.add_argument("--parse-log", type=Path, help="Print scraped KV GiB from a serve log")
     parser.add_argument(
+        "--parse-log-tokens",
+        type=Path,
+        help="Print scraped GPU KV token count from a serve log",
+    )
+    parser.add_argument(
         "--record-start-fail",
         action="store_true",
         help="Append a Baseline start-fail story row (serve did not start)",
@@ -818,6 +860,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.parse_log:
         print(f"{parse_kv_cache_gib(args.parse_log.read_text(encoding='utf-8', errors='replace')):.4f}")
+        return 0
+    if args.parse_log_tokens:
+        print(
+            parse_kv_cache_tokens(
+                args.parse_log_tokens.read_text(encoding="utf-8", errors="replace")
+            )
+        )
         return 0
     if args.record_start_fail:
         if args.kv_cache_gib <= 0 or not args.jsonl:

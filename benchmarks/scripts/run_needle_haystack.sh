@@ -52,37 +52,29 @@ API_PORT="${API_PORT:-8000}"
 API_URL="http://127.0.0.1:${API_PORT}"
 SERVE_GPU_MEMORY_UTILIZATION="${SERVE_GPU_MEMORY_UTILIZATION:-0.90}"
 SERVE_TENSOR_PARALLEL_SIZE="${SERVE_TENSOR_PARALLEL_SIZE:-1}"
-# NIAH owns concurrency. Length follows the bundle unless overridden.
-NIAH_MAX_NUM_SEQS=1
+# Probe traffic is one request. Do not overlay max_num_seqs=1 on TIC.
+BASELINE_PROBE_SEQS=1
 SYSTEM_ID="${SYSTEM_ID:-rtx-5090}"
-if [[ -z "${NIAH_MAX_MODEL_LEN:-}" && -f "${TIC_MODEL_DIR}/serve.yaml" ]]; then
-  NIAH_MAX_MODEL_LEN="$(
-    python3 - "${TIC_MODEL_DIR}/serve.yaml" <<'PY'
-import re, sys
-text = open(sys.argv[1], encoding="utf-8").read()
-m = re.search(r"^max_model_len:\s*([0-9]+)", text, re.M)
-print(m.group(1) if m else "")
-PY
-  )"
-fi
-NIAH_MAX_MODEL_LEN="${NIAH_MAX_MODEL_LEN:-32768}"
+# Optional cap after scrape. Do not advertise a bundle 32k window before the pool is known.
+OPERATOR_MAX_MODEL_LEN="${NIAH_MAX_MODEL_LEN:-}"
+NIAH_MAX_MODEL_LEN=""
 STORY_TOKENS="$(
   python3 -c "
 import sys
 sys.path.insert(0, '${HERE}')
-from needle_haystack import story_tokens_for_max_len
-print(story_tokens_for_max_len(int('${NIAH_MAX_MODEL_LEN}')))
+from needle_haystack import STORY_CONTEXT_TOKENS
+print(STORY_CONTEXT_TOKENS)
 "
 )"
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "Config: ${CONFIG}"
-  echo "max_num_seqs=${NIAH_MAX_NUM_SEQS}"
-  echo "max_model_len=${NIAH_MAX_MODEL_LEN}"
+  echo "max_num_seqs=product (shipped serve.yaml; do not overlay 1)"
+  echo "max_model_len follows scraped GPU KV tokens"
   python3 "${NIAH_PY}" --plan
   echo "TIC KV is scraped from product serve (model-shaped pool, not a fixed GiB)."
-  echo "Needle stays on that product lock. Do not grow TIC so Baseline can start."
-  echo "Baseline same-size records a start-fail row if the serve does not start (not a fixed 4.00)."
+  echo "Needle window follows scraped GPU KV tokens. Crop bins. Do not grow TIC to 1.75."
+  echo "Baseline same-size uses the same lock and the same window. Record start-fail only if the serve does not start (not a fixed 4.00)."
   echo "Default fill scrapes GPU KV cache size at gpu_memory_utilization=${SERVE_GPU_MEMORY_UTILIZATION}."
   echo "Serve order: TIC scrape, fill scrape and compare, fill grid, TIC grid, same-size start or start-fail, double-until-recall (full grid on hit only)."
   exit 0
@@ -172,7 +164,7 @@ wait_ready() {
       return 0
     fi
     if [[ -n "${serve_log}" && -f "${serve_log}" ]] &&
-       grep -qE 'Engine failed to start|OutOfMemoryError|SERV-0301' "${serve_log}" 2>/dev/null; then
+       grep -qE 'Engine failed to start|OutOfMemoryError|SERV-0301|estimated maximum model length' "${serve_log}" 2>/dev/null; then
       echo "serve failed during start; see ${serve_log}" >&2
       return 1
     fi
@@ -196,6 +188,34 @@ scrape_kv_gib() {
   python3 "${NIAH_PY}" --parse-log "$1"
 }
 
+scrape_kv_tokens() {
+  python3 "${NIAH_PY}" --parse-log-tokens "$1"
+}
+
+apply_window_from_log() {
+  local log="$1"
+  local pool_tokens
+  pool_tokens="$(scrape_kv_tokens "${log}")"
+  NIAH_MAX_MODEL_LEN="$(
+    python3 -c "
+import sys
+sys.path.insert(0, '${HERE}')
+from needle_haystack import needle_window_tokens
+cap = '${OPERATOR_MAX_MODEL_LEN}'.strip()
+print(needle_window_tokens(int('${pool_tokens}'), int(cap) if cap else None))
+"
+  )"
+  STORY_TOKENS="$(
+    python3 -c "
+import sys
+sys.path.insert(0, '${HERE}')
+from needle_haystack import story_tokens_for_max_len
+print(story_tokens_for_max_len(int('${NIAH_MAX_MODEL_LEN}')))
+"
+  )"
+  echo "Needle window follows GPU KV tokens: max_model_len=${NIAH_MAX_MODEL_LEN} story=${STORY_TOKENS}" >&2
+}
+
 prepare_tic_bundle() {
   mkdir -p "${TIC_BENCH_BUNDLE}"
   for source in "${TIC_MODEL_DIR}"/*; do
@@ -214,10 +234,9 @@ prepare_tic_bundle() {
     "${TIC_BENCH_BUNDLE}/serve.yaml" \
     "${NIAH_MAX_MODEL_LEN}" \
     "${SERVE_GPU_MEMORY_UTILIZATION}" \
-    "${SERVE_TENSOR_PARALLEL_SIZE}" \
-    "${NIAH_MAX_NUM_SEQS}" <<'PY'
+    "${SERVE_TENSOR_PARALLEL_SIZE}" <<'PY'
 import re, sys
-source, target, max_model_len, gpu_util, tp, max_seqs = sys.argv[1:7]
+source, target, max_model_len, gpu_util, tp = sys.argv[1:6]
 text = open(source, encoding="utf-8").read()
 
 def upsert(text: str, key: str, value: str) -> str:
@@ -238,10 +257,10 @@ def upsert(text: str, key: str, value: str) -> str:
         raise SystemExit(f"could not set {key} in serve.yaml overlay")
     return updated
 
-text = upsert(text, "max_model_len", max_model_len)
+if max_model_len.strip():
+    text = upsert(text, "max_model_len", max_model_len)
 text = upsert(text, "gpu_memory_utilization", gpu_util)
 text = upsert(text, "tensor_parallel_size", tp)
-text = upsert(text, "max_num_seqs", max_seqs)
 text = upsert(text, "no_enable_prefix_caching", "true")
 open(target, "w", encoding="utf-8").write(text)
 PY
@@ -255,12 +274,19 @@ start_tic() {
   : "${VLLM_LOGGING_LEVEL:=DEBUG}"
   export VLLM_LOGGING_LEVEL
   : >"${log}"
-  "${ISIRO_SERVE_BIN}" serve "${TIC_BENCH_BUNDLE}" --target vllm \
-    --host 0.0.0.0 --port "${API_PORT}" \
-    --max-model-len "${NIAH_MAX_MODEL_LEN}" \
-    >"${log}" 2>&1 &
+  local args=(
+    "${ISIRO_SERVE_BIN}" serve "${TIC_BENCH_BUNDLE}" --target vllm
+    --host 0.0.0.0 --port "${API_PORT}"
+  )
+  if [[ -n "${NIAH_MAX_MODEL_LEN}" ]]; then
+    args+=(--max-model-len "${NIAH_MAX_MODEL_LEN}")
+  fi
+  "${args[@]}" >"${log}" 2>&1 &
   TIC_PID=$!
-  wait_ready "${log}"
+  if wait_ready "${log}"; then
+    return 0
+  fi
+  return 1
 }
 
 start_baseline() {
@@ -281,7 +307,7 @@ start_baseline() {
     --max-model-len "${NIAH_MAX_MODEL_LEN}"
     --gpu-memory-utilization "${SERVE_GPU_MEMORY_UTILIZATION}"
     --tensor-parallel-size "${SERVE_TENSOR_PARALLEL_SIZE}"
-    --max-num-seqs "${NIAH_MAX_NUM_SEQS}"
+    --max-num-seqs "${BASELINE_PROBE_SEQS}"
     --no-enable-prefix-caching
     --trust-remote-code
     --no-enable-flashinfer-autotune
@@ -393,12 +419,24 @@ if not tic_pool_smaller_than_fill(tic, fill):
 }
 
 echo "NIAH run: ${RUN_DIR}" >&2
-echo "max_num_seqs=${NIAH_MAX_NUM_SEQS} max_model_len=${NIAH_MAX_MODEL_LEN}" >&2
+echo "max_num_seqs=product max_model_len=follows GPU KV tokens" >&2
 
 TIC_LOG="${LOG_DIR}/tic-serve.log"
-start_tic "${TIC_LOG}"
+if ! start_tic "${TIC_LOG}"; then
+  apply_window_from_log "${TIC_LOG}"
+  if ! start_tic "${TIC_LOG}"; then
+    echo "TIC did not start after aligning max_model_len to GPU KV tokens; see ${TIC_LOG}" >&2
+    exit 2
+  fi
+else
+  apply_window_from_log "${TIC_LOG}"
+fi
 TIC_GIB="$(scrape_kv_gib "${TIC_LOG}")"
-echo "TIC KV cache: ${TIC_GIB} GiB (scraped)" >&2
+if [[ -z "${NIAH_MAX_MODEL_LEN}" ]]; then
+  echo "needle window was not set from GPU KV tokens; see ${TIC_LOG}" >&2
+  exit 2
+fi
+echo "TIC KV cache: ${TIC_GIB} GiB (scraped) window=${NIAH_MAX_MODEL_LEN}" >&2
 stop_all
 
 FILL_LOG="${LOG_DIR}/baseline-fill-serve.log"
@@ -483,7 +521,7 @@ json.dump(
         "baseline_same_gib": float(same),
         "baseline_first_recall_gib": float(first),
         "baseline_fill_gib": float(fill),
-        "max_num_seqs": 1,
+        "max_num_seqs": "product",
         "max_model_len": int(max_len),
     },
     open(path, "w", encoding="utf-8"),
