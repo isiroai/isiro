@@ -132,7 +132,12 @@ class NeedleHaystackTests(unittest.TestCase):
                     },
                 },
                 "correctness": {"weight_bit_exact_ok": True},
-                "kv_cache": {},
+                "kv_cache": {
+                    "baseline_memory_bytes_measured": 13647233024,
+                    "tic_memory_bytes_measured": 1170378588,
+                    "baseline_tokens_measured": 238064,
+                    "tic_tokens_measured": 20480,
+                },
             }
             (run / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
             (run / "environment.json").write_text(
@@ -229,15 +234,21 @@ class NeedleHaystackTests(unittest.TestCase):
                     row(panel="tic", kv_cache_gib=1.75, depth_percent=50, hit=True),
                     row(panel="vanilla", kv_cache_gib=1.75, depth_percent=50, hit=True),
                     row(panel="vanilla", kv_cache_gib=13.48, depth_percent=50, hit=True),
-                ]
+                ],
+                reserved_gib=1.09,
             )
         )
         self.assertIn("| **TIC** | Fixed |", table)
         self.assertIn("Same size as TIC", table)
         self.assertIn("Default fill", table)
-        self.assertIn("1.75†", table)
-        self.assertIn("overflow to host memory", table)
+        self.assertIn("| **TIC** | Fixed | 1.75 |", table)
+        self.assertNotIn("1.75†", table)
+        self.assertNotIn("overflow to host memory", table)
+        self.assertIn("Needle compare is 1.75 GiB on both sides.", table)
+        self.assertIn("The Baseline serve would not start at 1.09 GiB.", table)
+        self.assertNotIn("TIC reserved pool on this serve", table)
         self.assertNotIn("First size that recalls", table)
+        self.assertIn("## B. Needle-in-a-haystack (context tokens × depth)", table)
 
     def test_runner_dry_run_lists_discover_steps(self) -> None:
         import os

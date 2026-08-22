@@ -225,12 +225,14 @@ def _section_intro(summary: dict[str, Any]) -> list[str]:
         "",
         (
             f"`{summary['precision']}` | `{summary['system_id']}` | "
-            f"`{summary['isiro_format']}` | {_human_recorded_at(summary.get('recorded_at'))}"
+            f"compiler `{summary.get('compiler') or summary.get('isiro_format')}` | "
+            f"runtime `{summary.get('runtime') or summary.get('isiro_format')}` | "
+            f"{_human_recorded_at(summary.get('recorded_at'))}"
         ),
         "",
         "Tooling:",
         "",
-        "- **`vllm bench serve`** (tok/s, ITL)",
+        "- `vllm bench serve` (tok/s, ITL)",
         *(
             [
                 "- Needle-in-a-haystack (single fact; Kamradt / RULER style) "
@@ -344,7 +346,7 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
             "",
             "### Excluding KV Cache",
             "",
-            "Loaded model size is vLLM-reported after load. "
+            "GPU memory for loaded weights is vLLM-reported after load. "
             "GPU memory excluding KV cache is omitted when vLLM did not "
             "print Total non KV cache memory (product KV lock skips that profile).",
             "",
@@ -353,7 +355,7 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
             "| Metric | Baseline | TIC | Savings % |",
             "|--------|----------|-----|-----------|",
             (
-                "| Loaded model size | "
+                "| GPU memory for loaded weights | "
                 f"{bytes_gb(b_load)} | "
                 f"{bold_win(bytes_gb(t_load), win=load_win)} | "
                 f"{bold_win(load_cell, win=load_win)} |"
@@ -365,7 +367,7 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
         "",
         "### Excluding KV Cache",
         "",
-        "Loaded model size and GPU memory excluding KV cache are "
+        "GPU memory for loaded weights and GPU memory excluding KV cache are "
         "vLLM-reported after load. Weight footprint only.",
         "",
         "Savings % uses `1 - TIC/Baseline`.",
@@ -373,7 +375,7 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
         "| Metric | Baseline | TIC | Savings % |",
         "|--------|----------|-----|-----------|",
         (
-            "| Loaded model size | "
+            "| GPU memory for loaded weights | "
             f"{bytes_gb(b_load)} | "
             f"{bold_win(bytes_gb(t_load), win=load_win)} | "
             f"{bold_win(load_cell, win=load_win)} |"
@@ -385,6 +387,40 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
             f"{bold_win(non_cell, win=non_kv_win)} |"
         ),
         "",
+    ]
+
+
+def _section_kv_reservation(kv: dict[str, Any]) -> list[str]:
+    """Reserved GPU KV vs Baseline default fill. Savings is ``1 - TIC/Baseline``."""
+    b_tokens = kv.get("baseline_tokens_measured")
+    t_tokens = kv.get("tic_tokens_measured")
+    b_bytes = kv.get("baseline_memory_bytes_measured")
+    t_bytes = kv.get("tic_memory_bytes_measured")
+    b_gib = pool_gib(b_bytes, b_tokens)
+    t_gib = pool_gib(t_bytes, t_tokens, peer_bytes=b_bytes, peer_tokens=b_tokens)
+    if b_gib is None or t_gib is None:
+        return []
+    pct = _simple_savings_pct(b_gib, t_gib)
+    win = t_gib < b_gib
+    pct_cell = f"{pct:.2f}%" if pct is not None else "null"
+    b_tok = number(b_tokens, 0) if b_tokens is not None else "null"
+    t_tok = number(t_tokens, 0) if t_tokens is not None else "null"
+    tic_cell = f"{bold_win(f'{t_gib:.2f} GiB', win=win)} ({t_tok} tokens)†"
+    from needle_haystack import kv_overflow_footnote_lines
+
+    return [
+        "### KV cache",
+        "",
+        "| Metric | Baseline default fill | TIC reserved KV | Savings % |",
+        "|--------|-----------------------|-----------------|-----------|",
+        (
+            "| GPU memory reserved for KV | "
+            f"{b_gib:.2f} GiB ({b_tok} tokens) | "
+            f"{tic_cell} | "
+            f"{bold_win(pct_cell, win=win)} |"
+        ),
+        "",
+        *kv_overflow_footnote_lines(),
     ]
 
 
@@ -422,7 +458,6 @@ def _section_c(
         scale_blurb = "TIC batch matches the configured Baseline batch."
     batch_ratio = f"{number(capacity.get('batch_ratio_derived'))}x"
     kv_token_ratio_val = capacity.get("kv_token_capacity_ratio_measured")
-    kv_token_ratio = pct_of_baseline(kv_token_ratio_val)
     kv_token_win = (
         isinstance(kv_token_ratio_val, (int, float))
         and float(kv_token_ratio_val) > 1.0
@@ -446,9 +481,7 @@ def _section_c(
     )
     tokens_base = tokens_with_pool(b_tokens, b_gib)
     tokens_tic = bold_win(
-        tokens_with_pool(
-            t_tokens, t_gib, extra=kv_token_ratio, dagger=True
-        ),
+        tokens_with_pool(t_tokens, t_gib, dagger=True),
         win=kv_token_win,
     )
     if str(capacity.get("kv_measured_source") or "") == "timed_asymmetric":
@@ -569,6 +602,13 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
     experiment_kind = str(summary.get("experiment_kind") or "equal-batch")
     lines: list[str] = []
     lines.extend(_section_gpu_excluding_kv(footprint))
+    lines.extend(_section_kv_reservation(kv))
+    reserved_gib = pool_gib(
+        kv.get("tic_memory_bytes_measured"),
+        kv.get("tic_tokens_measured"),
+        peer_bytes=kv.get("baseline_memory_bytes_measured"),
+        peer_tokens=kv.get("baseline_tokens_measured"),
+    )
     haystack = (
         summary.get("needle_haystack")
         if isinstance(summary.get("needle_haystack"), dict)
@@ -578,11 +618,16 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
     if haystack_rows:
         from needle_haystack import kv_sweep_table_lines
 
-        lines.extend(kv_sweep_table_lines(haystack_rows))
+        lines.extend(
+            kv_sweep_table_lines(haystack_rows, reserved_gib=reserved_gib)
+        )
     if haystack and haystack.get("image"):
         from needle_haystack import report_lines
 
-        lines.extend(report_lines(str(haystack["image"])))
+        kwargs: dict[str, str] = {}
+        if haystack_rows:
+            kwargs["heading"] = ""
+        lines.extend(report_lines(str(haystack["image"]), **kwargs))
     lines.extend(
         [
             "## Serve at recall-matched KV cache",
@@ -598,7 +643,7 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
                 capacity,
                 kv,
                 prefix="1",
-                overflow_note=not bool(haystack_rows),
+                overflow_note=False,
             )
         )
         lines.extend(_section_d(capacity, decode_rows))
@@ -629,6 +674,8 @@ def _section_g(
         f"| System | `{summary.get('system_id', '')}` |",
         f"| CUDA graphs | {graph_cell} |",
         f"| KV cache | product KV cache size |",
+        f"| Compiler | `{summary.get('compiler') or summary.get('isiro_format') or ''}` |",
+        f"| Runtime | `{summary.get('runtime') or summary.get('isiro_format') or ''}` |",
         f"| vLLM | {environment.get('vllm_version', '')} |",
         (
             f"| GPU | {environment.get('gpu_model', '')} x "

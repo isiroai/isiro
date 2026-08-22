@@ -579,7 +579,11 @@ def mock_rows() -> list[dict[str, Any]]:
     return rows
 
 
-def kv_sweep_table_lines(rows: list[dict[str, Any]]) -> list[str]:
+def kv_sweep_table_lines(
+    rows: list[dict[str, Any]],
+    *,
+    reserved_gib: float | None = None,
+) -> list[str]:
     """One row per panel and KV size. Do not invent sizes."""
     tic_sizes = sorted(
         {
@@ -605,13 +609,20 @@ def kv_sweep_table_lines(rows: list[dict[str, Any]]) -> list[str]:
     if not groups:
         return []
     tic_fixed = tic_sizes[0] if tic_sizes else None
+    intro = "Same long prompt, needle, and question on every setup."
+    if (
+        reserved_gib is not None
+        and tic_fixed is not None
+        and abs(float(reserved_gib) - float(tic_fixed)) > 0.02
+    ):
+        intro = (
+            f"{intro} Needle compare is {tic_fixed:g} GiB on both sides. "
+            f"The Baseline serve would not start at {reserved_gib:.2f} GiB."
+        )
     lines = [
-        "### KV cache",
+        "## B. Needle-in-a-haystack (context tokens × depth)",
         "",
-        "TIC is one measured KV size. Baseline rows are the same lock, then "
-        "any larger locks we ran, including default fill.",
-        "",
-        "Same long prompt, needle, and question on every setup.",
+        intro,
         "",
         "| Setup | KV cache | Size (GiB) | Response completes | Fact retrieved (needle) | Rejected or OOM |",
         "|-------|----------|------------|--------------------|-------------------------|-----------------|",
@@ -633,7 +644,7 @@ def kv_sweep_table_lines(rows: list[dict[str, Any]]) -> list[str]:
         refused = any(item.get("refuse") or item.get("oom") for item in items)
         if panel == "tic":
             setup, policy = "**TIC**", "Fixed"
-            size_cell = f"{size:g}†"
+            size_cell = f"{size:g}"
         elif tic_fixed is not None and abs(size - tic_fixed) < 1e-6:
             setup, policy = "**Baseline**", "Same size as TIC"
             size_cell = f"{size:g}"
@@ -649,7 +660,6 @@ def kv_sweep_table_lines(rows: list[dict[str, Any]]) -> list[str]:
             f"**{flag(recalled)}** | {flag(refused)} |"
         )
     lines.append("")
-    lines.extend(kv_overflow_footnote_lines())
     return lines
 
 
@@ -666,22 +676,26 @@ def kv_overflow_footnote_lines() -> list[str]:
 def report_lines(
     image_rel: str,
     *,
-    heading: str = "## B. Needle-in-a-haystack (context tokens × depth)",
+    heading: str | None = "## B. Needle-in-a-haystack (context tokens × depth)",
 ) -> list[str]:
-    return [
-        heading,
-        "",
-        (
-            "Each panel is one KV cache size. X is context tokens. "
-            "Y is needle depth % (0 = start of prompt, 100 = end). "
-            "Color is recall."
-        ),
-        "",
-        "Figure. Fact retrieval by KV cache (needle-in-a-haystack).",
-        "",
-        f"![Fact retrieval by KV cache (needle-in-a-haystack)]({image_rel})",
-        "",
-    ]
+    lines: list[str] = []
+    if heading:
+        lines.extend([heading, ""])
+    lines.extend(
+        [
+            (
+                "Each panel is one KV cache size. X is context tokens. "
+                "Y is needle depth % (0 = start of prompt, 100 = end). "
+                "Color is recall."
+            ),
+            "",
+            "Figure. Fact retrieval by KV cache (needle-in-a-haystack).",
+            "",
+            f"![Fact retrieval by KV cache (needle-in-a-haystack)]({image_rel})",
+            "",
+        ]
+    )
+    return lines
 
 
 def main(argv: list[str] | None = None) -> int:
