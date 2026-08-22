@@ -166,14 +166,7 @@ def _latency_row(
     return f"| {label} | {number(b, digits)} | {number(t, digits)} |"
 
 
-def _section_intro(
-    summary: dict[str, Any],
-    graph_mode: str,
-    *,
-    has_companion_graphs: bool,
-    has_equal_batch: bool = False,
-) -> list[str]:
-    del graph_mode, has_companion_graphs, has_equal_batch
+def _section_intro(summary: dict[str, Any]) -> list[str]:
     model = str(summary.get("model") or "")
     return [
         f"# ISIRO Benchmark Report: `{model}`",
@@ -264,24 +257,21 @@ def _section_a(
     ]
 
 
-def _section_b(
-    footprint: dict[str, Any],
-    kv: dict[str, Any],
-    capacity: dict[str, Any] | None = None,
-    *,
-    prefix: str = "1",
-) -> list[str]:
-    del capacity  # reserved for callers; B no longer branches on probe source
+def _simple_savings_pct(baseline: Any, tic: Any) -> float | None:
+    if not isinstance(baseline, (int, float)) or not isinstance(tic, (int, float)):
+        return None
+    if float(baseline) <= 0:
+        return None
+    return (1.0 - float(tic) / float(baseline)) * 100.0
+
+
+def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
     baseline_fp = footprint["baseline"]
     tic_fp = footprint["tic"]
     b_non = baseline_fp.get("weights_and_non_kv_gpu_memory_bytes_derived")
     t_non = tic_fp.get("weights_and_non_kv_gpu_memory_bytes_derived")
     b_load = baseline_fp.get("model_loading_bytes_reported")
     t_load = tic_fp.get("model_loading_bytes_reported")
-    b_kv = kv.get("baseline_memory_bytes_measured")
-    t_kv = kv.get("tic_memory_bytes_measured")
-    b_proc = baseline_fp.get("gpu_process_memory_after_load_bytes_measured")
-    t_proc = tic_fp.get("gpu_process_memory_after_load_bytes_measured")
     non_kv_win = (
         isinstance(b_non, (int, float))
         and isinstance(t_non, (int, float))
@@ -292,57 +282,33 @@ def _section_b(
         and isinstance(t_load, (int, float))
         and float(t_load) < float(b_load)
     )
-    kv_win = (
-        isinstance(b_kv, (int, float))
-        and isinstance(t_kv, (int, float))
-        and float(t_kv) > float(b_kv)
-    )
-    load_norm = normalized_gpu_savings_pct(
-        b_load, t_load, baseline_total=b_proc, tic_total=t_proc
-    )
-    non_norm = normalized_gpu_savings_pct(
-        b_non, t_non, baseline_total=b_proc, tic_total=t_proc
-    )
-    kv_norm = normalized_gpu_gain_pct(
-        b_kv, t_kv, baseline_total=b_proc, tic_total=t_proc
-    )
+    load_pct = _simple_savings_pct(b_load, t_load)
+    non_pct = _simple_savings_pct(b_non, t_non)
+    load_cell = number(load_pct) + "%" if load_pct is not None else "null"
+    non_cell = number(non_pct) + "%" if non_pct is not None else "null"
     return [
-        f"## {prefix}A. GPU memory",
+        "## A. GPU memory",
         "",
-        (
-            "Non-KV and KV cache are vLLM-reported. Total GPU memory is "
-            "nvidia-smi process usage after load."
-        ),
+        "### Excluding KV Cache",
         "",
-        (
-            "Norm savings % scales TIC to the Baseline total GPU, then uses "
-            "`1 - TIC/Baseline` for Loaded model size and Non-KV. For KV it "
-            "uses `TIC/Baseline - 1` as a % gain (and the matching `x` ratio)."
-        ),
+        "Loaded model size and GPU memory excluding KV cache are "
+        "vLLM-reported after load. Weight footprint only.",
         "",
-        "| Metric | Baseline | TIC | Norm savings % |",
-        "|--------|----------|-----|----------------|",
+        "Savings % uses `1 - TIC/Baseline`.",
+        "",
+        "| Metric | Baseline | TIC | Savings % |",
+        "|--------|----------|-----|-----------|",
         (
             "| Loaded model size | "
             f"{bytes_gb(b_load)} | "
             f"{bold_win(bytes_gb(t_load), win=load_win)} | "
-            f"{_norm_pct_cell(load_norm, win=load_win)} |"
+            f"{bold_win(load_cell, win=load_win)} |"
         ),
         (
-            "| Non-KV GPU memory | "
+            "| GPU memory excluding KV cache | "
             f"{bytes_gb(b_non)} | "
             f"{bold_win(bytes_gb(t_non), win=non_kv_win)} | "
-            f"{_norm_pct_cell(non_norm, win=non_kv_win)} |"
-        ),
-        (
-            "| KV cache | "
-            f"{bytes_gb(b_kv)} | "
-            f"{bold_win(bytes_gb(t_kv), win=kv_win)} | "
-            f"{_norm_pct_cell(kv_norm, win=kv_win, more_is_better=True)} |"
-        ),
-        (
-            "| Total GPU memory | "
-            f"{bytes_gb(b_proc)} | {bytes_gb(t_proc)} | |"
+            f"{bold_win(non_cell, win=non_kv_win)} |"
         ),
         "",
     ]
@@ -387,7 +353,7 @@ def _section_c(
     if str(capacity.get("kv_measured_source") or "") == "timed_asymmetric":
         tokens_tic = f"{tokens_tic}; asymmetric timed seqs"
     return [
-        f"## {prefix}B. Capacity",
+        "## C. Capacity",
         "",
         scale_blurb,
         "",
@@ -405,30 +371,34 @@ def _section_c(
     ]
 
 
-def _tok_per_non_kv_gb(tps: Any, non_kv_bytes: Any) -> float | None:
-    if not isinstance(tps, (int, float)) or not isinstance(non_kv_bytes, (int, float)):
-        return None
-    if float(tps) <= 0 or float(non_kv_bytes) <= 0:
-        return None
-    return float(tps) / (float(non_kv_bytes) / 1e9)
+def _compact_pct(lat: dict[str, Any], stem: str) -> str:
+    return " / ".join(number(lat.get(f"{stem}_{name}")) for name in ("p50", "p95", "p99"))
+
+
+def _compact_latency_rows(
+    b_lat: dict[str, Any], t_lat: dict[str, Any]
+) -> list[str]:
+    return [
+        f"| ITL (ms) p50 / p95 / p99 | {_compact_pct(b_lat, 'itl')} | {_compact_pct(t_lat, 'itl')} |",
+        f"| TPOT (ms) p50 / p95 / p99 | {_compact_pct(b_lat, 'tpot')} | {_compact_pct(t_lat, 'tpot')} |",
+        f"| TTFT (ms) p50 / p95 / p99 | {_compact_pct(b_lat, 'ttft')} | {_compact_pct(t_lat, 'ttft')} |",
+    ]
 
 
 def _section_d(
     capacity: dict[str, Any] | None,
     decode_rows: list[dict[str, Any]],
-    footprint: dict[str, Any],
-    *,
-    prefix: str = "1",
 ) -> list[str]:
     lines = [
-        f"## {prefix}C. Generation (input 32 / output 256)",
+        "## D. Generation (recall-matched KV, input 32 / output 256)",
+        "",
+        "Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. "
+        "Not equal batch (E). TTFT is in this table because it moves with concurrency.",
         "",
         "| Metric | Baseline | TIC |",
         "|--------|----------|-----|",
     ]
     tps = (capacity or {}).get("decode_output_tokens_per_sec") or {}
-    b_non = footprint["baseline"].get("weights_and_non_kv_gpu_memory_bytes_derived")
-    t_non = footprint["tic"].get("weights_and_non_kv_gpu_memory_bytes_derived")
     if capacity is not None and tps:
         b_tps = tps.get("baseline")
         t_tps = tps.get("tic")
@@ -437,13 +407,6 @@ def _section_d(
             f"{number(b_tps)} | "
             f"{bold_win(number(t_tps), win=True)} |"
         )
-        b_eff = _tok_per_non_kv_gb(b_tps, b_non)
-        t_eff = _tok_per_non_kv_gb(t_tps, t_non)
-        if b_eff is not None and t_eff is not None:
-            lines.append(
-                "| † tok/s per Non-KV GB | "
-                f"{number(b_eff)} | {number(t_eff)} |"
-            )
     elif decode_rows:
         row = decode_rows[0]
         b_tps = row["baseline"]["throughput"]["output_tokens_per_sec"]
@@ -451,91 +414,29 @@ def _section_d(
         lines.append(
             f"| Output tok/s | {number(b_tps)} | {number(t_tps)} |"
         )
-        b_eff = _tok_per_non_kv_gb(b_tps, b_non)
-        t_eff = _tok_per_non_kv_gb(t_tps, t_non)
-        if b_eff is not None and t_eff is not None:
-            lines.append(
-                "| † tok/s per Non-KV GB | "
-                f"{number(b_eff)} | {number(t_eff)} |"
+    if decode_rows:
+        row = decode_rows[0]
+        lines.extend(
+            _compact_latency_rows(
+                row["baseline"]["latency_ms"], row["tic"]["latency_ms"]
             )
-    for row in decode_rows:
-        b_lat = row["baseline"]["latency_ms"]
-        t_lat = row["tic"]["latency_ms"]
-        for label, key in (
-            ("ITL p50 (ms)", "itl_p50"),
-            ("ITL p95 (ms)", "itl_p95"),
-            ("ITL p99 (ms)", "itl_p99"),
-            ("TPOT p50 (ms)", "tpot_p50"),
-            ("TPOT p95 (ms)", "tpot_p95"),
-            ("TPOT p99 (ms)", "tpot_p99"),
-        ):
-            lines.append(_latency_row(label, b_lat, t_lat, key))
-    lines.extend(
-        [
-            "",
-            (
-                "† Derived: output tok/s ÷ Non-KV GPU memory (GB). "
-                "Physical meaning: output tokens per second per GB of "
-                "Non-KV GPU memory; a smaller Non-KV slice that still "
-                "delivers high tok/s scores higher."
-            ),
-            "",
-        ]
-    )
-    return lines
-
-
-def _section_e(decode_rows: list[dict[str, Any]], *, prefix: str = "1") -> list[str]:
-    lines = [
-        f"## {prefix}D. TTFT",
-        "",
-        (
-            f"TTFT is separated from generation ({prefix}C) because it is more "
-            f"sensitive to the higher concurrency in {prefix}B. With more "
-            "sequences in flight, new requests wait longer for the first token. "
-            "That is an expected cost of the capacity setting, not a "
-            "single-request prefill claim."
-        ),
-        "",
-        "| Metric | Baseline | TIC |",
-        "|--------|----------|-----|",
-    ]
-    for row in decode_rows:
-        b_lat = row["baseline"]["latency_ms"]
-        t_lat = row["tic"]["latency_ms"]
-        for label, key in (
-            ("TTFT p50 (ms)", "ttft_p50"),
-            ("TTFT p95 (ms)", "ttft_p95"),
-            ("TTFT p99 (ms)", "ttft_p99"),
-        ):
-            b = b_lat.get(key)
-            t = t_lat.get(key)
-            lines.append(
-                f"| {label} | {number(b, 2)} | {number(t, 2)} |"
-            )
+        )
     lines.append("")
     return lines
 
 
-def _section_f(equal_batch: dict[str, Any], *, prefix: str = "1") -> list[str]:
+def _section_f(equal_batch: dict[str, Any]) -> list[str]:
     tps = equal_batch.get("decode_output_tokens_per_sec") or {}
     latency = equal_batch.get("latency_ms") or {}
     b_lat = latency.get("baseline") or {}
     t_lat = latency.get("tic") or {}
     lines = [
-        f"## {prefix}E. Equal batch",
+        "## E. Equal batch",
         "",
-        "Same `max_num_seqs` and concurrency on both sides.",
+        "Same batch as Capacity.",
         "",
         "| Metric | Baseline | TIC |",
         "|--------|----------|-----|",
-        (
-            f"| `max_num_seqs` / concurrency | "
-            f"{number(equal_batch.get('max_num_seqs'), 0)} / "
-            f"{number(equal_batch.get('max_concurrency'), 0)} | "
-            f"{number(equal_batch.get('max_num_seqs'), 0)} / "
-            f"{number(equal_batch.get('max_concurrency'), 0)} |"
-        ),
         (
             "| Output tok/s | "
             f"{number(tps.get('baseline'))} | "
@@ -543,24 +444,12 @@ def _section_f(equal_batch: dict[str, Any], *, prefix: str = "1") -> list[str]:
         ),
     ]
     if b_lat and t_lat:
-        for label, key in (
-            ("ITL p50 (ms)", "itl_p50"),
-            ("ITL p95 (ms)", "itl_p95"),
-            ("ITL p99 (ms)", "itl_p99"),
-            ("TPOT p50 (ms)", "tpot_p50"),
-            ("TPOT p95 (ms)", "tpot_p95"),
-            ("TPOT p99 (ms)", "tpot_p99"),
-            ("TTFT p50 (ms)", "ttft_p50"),
-            ("TTFT p95 (ms)", "ttft_p95"),
-            ("TTFT p99 (ms)", "ttft_p99"),
-        ):
-            lines.append(_latency_row(label, b_lat, t_lat, key))
+        lines.extend(_compact_latency_rows(b_lat, t_lat))
     lines.append("")
     return lines
 
 
-def _mode_sections(summary: dict[str, Any], *, prefix: str = "1") -> list[str]:
-    """Sections A-E for one graph mode (SSOT for Graph ON/OFF bodies)."""
+def _mode_sections(summary: dict[str, Any]) -> list[str]:
     footprint = summary.get("footprint") or {}
     kv = summary.get("kv_cache") or {}
     capacity = (
@@ -576,16 +465,37 @@ def _mode_sections(summary: dict[str, Any], *, prefix: str = "1") -> list[str]:
     decode_rows = _decode_rows(summary)
     experiment_kind = str(summary.get("experiment_kind") or "equal-batch")
     lines: list[str] = []
-    lines.extend(_section_b(footprint, kv, capacity, prefix=prefix))
+    lines.extend(_section_gpu_excluding_kv(footprint))
+    haystack = (
+        summary.get("needle_haystack")
+        if isinstance(summary.get("needle_haystack"), dict)
+        else None
+    )
+    haystack_rows = haystack.get("table_rows") if haystack else None
+    if haystack_rows:
+        from needle_haystack import kv_sweep_table_lines
+
+        lines.extend(kv_sweep_table_lines(haystack_rows))
+    if haystack and haystack.get("image"):
+        from needle_haystack import report_lines
+
+        lines.extend(report_lines(str(haystack["image"])))
+    lines.extend(
+        [
+            "## Serve at recall-matched KV cache",
+            "",
+            "`vllm bench serve` at the KV cache sizes where both sides recall. "
+            "Not default fill (`gpu_memory_utilization=0.90`).",
+            "",
+        ]
+    )
     if capacity is not None and experiment_kind == "capacity":
-        lines.extend(_section_c(capacity, kv, prefix=prefix))
-        lines.extend(_section_d(capacity, decode_rows, footprint, prefix=prefix))
-        lines.extend(_section_e(decode_rows, prefix=prefix))
+        lines.extend(_section_c(capacity, kv, prefix="1"))
+        lines.extend(_section_d(capacity, decode_rows))
     else:
-        lines.extend(_section_d(None, decode_rows, footprint, prefix=prefix))
-        lines.extend(_section_e(decode_rows, prefix=prefix))
+        lines.extend(_section_d(None, decode_rows))
     if equal_batch is not None:
-        lines.extend(_section_f(equal_batch, prefix=prefix))
+        lines.extend(_section_f(equal_batch))
     return lines
 
 
@@ -594,26 +504,21 @@ def _section_g(
     environment: dict[str, Any],
     commands: dict[str, Any],
     graph_mode: str,
-    capacity: dict[str, Any] | None,
-    *,
-    has_companion_graphs: bool,
 ) -> list[str]:
     reused = commands.get("baseline_reused_from")
-    if has_companion_graphs:
-        graph_cell = "ON (CUDA graphs); OFF (eager)"
-    else:
-        graph_cell = (
-            "ON (CUDA graphs)" if graph_mode == "graphs" else "OFF (eager)"
-        )
-    # capacity scaling is explained in the Capacity sections, not Config.
-    _ = capacity
+    graph_cell = (
+        "on (eager prefill, graph decode)"
+        if graph_mode == "graphs"
+        else "off (eager)"
+    )
     lines = [
         "## Config",
         "",
         "| Item | Value |",
         "|------|-------|",
         f"| System | `{summary.get('system_id', '')}` |",
-        f"| Graph modes | {graph_cell} |",
+        f"| CUDA graphs | {graph_cell} |",
+        f"| KV cache | product KV cache size |",
         f"| vLLM | {environment.get('vllm_version', '')} |",
         (
             f"| GPU | {environment.get('gpu_model', '')} x "
@@ -640,108 +545,17 @@ def _section_g(
     return lines
 
 
-def _order_graph_dirs(
-    run_dir: Path, companion_run_dir: Path | None
-) -> tuple[Path, Path | None]:
-    """Prefer Graph ON first; companion is Graph OFF when present."""
-    if companion_run_dir is None:
-        return run_dir, None
-    primary_mode = _graph_mode(load_json(run_dir / "commands.json"))
-    companion_mode = _graph_mode(load_json(companion_run_dir / "commands.json"))
-    if primary_mode == "graphs" and companion_mode == "eager":
-        return run_dir, companion_run_dir
-    if primary_mode == "eager" and companion_mode == "graphs":
-        return companion_run_dir, run_dir
-    # Same mode or unknown: keep caller order; no dual-mode body.
-    return run_dir, None
-
-
-def render(run_dir: Path, companion_run_dir: Path | None = None) -> str:
-    open_dir, collapsed_dir = _order_graph_dirs(run_dir, companion_run_dir)
-    summary = load_json(open_dir / "summary.json")
-    environment = load_json(open_dir / "environment.json")
-    commands = load_json(open_dir / "commands.json")
+def render(run_dir: Path) -> str:
+    summary = load_json(run_dir / "summary.json")
+    environment = load_json(run_dir / "environment.json")
+    commands = load_json(run_dir / "commands.json")
     footprint = summary["footprint"]
     correctness = summary["correctness"]
     graph_mode = _graph_mode(commands)
-    has_companion = collapsed_dir is not None
-    capacity = (
-        summary.get("capacity")
-        if isinstance(summary.get("capacity"), dict)
-        else None
-    )
-    equal_batch = (
-        summary.get("equal_batch")
-        if isinstance(summary.get("equal_batch"), dict)
-        else None
-    )
-
-    lines = _section_intro(
-        summary,
-        graph_mode,
-        has_companion_graphs=has_companion,
-        has_equal_batch=equal_batch is not None,
-    )
+    lines = _section_intro(summary)
     lines.extend(_section_a(footprint, correctness))
-    if has_companion:
-        lines.extend(
-            [
-                "## Graph ON (CUDA graphs)",
-                "",
-                "CUDA graphs on (product default; `--graph-on`).",
-                "",
-            ]
-        )
-        lines.extend(_mode_sections(summary, prefix="1"))
-        collapsed_summary = load_json(collapsed_dir / "summary.json")
-        lines.extend(
-            [
-                "## Graph OFF (eager)",
-                "",
-                "CUDA graphs off (`--graph-off`).",
-                "",
-            ]
-        )
-        lines.extend(_mode_sections(collapsed_summary, prefix="2"))
-    else:
-        if graph_mode == "eager":
-            lines.extend(
-                [
-                    "## Graph OFF (eager)",
-                    "",
-                    "CUDA graphs off (`--graph-off`).",
-                    "",
-                ]
-            )
-        else:
-            lines.extend(
-                [
-                    "## Graph ON (CUDA graphs)",
-                    "",
-                    "CUDA graphs on (product default; `--graph-on`).",
-                    "",
-                ]
-            )
-        lines.extend(_mode_sections(summary, prefix="1"))
-    haystack = (
-        summary.get("needle_haystack")
-        if isinstance(summary.get("needle_haystack"), dict)
-        else None
-    )
-    if haystack and haystack.get("image"):
-        from needle_haystack import report_lines
-
-        lines.extend(report_lines(str(haystack["image"])))
-    lines.extend(
-        _section_g(
-            summary,
-            environment,
-            commands,
-            graph_mode,
-            capacity,
-            has_companion_graphs=has_companion,
-        )
-    )
+    lines.extend(_mode_sections(summary))
+    lines.extend(_section_g(summary, environment, commands, graph_mode))
     return "\n".join(lines)
 
 
@@ -789,12 +603,7 @@ def _copy_sanitized_json(source: Path, dest: Path, scratch: Path) -> None:
     write_json(dest, sanitize(load_json(source), scratch))
 
 
-def _stage_sanitized_tree(
-    run_dir: Path,
-    temp: Path,
-    companion_run_dir: Path | None = None,
-) -> Path | None:
-    """Sanitize run JSON into temp for render; return staged companion or None."""
+def _stage_sanitized_tree(run_dir: Path, temp: Path) -> None:
     for name in ("environment.json", "commands.json", "summary.json", "verify.json"):
         src = run_dir / name
         if src.is_file():
@@ -813,53 +622,31 @@ def _stage_sanitized_tree(
                     temp / "equal_batch" / variant / source.name,
                     run_dir,
                 )
-    if companion_run_dir is None or not companion_run_dir.is_dir():
-        return None
-    staged = temp / "companion"
-    staged.mkdir(parents=True, exist_ok=True)
-    for name in (
-        "environment.json",
-        "commands.json",
-        "summary.json",
-        "verify.json",
-    ):
-        src = companion_run_dir / name
-        if src.is_file():
-            _copy_sanitized_json(src, staged / name, companion_run_dir)
-    return staged
 
 
-def write_report(
-    run_dir: Path,
-    output: Path,
-    *,
-    companion_run_dir: Path | None = None,
-) -> Path:
+def write_report(run_dir: Path, output: Path) -> Path:
     """Render a sanitized report.md to ``output`` (scratch JSON stays raw)."""
     temp = Path(tempfile.mkdtemp(prefix=".isiro-bench-report-"))
     try:
-        staged_companion = _stage_sanitized_tree(
-            run_dir, temp, companion_run_dir=companion_run_dir
-        )
+        _stage_sanitized_tree(run_dir, temp)
         haystack_jsonl = run_dir / "needle_haystack.jsonl"
         if haystack_jsonl.is_file():
             from needle_haystack import load_jsonl, render_heatmap
 
+            rows = load_jsonl(haystack_jsonl)
             image = output.parent / f"{output.stem}-needle-haystack.svg"
-            render_heatmap(load_jsonl(haystack_jsonl), image)
+            render_heatmap(rows, image)
             summary_path = temp / "summary.json"
             if summary_path.is_file():
                 summary = load_json(summary_path)
                 summary["needle_haystack"] = {
                     "rows": True,
+                    "table_rows": rows,
                     "image": image.name,
                 }
                 write_json(summary_path, summary)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
-            render(temp, companion_run_dir=staged_companion),
-            encoding="utf-8",
-        )
+        output.write_text(render(temp), encoding="utf-8")
     finally:
         shutil.rmtree(temp, ignore_errors=True)
     return output
@@ -868,20 +655,10 @@ def write_report(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument(
-        "--companion-run-dir",
-        type=Path,
-        default=None,
-        help="Optional second graph-mode run (eager+graphs merge into one report).",
-    )
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
     output = args.out or args.run_dir / "report.md"
-    write_report(
-        args.run_dir,
-        output,
-        companion_run_dir=args.companion_run_dir,
-    )
+    write_report(args.run_dir, output)
     print(output)
     return 0
 

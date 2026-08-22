@@ -604,16 +604,17 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("## Optional: Layer GEMM", report)
             self.assertIn("## Correctness", report)
             self.assertNotIn("## A. Correctness", report)
-            self.assertIn("## 1C. Generation (input 32 / output 256)", report)
-            self.assertIn("## 1D. TTFT", report)
+            self.assertIn("## D. Generation (recall-matched KV, input 32 / output 256)", report)
+            self.assertNotIn("## D. TTFT", report)
             self.assertNotIn("## E. Prefill TTFT", report)
-            self.assertIn("## 1E. Equal batch", report)
+            self.assertIn("## E. Equal batch", report)
             self.assertNotIn("## 1E. Equal-batch", report)
             self.assertNotIn("capacity benefit not active", report)
             self.assertIn("Output tok/s", report)
+            self.assertIn("ITL (ms) p50 / p95 / p99", report)
             self.assertIn("Tooling:", report)
             self.assertIn("- **`vllm bench serve`** (tok/s, ITL)", report)
-            self.assertIn("| Graph modes | OFF (eager) |", report)
+            self.assertIn("| CUDA graphs | off (eager) |", report)
             self.assertNotIn(
                 "Graph mode: `eager` (product default is eager; graphs is opt-in).",
                 report,
@@ -644,20 +645,15 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("## Limitations", report)
             self.assertNotIn("Review refresh", report)
             self.assertNotIn("Why lower on-disk", report)
-            self.assertIn(
-                "† Derived: output tok/s ÷ Non-KV GPU memory (GB).",
-                report,
-            )
-            self.assertIn("Physical meaning:", report)
-            self.assertIn("† tok/s per Non-KV GB", report)
+            self.assertNotIn("† tok/s per Non-KV GB", report)
             self.assertNotIn("† tok/s per weight GB", report)
             self.assertIn("## Correctness", report)
-            self.assertIn("## 1A. GPU memory", report)
-            self.assertIn("## 1B. Capacity", report)
-            self.assertIn("## 1C. Generation (input 32 / output 256)", report)
-            self.assertIn("## 1D. TTFT", report)
+            self.assertIn("## A. GPU memory", report)
+            self.assertIn("### Excluding KV Cache", report)
+            self.assertIn("## C. Capacity", report)
+            self.assertIn("## D. Generation (recall-matched KV, input 32 / output 256)", report)
             self.assertNotIn("## E. Prefill TTFT", report)
-            self.assertIn("## 1E. Equal batch", report)
+            self.assertIn("## E. Equal batch", report)
             self.assertIn("## Config", report)
             self.assertNotIn("## G. Config", report)
             self.assertNotIn("## G. Config / fairness / reproduce", report)
@@ -675,20 +671,12 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("SKU / `system_id`", report)
             self.assertNotIn("| Capacity scaling |", report)
             self.assertIn("| System |", report)
-            self.assertIn("| Graph modes |", report)
+            self.assertIn("| CUDA graphs |", report)
             self.assertIn("| Loaded model size |", report)
-            self.assertIn("Norm savings %", report)
-            self.assertIn(
-                "Norm savings % scales TIC to the Baseline total GPU",
-                report,
-            )
-            self.assertIn(
-                "Non-KV and KV cache are vLLM-reported",
-                report,
-            )
-            self.assertIn("nvidia-smi process usage", report)
-            self.assertIn("% (", report)
-            self.assertRegex(report, r"\d+\.\d+% \(\d+\.\d+x\)")
+            self.assertIn("Savings %", report)
+            self.assertIn("Savings % uses `1 - TIC/Baseline`.", report)
+            self.assertIn("GPU memory excluding KV cache", report)
+            self.assertNotIn("nvidia-smi process usage", report)
             self.assertNotIn("% more", report)
             self.assertNotIn("Model load (reported)", report)
             self.assertNotIn("| Model load |", report)
@@ -703,7 +691,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("KV element bpv", report)
             self.assertNotIn("† KV element bytes ratio", report)
             self.assertIn("**1.31x**", report)  # batch_ratio 42/32
-            self.assertIn("† tok/s per Non-KV GB", report)
+            self.assertNotIn("† tok/s per Non-KV GB", report)
             self.assertNotIn("† tok/s per weight GB", report)
             self.assertNotIn("† tok/s per KV GB", report)
             self.assertNotIn("## Optional: Layer GEMM", report)
@@ -777,11 +765,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("ISIRO_BENCH_EQUAL_BATCH=1", result.stdout)
         self.assertIn("--graph-on", result.stdout)
 
-    def test_launch_both_graph_modes_dry_meta(self) -> None:
-        env = {
-            **dict(**{k: v for k, v in __import__("os").environ.items()}),
-            "ISIRO_BENCH_LAUNCH_DRY_META": "1",
-        }
+    def test_launch_rejects_unknown_both_graph_flag(self) -> None:
         result = subprocess.run(
             [
                 sys.executable,
@@ -795,16 +779,11 @@ class BenchmarkTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
-            env=env,
             cwd=str(ROOT.parent),
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("eager:", result.stdout)
-        self.assertIn("graphs:", result.stdout)
-        self.assertIn("--graph-off", result.stdout)
-        self.assertIn("--graph-on", result.stdout)
+        self.assertNotEqual(result.returncode, 0)
 
-    def test_launch_rejects_both_with_graphs(self) -> None:
+    def test_launch_rejects_graph_on_and_off(self) -> None:
         result = subprocess.run(
             [
                 sys.executable,
@@ -813,8 +792,8 @@ class BenchmarkTests(unittest.TestCase):
                 "--dry-run",
                 "--system-id",
                 "rtx-5090",
-                "--both-graph-modes",
                 "--graph-on",
+                "--graph-off",
             ],
             capture_output=True,
             text=True,
@@ -984,7 +963,22 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_scripts_omit_invent_layout_jargon(self) -> None:
         private_tree = "isiro" + "-core"
-        banned = ("ms+E", "dense-E", "coded-E", "Path A", private_tree)
+        banned = (
+            "ms+E",
+            "dense-E",
+            "coded-E",
+            "Path A",
+            private_tree,
+            "dest_gib",
+            "dest-from-live",
+            "continue_ok",
+            "leftover",
+            "tANS",
+            "rANS",
+            "signfold",
+            "percol",
+            "working-set",
+        )
         targets = [ROOT / "README.md", SCRIPTS / "harness_lib.sh"]
         targets.extend(sorted(SCRIPTS.glob("*.py")))
         for path in targets:
@@ -1062,19 +1056,14 @@ class BenchmarkTests(unittest.TestCase):
         self.assertFalse(fail["serve_output_match_ok"])
         self.assertEqual(fail["matched"], 1)
 
-    def test_report_dual_graph_companion_details(self) -> None:
+    def test_report_single_graph_on_shape(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            eager = root / "eager"
-            graphs = root / "graphs"
-            eager.mkdir()
-            graphs.mkdir()
+            run = Path(temp)
             summary = _sample_summary(ttft_tic_slower=True, experiment_kind="capacity")
             summary["publish_quality"] = True
             summary["smoke"] = False
-            _write_run(eager, summary)
-            _write_run(graphs, summary)
-            (graphs / "commands.json").write_text(
+            _write_run(run, summary)
+            (run / "commands.json").write_text(
                 json.dumps(
                     {
                         "baseline_serve": ["vllm", "serve"],
@@ -1084,61 +1073,28 @@ class BenchmarkTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            report = render(eager, companion_run_dir=graphs)
+            report = render(run)
             self.assertIn("Tooling:", report)
             self.assertIn("- **`vllm bench serve`** (tok/s, ITL)", report)
             self.assertIn("# ISIRO Benchmark Report: `qwen2.5-7b-instruct`", report)
             self.assertIn("`bf16` | `rtx-5090` |", report)
             self.assertRegex(report, r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC")
-            self.assertIn("## Graph ON (CUDA graphs)", report)
-            self.assertIn("## Graph OFF (eager)", report)
+            self.assertNotIn("## Graph ON (CUDA graphs)", report)
+            self.assertNotIn("## Graph OFF (eager)", report)
             self.assertNotIn("<details>", report)
-            self.assertNotIn("<summary>", report)
             self.assertNotIn("ISIRO_SERVE_CUDA_GRAPHS", report)
-            self.assertNotIn("matched A/B", report)
-            self.assertIn("CUDA graphs on (product default; `--graph-on`).", report)
-            self.assertIn("CUDA graphs off (`--graph-off`).", report)
-            # Dual mode uses full 1A-1E / 2A-2E tables (both visible).
-            self.assertEqual(
-                report.count("## 1C. Generation (input 32 / output 256)"), 1
-            )
-            self.assertEqual(
-                report.count("## 2C. Generation (input 32 / output 256)"), 1
-            )
-            self.assertLess(
-                report.index("## Graph ON (CUDA graphs)"),
-                report.index("## Graph OFF (eager)"),
-            )
-            self.assertLess(
-                report.index("## Graph OFF (eager)"),
-                report.index("## Config"),
-            )
-            self.assertEqual(report.count("## 1D. TTFT"), 1)
-            self.assertEqual(report.count("## 2D. TTFT"), 1)
-            self.assertIn(
-                "† Derived: output tok/s ÷ Non-KV GPU memory (GB).",
-                report,
-            )
-            self.assertIn("Physical meaning:", report)
-            self.assertIn(
-                "TTFT is separated from generation (1C) because it is more ",
-                report,
-            )
-            self.assertIn(
-                "TTFT is separated from generation (2C) because it is more ",
-                report,
-            )
-            self.assertNotIn("opt-in CUDA graphs) - matched A/B", report)
-            self.assertNotIn("Reproduce:", report)
-            self.assertNotIn("Baseline server:", report)
-            self.assertNotIn("TIC server:", report)
             self.assertNotIn("--both-graph-modes", report)
+            self.assertEqual(report.count("## A. GPU memory"), 1)
+            self.assertEqual(report.count("## C. Capacity"), 1)
+            self.assertEqual(report.count("## D. Generation"), 1)
+            self.assertEqual(report.count("## E. Equal batch"), 1)
+            self.assertIn("ITL (ms) p50 / p95 / p99", report)
+            self.assertNotIn("† tok/s per Non-KV GB", report)
+            self.assertNotIn("Reproduce:", report)
             self.assertIn("Weight bit-exactness", report)
             self.assertIn("4/4 prompts, temp=0, token IDs equal", report)
-            self.assertIn(
-                "ON (CUDA graphs); OFF (eager)",
-                report,
-            )
+            self.assertIn("| CUDA graphs | on (eager prefill, graph decode) |", report)
+            self.assertIn("| KV cache | product KV cache size |", report)
 
     def test_fold_serve_output_match_isiro(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

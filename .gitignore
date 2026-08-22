@@ -8,7 +8,9 @@ Thumbs.db
 *~
 .idea/
 .vscode/
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 .claude/
 
 # Python

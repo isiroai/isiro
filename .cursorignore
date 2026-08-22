@@ -3,8 +3,6 @@
 !user/**
 
 # Local scratch bench outputs (often 100G+; never agent context).
-# published/ stays readable (reports / methodology).
-benchmarks/results/scratch/
 benchmarks/**/scratch/
 **/results/scratch/
 

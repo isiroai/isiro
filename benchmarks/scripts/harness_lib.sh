@@ -58,7 +58,6 @@ for arg in "$@"; do
       echo "  Public path: capacity-primary A/B; Graph ON by default." >&2
       echo "  --graph-on: product default (matched outer CUDA graphs A/B)." >&2
       echo "  --graph-off: matched graphs-OFF A/B (--eager is an alias)." >&2
-      echo "  Prefer: benchmarks/run_ab.sh <model> --both-graph-modes to record both." >&2
       echo "  --profiles=generation-32-256: default." >&2
       exit 0
       ;;
@@ -643,7 +642,7 @@ api_port_listening() {
   ss -ltn "( sport = :${API_PORT} )" 2>/dev/null | grep -qE ":${API_PORT}([^0-9]|$)"
 }
 
-# Drop leftover listeners before baseline Docker publish or TIC host serve.
+# Drop stale listeners before baseline Docker publish or TIC host serve.
 ensure_api_port_free() {
   if ! api_port_listening; then
     return 0

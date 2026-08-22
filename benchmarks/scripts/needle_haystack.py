@@ -71,13 +71,11 @@ def build_messages(
 
 
 def _kv_cache_gib(item: dict[str, Any]) -> float:
-    if "kv_cache_gib" in item:
-        return float(item["kv_cache_gib"])
-    return float(item["dest_gib"])
+    return float(item["kv_cache_gib"])
 
 
 def _has_kv_cache_gib(item: dict[str, Any]) -> bool:
-    return "kv_cache_gib" in item or "dest_gib" in item
+    return "kv_cache_gib" in item
 
 
 def row(
@@ -86,7 +84,7 @@ def row(
     kv_cache_gib: float,
     depth_percent: float,
     hit: bool,
-    continue_ok: bool = True,
+    response_completes: bool = True,
     refuse: bool = False,
     oom: bool = False,
     extra: dict[str, Any] | None = None,
@@ -97,7 +95,7 @@ def row(
         "depth_percent": float(depth_percent),
         "hit": bool(hit),
         "score": 1.0 if hit else 0.0,
-        "continue_ok": bool(continue_ok),
+        "response_completes": bool(response_completes),
         "refuse": bool(refuse),
         "oom": bool(oom),
     }
@@ -173,12 +171,12 @@ def probe_grid(
         )
         refuse = False
         oom = False
-        continue_ok = True
+        response_completes = True
         completion = ""
         try:
             completion = _chat_completion(url, model=model, messages=messages)
         except Exception as exc:
-            continue_ok = False
+            response_completes = False
             text = str(exc).lower()
             refuse = "http" in text or "refuse" in text
             oom = "out of memory" in text or "oom" in text
@@ -188,7 +186,7 @@ def probe_grid(
                 kv_cache_gib=kv_cache_gib,
                 depth_percent=float(depth),
                 hit=score_hit(completion),
-                continue_ok=continue_ok,
+                response_completes=response_completes,
                 refuse=refuse,
                 oom=oom,
                 extra={"completion_chars": len(completion)},
@@ -363,10 +361,75 @@ def mock_rows() -> list[dict[str, Any]]:
     return rows
 
 
+def kv_sweep_table_lines(rows: list[dict[str, Any]]) -> list[str]:
+    """One row per panel and KV size. Do not invent sizes."""
+    tic_sizes = sorted(
+        {
+            round(_kv_cache_gib(item), 4)
+            for item in rows
+            if str(item.get("panel") or "").lower() in ("tic", "isiro")
+            and _has_kv_cache_gib(item)
+        }
+    )
+    groups: dict[tuple[str, float], list[dict[str, Any]]] = {}
+    for item in rows:
+        if not _has_kv_cache_gib(item):
+            continue
+        name = str(item.get("panel") or "").lower()
+        if name in ("tic", "isiro"):
+            panel = "tic"
+        elif name in ("vanilla", "baseline"):
+            panel = "baseline"
+        else:
+            continue
+        key = (panel, round(_kv_cache_gib(item), 4))
+        groups.setdefault(key, []).append(item)
+    if not groups:
+        return []
+    tic_fixed = tic_sizes[0] if tic_sizes else None
+    lines = [
+        "### KV cache",
+        "",
+        "TIC keeps one small KV cache. Baseline KV cache grows across the rows.",
+        "",
+        "Same long prompt, needle, and question on every setup. The prompt is "
+        "longer than TIC's fixed cache. Prompt length stays fixed as Baseline's "
+        "KV grows, so the same prefill can fit on the larger rows.",
+        "",
+        "| Setup | KV cache | Size (GiB) | Response completes | Fact recalled (needle) | Rejected or OOM |",
+        "|-------|----------|------------|--------------------|------------------------|-----------------|",
+    ]
+    order = sorted(groups, key=lambda key: (0 if key[0] == "tic" else 1, key[1]))
+    seen_baseline_hit = False
+    for panel, size in order:
+        items = groups[(panel, size)]
+        completes = any(item.get("response_completes", True) for item in items)
+        recalled = any(item.get("hit") for item in items)
+        refused = any(item.get("refuse") or item.get("oom") for item in items)
+        if panel == "tic":
+            setup, policy = "**TIC**", "Fixed"
+        elif tic_fixed is not None and abs(size - tic_fixed) < 1e-6:
+            setup, policy = "**Baseline**", "Same size as TIC"
+        elif recalled and not seen_baseline_hit:
+            setup, policy = "**Baseline**", "First size that recalls"
+            seen_baseline_hit = True
+        else:
+            setup, policy = "**Baseline**", "Larger KV"
+            if recalled:
+                seen_baseline_hit = True
+        flag = lambda ok: "yes" if ok else "no"
+        lines.append(
+            f"| {setup} | {policy} | {size:g} | {flag(completes)} | "
+            f"**{flag(recalled)}** | {flag(refused)} |"
+        )
+    lines.append("")
+    return lines
+
+
 def report_lines(
     image_rel: str,
     *,
-    heading: str = "## Needle-in-a-haystack (KV cache GiB × depth)",
+    heading: str = "## B. Needle-in-a-haystack (KV cache GiB × depth)",
 ) -> list[str]:
     return [
         heading,

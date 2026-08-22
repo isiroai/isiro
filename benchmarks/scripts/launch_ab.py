@@ -127,7 +127,6 @@ def _write_model_report(
     model_dir: Path,
     system_id: str,
     run_dir: Path,
-    companion_run_dir: Path | None = None,
 ) -> Path:
     stamp = _report_stamp(run_dir, system_id)
     report_out = model_dir / f"{system_id}-report-{stamp}.md"
@@ -140,8 +139,6 @@ def _write_model_report(
         "--out",
         str(report_out),
     ]
-    if companion_run_dir is not None:
-        cmd.extend(["--companion-run-dir", str(companion_run_dir)])
     completed = subprocess.run(cmd, check=False)
     if completed.returncode != 0:
         raise RuntimeError(
@@ -154,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Run the public capacity-primary A/B (Graph ON by default). "
-            "Pass --graph-off for Graph OFF, or --both-graph-modes for both."
+            "Pass --graph-off for Graph OFF."
         )
     )
     parser.add_argument(
@@ -184,13 +181,6 @@ def main(argv: list[str] | None = None) -> int:
         help=argparse.SUPPRESS,  # alias for --graph-off
     )
     parser.add_argument(
-        "--both-graph-modes",
-        action="store_true",
-        help=(
-            "Run Graph ON and Graph OFF A/Bs. Report shows Graph ON then Graph OFF."
-        ),
-    )
-    parser.add_argument(
         "--mode",
         choices=("capacity", "equal-batch"),
         default=None,
@@ -213,11 +203,8 @@ def main(argv: list[str] | None = None) -> int:
 
     graph_on = bool(args.graph_on or args.graphs)
     graph_off = bool(args.graph_off or args.eager)
-    mode_flags = sum(bool(x) for x in (graph_on, graph_off, args.both_graph_modes))
-    if mode_flags > 1:
-        raise SystemExit(
-            "pass only one of --graph-on, --graph-off, and --both-graph-modes"
-        )
+    if graph_on and graph_off:
+        raise SystemExit("pass only one of --graph-on and --graph-off")
     if args.reuse_baseline and args.no_reuse_baseline:
         raise SystemExit("pass only one of --reuse-baseline and --no-reuse-baseline")
 
@@ -250,17 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     child_env.setdefault("ISIRO_VERIFY_REFERENCE", "1")
     child_env.setdefault("ISIRO_BENCH_EQUAL_BATCH", "1")
 
-    if args.both_graph_modes:
-        # Separate scratch dirs; baseline cache keys include enforce_eager.
-        # generate_report leads with Graph ON, then Graph OFF.
-        # Labels stay eager/graphs for .last_run_* markers.
-        runs = (
-            ("eager", False, True),
-            ("graphs", True, False),
-        )
-    elif graph_on:
-        runs = (("graphs", True, False),)
-    elif graph_off:
+    if graph_off:
         runs = (("eager", False, True),)
     else:
         runs = (("graphs", True, False),)
@@ -323,32 +300,7 @@ def main(argv: list[str] | None = None) -> int:
             if parsed.is_dir():
                 run_dirs[label] = parsed
 
-    if args.both_graph_modes and not args.dry_run:
-        eager_dir = run_dirs.get("eager")
-        graphs_dir = run_dirs.get("graphs")
-        if eager_dir is None or graphs_dir is None:
-            print(
-                "both-graph-modes finished but missing scratch run dirs "
-                f"(eager={eager_dir} graphs={graphs_dir})",
-                file=sys.stderr,
-            )
-            return 2
-        marker = eager_dir / "graphs_companion_run.txt"
-        marker.write_text(str(graphs_dir.resolve()) + "\n", encoding="utf-8")
-        try:
-            report_out = _write_model_report(
-                root=root,
-                model_dir=model_dir,
-                system_id=system_id,
-                run_dir=eager_dir,
-                companion_run_dir=graphs_dir,
-            )
-        except RuntimeError as exc:
-            print(f"dual-graph report merge failed: {exc}", file=sys.stderr)
-            return 2
-        print(f"merged dual-graph report: {report_out}", file=sys.stderr)
-        print(f"ISIRO_BENCH_REPORT={report_out}")
-    elif not args.dry_run and run_dirs:
+    if not args.dry_run and run_dirs:
         label, run_dir = next(iter(run_dirs.items()))
         try:
             report_out = _write_model_report(

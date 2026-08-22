@@ -1,0 +1,13 @@
+# Public surfaces (isiro)
+
+Customer docs, README, benchmark scripts, and generated reports. No research or codec lineage. No dest-from-live recipe.
+
+## Do not write
+
+`tANS`, `rANS`, `signfold`, `percol`, `dest_gib`, `dest-from-live`, `continue_ok`, `leftover` (as a product term), `working-set` (as a dest formula)
+
+## Prefer
+
+KV cache, the heatmap, Graph ON, `gpu_memory_utilization=0.90`
+
+Publish measured KV GiB. Do not publish last-W × seqs + slack or bytes-per-token-from-live-specs.

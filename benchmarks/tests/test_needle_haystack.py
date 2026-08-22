@@ -57,6 +57,10 @@ class NeedleHaystackTests(unittest.TestCase):
             write_jsonl(path, rows)
             loaded = load_jsonl(path)
             self.assertEqual(len(loaded), len(rows))
+            self.assertIn("kv_cache_gib", loaded[0])
+            self.assertIn("response_completes", loaded[0])
+            self.assertNotIn("dest_gib", loaded[0])
+            self.assertNotIn("continue_ok", loaded[0])
             svg = Path(tmp) / "heat.svg"
             render_heatmap(loaded, svg)
             text = svg.read_text(encoding="utf-8")
@@ -118,7 +122,8 @@ class NeedleHaystackTests(unittest.TestCase):
             dest = Path(tmp) / "out" / "rtx-5090-report.md"
             write_report(run, dest)
             text = dest.read_text(encoding="utf-8")
-            self.assertIn("Needle-in-a-haystack", text)
+            self.assertIn("## B. Needle-in-a-haystack", text)
+            self.assertIn("### KV cache", text)
             self.assertIn("rtx-5090-report-needle-haystack.svg", text)
             self.assertTrue(
                 (dest.parent / "rtx-5090-report-needle-haystack.svg").is_file()

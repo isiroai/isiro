@@ -10,3 +10,5 @@ ISIRO Runtime, ISIRO Compiler, and `.tic` format are proprietary.
   [Developer Certificate of Origin](https://developercertificate.org/).
 
 By participating, you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+Public docs, README, benchmark scripts, and reports use field words (KV cache, heatmap). Do not add codec or dest-formula terms.
