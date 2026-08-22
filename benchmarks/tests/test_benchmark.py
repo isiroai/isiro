@@ -759,11 +759,58 @@ class BenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("scripts/run_harness.sh", result.stdout)
+        self.assertIn("scripts/run_needle_haystack.sh", result.stdout)
+        self.assertIn("needle:", result.stdout)
         self.assertIn("MODEL_SLUG=qwen2.5-7b-instruct", result.stdout)
         self.assertIn("system_id=rtx-5090", result.stdout)
         self.assertIn("ISIRO_VERIFY_REFERENCE=1", result.stdout)
         self.assertIn("ISIRO_BENCH_EQUAL_BATCH=1", result.stdout)
         self.assertIn("--graph-on", result.stdout)
+
+    def test_launch_dry_meta_skip_needle_omits_needle_phase(self) -> None:
+        env = {
+            **dict(**{k: v for k, v in __import__("os").environ.items()}),
+            "ISIRO_BENCH_LAUNCH_DRY_META": "1",
+        }
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "launch_ab.py"),
+                "qwen2.5-7b-instruct",
+                "--dry-run",
+                "--skip-needle",
+                "--system-id",
+                "rtx-5090",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+            cwd=str(ROOT.parent),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("needle:", result.stdout)
+        self.assertIn("scripts/run_harness.sh", result.stdout)
+
+    def test_launch_rejects_skip_and_needle_only(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "launch_ab.py"),
+                "qwen2.5-7b-instruct",
+                "--dry-run",
+                "--skip-needle",
+                "--needle-only",
+                "--system-id",
+                "rtx-5090",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(ROOT.parent),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pass only one of", result.stderr)
 
     def test_launch_rejects_unknown_both_graph_flag(self) -> None:
         result = subprocess.run(
@@ -935,6 +982,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("benchmarks/run_ab.sh {model}\n", text)
         self.assertIn("# matches the report (Graph ON default)", text)
         self.assertIn("benchmarks/run_ab.sh {model} --graph-off", text)
+        self.assertNotIn("run_needle_haystack.sh", text)
         self.assertNotIn("benchmarks/run_ab.sh {model} --both-graph-modes", text)
         self.assertNotIn("benchmarks/run_ab.sh {model} --smoke", text)
         self.assertIn("benchmarks/common.env.example", text)
@@ -981,6 +1029,7 @@ class BenchmarkTests(unittest.TestCase):
         )
         targets = [ROOT / "README.md", SCRIPTS / "harness_lib.sh"]
         targets.extend(sorted(SCRIPTS.glob("*.py")))
+        targets.append(SCRIPTS / "run_needle_haystack.sh")
         for path in targets:
             text = path.read_text(encoding="utf-8")
             for term in banned:

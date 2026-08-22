@@ -8,6 +8,7 @@ import argparse
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 ALLOWED_SYSTEM_IDS = ("rtx-5090", "a100", "h100")
@@ -150,8 +151,8 @@ def _write_model_report(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the public capacity-primary A/B (Graph ON by default). "
-            "Pass --graph-off for Graph OFF."
+            "Run needle-in-a-haystack, then the public capacity-primary A/B "
+            "(Graph ON by default). Pass --graph-off for Graph OFF."
         )
     )
     parser.add_argument(
@@ -199,6 +200,16 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional ISIRO_BENCH_CONFIG path (default: model common.env)",
     )
+    parser.add_argument(
+        "--skip-needle",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--needle-only",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
 
     graph_on = bool(args.graph_on or args.graphs)
@@ -207,6 +218,8 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("pass only one of --graph-on and --graph-off")
     if args.reuse_baseline and args.no_reuse_baseline:
         raise SystemExit("pass only one of --reuse-baseline and --no-reuse-baseline")
+    if args.skip_needle and args.needle_only:
+        raise SystemExit("pass only one of --skip-needle and --needle-only")
 
     root = repo_root()
     model = args.model
@@ -214,8 +227,11 @@ def main(argv: list[str] | None = None) -> int:
     if not model_dir.is_dir():
         raise SystemExit(f"model directory not found: {model_dir}")
     run_harness = root / "benchmarks" / "scripts" / "run_harness.sh"
+    run_needle = root / "benchmarks" / "scripts" / "run_needle_haystack.sh"
     if not run_harness.is_file():
         raise SystemExit(f"harness entry not found: {run_harness}")
+    if not run_needle.is_file():
+        raise SystemExit(f"needle entry not found: {run_needle}")
 
     config = args.config
     if config is None:
@@ -242,6 +258,16 @@ def main(argv: list[str] | None = None) -> int:
     else:
         runs = (("graphs", True, False),)
 
+    scratch_root = root / "benchmarks" / "scratch"
+    run_dir = scratch_root / (
+        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{system_id}"
+    )
+    child_env["ISIRO_BENCH_RUN_DIR"] = str(run_dir)
+
+    needle_cmd = ["bash", str(run_needle), model]
+    if args.dry_run:
+        needle_cmd.append("--dry-run")
+
     dry_meta = args.dry_run and os.environ.get("ISIRO_BENCH_LAUNCH_DRY_META") == "1"
     if dry_meta:
         print(str(run_harness))
@@ -253,21 +279,39 @@ def main(argv: list[str] | None = None) -> int:
             f"ISIRO_VERIFY_REFERENCE={child_env.get('ISIRO_VERIFY_REFERENCE')} "
             f"ISIRO_BENCH_EQUAL_BATCH={child_env.get('ISIRO_BENCH_EQUAL_BATCH')}"
         )
-        for label, on, off in runs:
-            cmd = _build_command(
-                run_harness,
-                dry_run=True,
-                graph_on=on,
-                graph_off=off,
-                mode=args.mode,
-                reuse_baseline=args.reuse_baseline,
-                no_reuse_baseline=args.no_reuse_baseline,
-                profiles=args.profiles,
-            )
-            print(f"{label}: {' '.join(cmd)}")
+        if not args.skip_needle:
+            print(f"needle: {' '.join(needle_cmd)}")
+        if not args.needle_only:
+            for label, on, off in runs:
+                cmd = _build_command(
+                    run_harness,
+                    dry_run=True,
+                    graph_on=on,
+                    graph_off=off,
+                    mode=args.mode,
+                    reuse_baseline=args.reuse_baseline,
+                    no_reuse_baseline=args.no_reuse_baseline,
+                    profiles=args.profiles,
+                )
+                print(f"{label}: {' '.join(cmd)}")
         return 0
 
-    scratch_root = root / "benchmarks" / "scratch"
+    if not args.skip_needle:
+        print(
+            f"launch needle model={model} system_id={system_id} "
+            f"command={' '.join(needle_cmd)}",
+            file=sys.stderr,
+        )
+        needle_done = subprocess.run(needle_cmd, check=False, env=child_env)
+        if needle_done.returncode != 0:
+            print(
+                f"launch needle failed with exit {needle_done.returncode}",
+                file=sys.stderr,
+            )
+            return int(needle_done.returncode)
+        if args.needle_only:
+            return 0
+
     run_dirs: dict[str, Path] = {}
     rc = 0
     for label, on, off in runs:

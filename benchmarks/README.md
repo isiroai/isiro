@@ -38,7 +38,7 @@ cp benchmarks/common.env.example benchmarks/{model}/common.env
 ## Run
 
 `{model}` is the directory name under `benchmarks/`. Each launch writes a
-timestamped report.
+timestamped report. One command runs needle-in-a-haystack, then the tok/s A/B.
 
 ```bash
 # e.g. benchmarks/run_ab.sh qwen2.5-7b-instruct
@@ -57,9 +57,8 @@ benchmarks/run_ab.sh {model} --graph-off
 
 ## Output
 
-Needle-in-a-haystack uses `benchmarks/scripts/needle_haystack.py` (JSONL + the heatmap).
-The heatmap is seaborn from that JSONL (`benchmarks/requirements-plot.txt`).
-`vllm bench serve` stays the tok/s tool.
+The report includes needle-in-a-haystack (fact retrieval by KV cache) and
+`vllm bench serve` (tok/s, ITL). Plot deps: `benchmarks/requirements-plot.txt`.
 
 Harness writes a timestamped copy (gitignored):
 

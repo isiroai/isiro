@@ -22,13 +22,21 @@ except ImportError:
 
 from needle_haystack import (  # noqa: E402
     NEEDLE,
+    STORY_CONTEXT_TOKENS,
     build_messages,
+    chars_for_context_tokens,
+    context_bins_for_max_len,
+    first_recall_candidates,
     insert_needle,
     load_jsonl,
     mock_rows,
+    niah_discover_steps,
+    parse_kv_cache_gib,
     render_heatmap,
     row,
     score_hit,
+    story_tokens_for_max_len,
+    tic_pool_smaller_than_fill,
     write_jsonl,
 )
 
@@ -151,6 +159,81 @@ class NeedleHaystackTests(unittest.TestCase):
             self.assertTrue(
                 (dest.parent / "rtx-5090-report-needle-haystack.png").is_file()
             )
+
+    def test_discover_helpers_are_measured_not_fixed(self) -> None:
+        self.assertEqual(chars_for_context_tokens(1000), 4000)
+        self.assertEqual(STORY_CONTEXT_TOKENS, 16000)
+        self.assertEqual(context_bins_for_max_len(8192)[-1], 8000)
+        self.assertEqual(story_tokens_for_max_len(8192), 8000)
+        self.assertEqual(story_tokens_for_max_len(32768), 16000)
+        cands = first_recall_candidates(1.09, cap=13.65)
+        self.assertGreaterEqual(cands[0], 2.0)
+        self.assertLess(cands[-1], 13.65)
+        self.assertNotEqual(cands, [4.0])
+        self.assertTrue(tic_pool_smaller_than_fill(1.09, 13.65))
+        self.assertTrue(tic_pool_smaller_than_fill(3.5, 10.0))
+        self.assertFalse(tic_pool_smaller_than_fill(13.0, 13.65))
+        gib = parse_kv_cache_gib(
+            "Available KV cache memory: 1.09 GiB\nGPU KV cache size: 12,345 tokens\n"
+        )
+        self.assertAlmostEqual(gib, 1.09)
+        steps = "\n".join(niah_discover_steps())
+        self.assertIn("scrape GPU KV cache size", steps)
+        self.assertIn("first recall", steps)
+        self.assertIn("any model", steps)
+        self.assertNotIn("4.00", steps)
+        self.assertNotIn("2.5", steps)
+        self.assertNotIn("dest_gib", steps)
+
+    def test_runner_dry_run_lists_discover_steps(self) -> None:
+        import os
+        import subprocess
+        import tempfile
+
+        runner = ROOT / "scripts" / "run_needle_haystack.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp) / "qwen2.5-7b-instruct"
+            model_dir.mkdir()
+            (model_dir / "common.env").write_text(
+                "BASELINE_MODEL_DIR=/tmp/baseline\n"
+                "TIC_MODEL_DIR=/tmp/tic\n"
+                "MODEL_ID=Qwen/Qwen2.5-7B-Instruct\n"
+                "VLLM_IMAGE=vllm/vllm-openai:v0.26.0\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["MODEL_DIR"] = str(model_dir)
+            env["ISIRO_BENCH_CONFIG"] = str(model_dir / "common.env")
+            completed = subprocess.run(
+                ["bash", str(runner), "qwen2.5-7b-instruct", "--dry-run"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        out = completed.stdout
+        self.assertIn("max_num_seqs=1", out)
+        self.assertIn("max_model_len=32768", out)
+        self.assertIn("scrape GPU KV cache size", out)
+        self.assertIn("not a fixed 4.00", out)
+        self.assertIn("TIC grid, fill grid, same-size grid", out)
+        self.assertNotIn("dest_gib", out)
+        self.assertNotIn("dest-from-live", out)
+        script = (ROOT / "scripts" / "run_needle_haystack.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("TIC_PRODUCT_KV_GIB_MAX", script)
+        for banned in (
+            "dest_gib",
+            "dest-from-live",
+            "leftover",
+            "tANS",
+            "rANS",
+            "signfold",
+            "percol",
+        ):
+            self.assertNotIn(banned, script)
 
     def test_row_score_from_hit(self) -> None:
         self.assertEqual(

@@ -173,8 +173,13 @@ if [[ "${SERVE_PREFIX_CACHING}" != "false" ]]; then
 fi
 
 export VLLM_USE_FLASHINFER_SAMPLER=0
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${SYSTEM_ID}"
-RUN_DIR="${SCRATCH_ROOT}/${RUN_ID}"
+if [[ -n "${ISIRO_BENCH_RUN_DIR:-}" ]]; then
+  RUN_DIR="${ISIRO_BENCH_RUN_DIR}"
+  RUN_ID="$(basename "${RUN_DIR}")"
+else
+  RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${SYSTEM_ID}"
+  RUN_DIR="${SCRATCH_ROOT}/${RUN_ID}"
+fi
 RAW_DIR="${RUN_DIR}/raw"
 LOG_DIR="${RUN_DIR}/logs"
 API_URL="http://127.0.0.1:${API_PORT}"

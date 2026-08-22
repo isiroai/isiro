@@ -25,8 +25,9 @@ HAYSTACK_LINE = (
 
 DEFAULT_DEPTHS = (0, 10, 25, 50, 75, 90, 100)
 DEFAULT_CONTEXT_TOKENS = (1000, 2000, 4000, 8000, 12000, 16000, 24000, 32000)
-# Table A folds the grid at this bin (long prompt; Baseline 4.00 still retrieves).
+# Table A folds the grid at this bin when the model window allows it.
 STORY_CONTEXT_TOKENS = 16000
+CHARS_PER_TOKEN = 4
 
 
 def score_hit(completion: str, needle: str = NEEDLE) -> bool:
@@ -38,6 +39,85 @@ def score_hit(completion: str, needle: str = NEEDLE) -> bool:
         return True
     digits = "".join(ch for ch in needle if ch.isdigit())
     return bool(digits) and digits in text
+
+
+def chars_for_context_tokens(context_tokens: int) -> int:
+    return max(1, int(context_tokens) * CHARS_PER_TOKEN)
+
+
+def parse_kv_cache_gib(log_text: str) -> float:
+    """vLLM serve log: Available KV cache memory in GiB."""
+    import re
+
+    match = re.search(
+        r"Available KV cache memory:\s*([0-9.]+)\s*GiB",
+        log_text,
+    )
+    if not match:
+        raise ValueError("Available KV cache memory not found in serve log")
+    return float(match.group(1))
+
+
+def gib_to_bytes(kv_cache_gib: float) -> int:
+    return int(round(float(kv_cache_gib) * (1024**3)))
+
+
+def context_bins_for_max_len(
+    max_model_len: int,
+    bins: Iterable[int] = DEFAULT_CONTEXT_TOKENS,
+) -> tuple[int, ...]:
+    cap = max(1, int(max_model_len))
+    kept = tuple(int(b) for b in bins if int(b) <= cap)
+    return kept or (cap,)
+
+
+def story_tokens_for_max_len(
+    max_model_len: int,
+    *,
+    story: int = STORY_CONTEXT_TOKENS,
+    bins: Iterable[int] = DEFAULT_CONTEXT_TOKENS,
+) -> int:
+    cap = max(1, int(max_model_len))
+    target = min(int(story), cap)
+    kept = context_bins_for_max_len(cap, bins)
+    at_or_below = [b for b in kept if b <= target]
+    return int(at_or_below[-1] if at_or_below else kept[0])
+
+
+def tic_pool_smaller_than_fill(
+    tic_gib: float,
+    fill_gib: float,
+    *,
+    max_ratio: float = 0.85,
+) -> bool:
+    """True when product TIC KV is smaller than Baseline default-fill KV."""
+    tic = float(tic_gib)
+    fill = float(fill_gib)
+    return fill > 0 and tic > 0 and tic < fill * float(max_ratio)
+
+
+def first_recall_candidates(
+    tic_gib: float,
+    *,
+    cap: float = 16.0,
+) -> list[float]:
+    """Double from TIC toward cap. Stops before fill. Not a fixed 4.00."""
+    sizes: list[float] = []
+    nxt = max(float(int(tic_gib) + 1), round(float(tic_gib) * 2.0, 2))
+    while nxt < float(cap) - 0.05:
+        sizes.append(round(nxt, 2))
+        nxt = round(nxt * 2.0, 2)
+    return sizes
+
+
+def niah_discover_steps() -> list[str]:
+    return [
+        "TIC product serve; scrape GPU KV cache size; full grid (1 serve)",
+        "Baseline default fill; scrape GPU KV cache size; full grid (1 serve)",
+        "Refuse if TIC KV is not smaller than Baseline fill (any model)",
+        "Baseline same size as TIC; full grid (1 serve)",
+        "Baseline double KV until first recall; full grid only on the hit serve",
+    ]
 
 
 def haystack_text(*, approx_chars: int) -> str:
@@ -161,6 +241,46 @@ def _chat_completion(
     return str(msg.get("content") or "")
 
 
+def _one_probe(
+    *,
+    url: str,
+    model: str,
+    panel: str,
+    kv_cache_gib: float,
+    depth: float,
+    context_tokens: int,
+    timeout: float,
+) -> dict[str, Any]:
+    messages = build_messages(
+        depth_percent=float(depth),
+        approx_chars=chars_for_context_tokens(context_tokens),
+    )
+    refuse = False
+    oom = False
+    response_completes = True
+    completion = ""
+    try:
+        completion = _chat_completion(
+            url, model=model, messages=messages, timeout=timeout
+        )
+    except Exception as exc:
+        response_completes = False
+        text = str(exc).lower()
+        refuse = "http" in text or "refuse" in text
+        oom = "out of memory" in text or "oom" in text
+    return row(
+        panel=panel,
+        kv_cache_gib=kv_cache_gib,
+        depth_percent=float(depth),
+        context_tokens=int(context_tokens),
+        hit=score_hit(completion),
+        response_completes=response_completes,
+        refuse=refuse,
+        oom=oom,
+        extra={"completion_chars": len(completion)},
+    )
+
+
 def probe_grid(
     *,
     url: str,
@@ -168,37 +288,57 @@ def probe_grid(
     panel: str,
     kv_cache_gib: float,
     depths: Iterable[float] = DEFAULT_DEPTHS,
-    approx_chars: int = 8000,
+    context_tokens: Iterable[int] = DEFAULT_CONTEXT_TOKENS,
+    timeout: float = 300.0,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for depth in depths:
-        messages = build_messages(
-            depth_percent=float(depth), approx_chars=approx_chars
-        )
-        refuse = False
-        oom = False
-        response_completes = True
-        completion = ""
-        try:
-            completion = _chat_completion(url, model=model, messages=messages)
-        except Exception as exc:
-            response_completes = False
-            text = str(exc).lower()
-            refuse = "http" in text or "refuse" in text
-            oom = "out of memory" in text or "oom" in text
-        rows.append(
-            row(
-                panel=panel,
-                kv_cache_gib=kv_cache_gib,
-                depth_percent=float(depth),
-                hit=score_hit(completion),
-                response_completes=response_completes,
-                refuse=refuse,
-                oom=oom,
-                extra={"completion_chars": len(completion)},
+    for tokens in context_tokens:
+        for depth in depths:
+            rows.append(
+                _one_probe(
+                    url=url,
+                    model=model,
+                    panel=panel,
+                    kv_cache_gib=kv_cache_gib,
+                    depth=float(depth),
+                    context_tokens=int(tokens),
+                    timeout=timeout,
+                )
             )
-        )
     return rows
+
+
+def probe_story(
+    *,
+    url: str,
+    model: str,
+    panel: str,
+    kv_cache_gib: float,
+    depths: Iterable[float] = DEFAULT_DEPTHS,
+    story_tokens: int = STORY_CONTEXT_TOKENS,
+    timeout: float = 300.0,
+) -> list[dict[str, Any]]:
+    return probe_grid(
+        url=url,
+        model=model,
+        panel=panel,
+        kv_cache_gib=kv_cache_gib,
+        depths=depths,
+        context_tokens=(int(story_tokens),),
+        timeout=timeout,
+    )
+
+
+def story_recalls(
+    rows: list[dict[str, Any]],
+    *,
+    story_tokens: int = STORY_CONTEXT_TOKENS,
+) -> bool:
+    target = int(story_tokens)
+    return any(
+        item.get("hit") and int(item.get("context_tokens", target)) == target
+        for item in rows
+    )
 
 
 def _panel_label(panel: str) -> str:
@@ -479,8 +619,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default="")
     parser.add_argument("--panel", default="tic")
     parser.add_argument("--kv-cache-gib", type=float, default=0.0)
-    parser.add_argument("--approx-chars", type=int, default=8000)
+    parser.add_argument(
+        "--context-tokens",
+        default="",
+        help="Comma-separated context bins (default: 1k-32k)",
+    )
+    parser.add_argument("--story-only", action="store_true")
+    parser.add_argument("--story-tokens", type=int, default=STORY_CONTEXT_TOKENS)
+    parser.add_argument("--max-model-len", type=int, default=0)
+    parser.add_argument("--plan", action="store_true", help="Print discover steps")
+    parser.add_argument("--parse-log", type=Path, help="Print scraped KV GiB from a serve log")
     args = parser.parse_args(argv)
+
+    if args.plan:
+        for line in niah_discover_steps():
+            print(line)
+        return 0
+    if args.parse_log:
+        print(f"{parse_kv_cache_gib(args.parse_log.read_text(encoding='utf-8', errors='replace')):.4f}")
+        return 0
 
     rows: list[dict[str, Any]] = []
     if args.mock:
@@ -488,13 +645,34 @@ def main(argv: list[str] | None = None) -> int:
     elif args.probe_url:
         if not args.model or args.kv_cache_gib <= 0:
             raise SystemExit("--probe-url needs --model and --kv-cache-gib")
-        rows = probe_grid(
-            url=args.probe_url,
-            model=args.model,
-            panel=args.panel,
-            kv_cache_gib=args.kv_cache_gib,
-            approx_chars=args.approx_chars,
-        )
+        tokens = DEFAULT_CONTEXT_TOKENS
+        if args.context_tokens.strip():
+            tokens = tuple(
+                int(part) for part in args.context_tokens.split(",") if part.strip()
+            )
+        if args.max_model_len > 0:
+            tokens = context_bins_for_max_len(args.max_model_len, tokens)
+        story_tokens = int(args.story_tokens)
+        if args.max_model_len > 0:
+            story_tokens = story_tokens_for_max_len(
+                args.max_model_len, story=story_tokens, bins=tokens
+            )
+        if args.story_only:
+            rows = probe_story(
+                url=args.probe_url,
+                model=args.model,
+                panel=args.panel,
+                kv_cache_gib=args.kv_cache_gib,
+                story_tokens=story_tokens,
+            )
+        else:
+            rows = probe_grid(
+                url=args.probe_url,
+                model=args.model,
+                panel=args.panel,
+                kv_cache_gib=args.kv_cache_gib,
+                context_tokens=tokens,
+            )
         if args.jsonl:
             existing = load_jsonl(args.jsonl) if args.jsonl.is_file() else []
             write_jsonl(args.jsonl, existing + rows)
