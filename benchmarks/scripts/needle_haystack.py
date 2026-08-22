@@ -631,6 +631,8 @@ def report_lines(
             "Color is recall."
         ),
         "",
+        "Figure. Fact retrieval by KV cache (needle-in-a-haystack).",
+        "",
         f"![Fact retrieval by KV cache (needle-in-a-haystack)]({image_rel})",
         "",
     ]
