@@ -34,6 +34,7 @@ from needle_haystack import (  # noqa: E402
     niah_discover_steps,
     parse_kv_cache_gib,
     render_heatmap,
+    rows_for_heatmap,
     row,
     score_hit,
     story_tokens_for_max_len,
@@ -168,9 +169,33 @@ class NeedleHaystackTests(unittest.TestCase):
     def test_discover_helpers_are_measured_not_fixed(self) -> None:
         self.assertEqual(chars_for_context_tokens(1000), 4000)
         self.assertEqual(STORY_CONTEXT_TOKENS, 16000)
-        self.assertEqual(context_bins_for_max_len(8192)[-1], 8000)
-        self.assertEqual(story_tokens_for_max_len(8192), 8000)
+        self.assertEqual(context_bins_for_max_len(8192)[-1], 4000)
+        self.assertNotIn(32000, context_bins_for_max_len(32768))
+        self.assertIn(24000, context_bins_for_max_len(32768))
+        self.assertEqual(story_tokens_for_max_len(8192), 4000)
         self.assertEqual(story_tokens_for_max_len(32768), 16000)
+        cropped = rows_for_heatmap(
+            [
+                row(
+                    panel="tic",
+                    kv_cache_gib=1.75,
+                    depth_percent=50,
+                    hit=True,
+                    context_tokens=24000,
+                ),
+                row(
+                    panel="tic",
+                    kv_cache_gib=1.75,
+                    depth_percent=50,
+                    hit=False,
+                    context_tokens=32000,
+                    response_completes=False,
+                    refuse=True,
+                ),
+            ],
+            max_model_len=32768,
+        )
+        self.assertEqual({int(item["context_tokens"]) for item in cropped}, {24000})
         cands = first_recall_candidates(1.09, cap=13.65)
         self.assertGreaterEqual(cands[0], 2.0)
         self.assertLess(cands[-1], 13.65)

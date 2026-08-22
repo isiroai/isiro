@@ -28,6 +28,8 @@ DEFAULT_CONTEXT_TOKENS = (1000, 2000, 4000, 8000, 12000, 16000, 24000, 32000)
 # Table A folds the grid at this bin when the model window allows it.
 STORY_CONTEXT_TOKENS = 16000
 CHARS_PER_TOKEN = 4
+# Haystack bin plus needle, question, chat template, and a short reply.
+WINDOW_RESERVE_TOKENS = 1024
 
 
 def score_hit(completion: str, needle: str = NEEDLE) -> bool:
@@ -83,8 +85,47 @@ def context_bins_for_max_len(
     bins: Iterable[int] = DEFAULT_CONTEXT_TOKENS,
 ) -> tuple[int, ...]:
     cap = max(1, int(max_model_len))
-    kept = tuple(int(b) for b in bins if int(b) <= cap)
-    return kept or (cap,)
+    usable = max(1, cap - WINDOW_RESERVE_TOKENS)
+    kept = tuple(int(b) for b in bins if int(b) <= usable)
+    return kept or (usable,)
+
+
+def rows_for_heatmap(
+    rows: Iterable[dict[str, Any]],
+    max_model_len: int | None = None,
+) -> list[dict[str, Any]]:
+    """Drop bins that cannot fit the window, or that never completed."""
+    items = list(rows)
+    if isinstance(max_model_len, (int, float)) and int(max_model_len) > 0:
+        allowed = set(context_bins_for_max_len(int(max_model_len)))
+        items = [
+            item
+            for item in items
+            if int(item.get("context_tokens") or 0) in allowed
+        ]
+    by_ctx: dict[int, list[dict[str, Any]]] = {}
+    for item in items:
+        if "context_tokens" not in item:
+            continue
+        by_ctx.setdefault(int(item["context_tokens"]), []).append(item)
+    drop = {
+        ctx
+        for ctx, group in by_ctx.items()
+        if group
+        and all(
+            (not item.get("response_completes", True))
+            or item.get("refuse")
+            or item.get("oom")
+            for item in group
+        )
+    }
+    if not drop:
+        return items
+    return [
+        item
+        for item in items
+        if int(item.get("context_tokens") or 0) not in drop
+    ]
 
 
 def story_tokens_for_max_len(
@@ -427,8 +468,13 @@ def _niah_cmap():
     )
 
 
-def render_heatmap(rows: list[dict[str, Any]], dest: Path) -> Path:
+def render_heatmap(
+    rows: list[dict[str, Any]],
+    dest: Path,
+    max_model_len: int | None = None,
+) -> Path:
     """JSONL pivot to seaborn heatmap. Product path is PNG."""
+    rows = rows_for_heatmap(rows, max_model_len)
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns

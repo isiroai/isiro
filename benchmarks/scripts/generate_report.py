@@ -745,7 +745,14 @@ def write_report(run_dir: Path, output: Path) -> Path:
 
             rows = load_jsonl(haystack_jsonl)
             image = output.parent / f"{output.stem}-needle-haystack.png"
-            render_heatmap(rows, image)
+            sizes_path = run_dir / "niah_sizes.json"
+            max_len = None
+            if sizes_path.is_file():
+                sizes = load_json(sizes_path)
+                raw_len = sizes.get("max_model_len")
+                if isinstance(raw_len, (int, float)) and int(raw_len) > 0:
+                    max_len = int(raw_len)
+            render_heatmap(rows, image, max_model_len=max_len)
             summary_path = temp / "summary.json"
             if summary_path.is_file():
                 summary = load_json(summary_path)
