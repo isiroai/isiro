@@ -55,25 +55,33 @@ class NeedleHaystackTests(unittest.TestCase):
     @unittest.skipUnless(HAS_PLOT, "matplotlib seaborn pandas required")
     def test_jsonl_roundtrip_and_png(self) -> None:
         rows = mock_rows()
+        self.assertEqual(len(rows), 224)
         tic_sizes = {
             r["kv_cache_gib"] for r in rows if r["panel"] == "tic"
         }
         self.assertEqual(tic_sizes, {1.09})
-        self.assertTrue(any(r["panel"] == "tic" and r["hit"] for r in rows))
+        self.assertTrue(all(r["hit"] for r in rows if r["panel"] == "tic"))
         self.assertTrue(
             any(
-                r["panel"] == "vanilla" and r["kv_cache_gib"] == 1.09 and not r["hit"]
+                r["panel"] == "vanilla"
+                and r["kv_cache_gib"] == 1.09
+                and r["context_tokens"] >= 4000
+                and not r["hit"]
                 for r in rows
             )
         )
         depths = {r["depth_percent"] for r in rows}
         self.assertTrue({0, 50, 100}.issubset(depths))
+        contexts = {r["context_tokens"] for r in rows}
+        self.assertIn(1000, contexts)
+        self.assertIn(32000, contexts)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "needle_haystack.jsonl"
             write_jsonl(path, rows)
             loaded = load_jsonl(path)
             self.assertEqual(len(loaded), len(rows))
             self.assertIn("kv_cache_gib", loaded[0])
+            self.assertIn("context_tokens", loaded[0])
             self.assertIn("response_completes", loaded[0])
             self.assertNotIn("dest_gib", loaded[0])
             self.assertNotIn("continue_ok", loaded[0])
@@ -136,6 +144,8 @@ class NeedleHaystackTests(unittest.TestCase):
             write_report(run, dest)
             text = dest.read_text(encoding="utf-8")
             self.assertIn("## B. Needle-in-a-haystack", text)
+            self.assertIn("Fact retrieved (needle)", text)
+            self.assertIn("Fact retrieval (needle-in-a-haystack)", text)
             self.assertIn("### KV cache", text)
             self.assertIn("rtx-5090-report-needle-haystack.png", text)
             self.assertTrue(

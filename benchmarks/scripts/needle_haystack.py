@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Needle-in-a-haystack grid: JSONL probe + paired heatmap (TIC vs baseline).
+"""Needle-in-a-haystack grid: JSONL probe + heatmap (TIC vs baseline).
 
 Protocol is single-needle (Kamradt / RULER style).
-X is KV cache size (GiB), not advertised context length. Y is needle depth %.
+Each panel is one KV cache size. X is context tokens. Y is needle depth %.
 """
 
 from __future__ import annotations
@@ -24,6 +24,9 @@ HAYSTACK_LINE = (
 )
 
 DEFAULT_DEPTHS = (0, 10, 25, 50, 75, 90, 100)
+DEFAULT_CONTEXT_TOKENS = (1000, 2000, 4000, 8000, 12000, 16000, 24000, 32000)
+# Table A folds the grid at this bin (long prompt; Baseline 4.00 still retrieves).
+STORY_CONTEXT_TOKENS = 16000
 
 
 def score_hit(completion: str, needle: str = NEEDLE) -> bool:
@@ -84,6 +87,7 @@ def row(
     kv_cache_gib: float,
     depth_percent: float,
     hit: bool,
+    context_tokens: int | None = None,
     response_completes: bool = True,
     refuse: bool = False,
     oom: bool = False,
@@ -99,6 +103,8 @@ def row(
         "refuse": bool(refuse),
         "oom": bool(oom),
     }
+    if context_tokens is not None:
+        out["context_tokens"] = int(context_tokens)
     if extra:
         out.update(extra)
     return out
@@ -213,24 +219,30 @@ def _panel_alias(name: str) -> str | None:
     return None
 
 
-def _panel_rows(rows: list[dict[str, Any]], panel: str) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
+def _setup_groups(rows: list[dict[str, Any]]) -> list[tuple[str, float, list[dict[str, Any]]]]:
+    groups: dict[tuple[str, float], list[dict[str, Any]]] = {}
     for item in rows:
-        if _panel_alias(str(item.get("panel") or "")) != panel:
+        alias = _panel_alias(str(item.get("panel") or ""))
+        if alias is None or not _has_kv_cache_gib(item) or "depth_percent" not in item:
             continue
-        if not _has_kv_cache_gib(item) or "depth_percent" not in item:
-            continue
-        out.append(item)
-    return out
+        key = (alias, round(_kv_cache_gib(item), 4))
+        groups.setdefault(key, []).append(item)
+    return [
+        (panel, size, groups[key])
+        for key in sorted(groups, key=lambda item: (0 if item[0] == "tic" else 1, item[1]))
+        for panel, size in (key,)
+    ]
 
 
-def _pivot_panel(items: list[dict[str, Any]]):
+def _pivot_context(items: list[dict[str, Any]]):
     import pandas as pd
 
+    if not items or "context_tokens" not in items[0]:
+        raise ValueError("rows need context_tokens for the heatmap")
     frame = pd.DataFrame(
         {
             "depth": [round(float(item["depth_percent"]), 4) for item in items],
-            "kv": [round(_kv_cache_gib(item), 4) for item in items],
+            "context": [int(item["context_tokens"]) for item in items],
             "score": [
                 float(item.get("score", 1.0 if item.get("hit") else 0.0))
                 for item in items
@@ -238,13 +250,29 @@ def _pivot_panel(items: list[dict[str, Any]]):
         }
     )
     pivot = frame.pivot_table(
-        index="depth", columns="kv", values="score", aggfunc="mean"
+        index="depth", columns="context", values="score", aggfunc="mean"
     )
     return pivot.sort_index(ascending=False)
 
 
+def _context_tick(value: float) -> str:
+    tokens = int(value)
+    if tokens >= 1000 and tokens % 1000 == 0:
+        return f"{tokens // 1000}k"
+    return str(tokens)
+
+
+def _niah_cmap():
+    from matplotlib.colors import LinearSegmentedColormap
+
+    # Same stops as EvalScope / Kamradt NIAH figures.
+    return LinearSegmentedColormap.from_list(
+        "niah", ["#F0496E", "#EBB839", "#0CD79F"]
+    )
+
+
 def render_heatmap(rows: list[dict[str, Any]], dest: Path) -> Path:
-    """JSONL pivot to seaborn heatmap. Product path; no hand-rolled SVG."""
+    """JSONL pivot to seaborn heatmap. Product path is PNG."""
     try:
         import matplotlib.pyplot as plt
         import seaborn as sns
@@ -257,76 +285,95 @@ def render_heatmap(rows: list[dict[str, Any]], dest: Path) -> Path:
         ) from exc
 
     dest = Path(dest)
-    panels = [name for name in ("tic", "baseline") if _panel_rows(rows, name)]
-    if not panels:
+    setups = _setup_groups(rows)
+    if not setups:
         raise ValueError("rows need panel, kv_cache_gib, and depth_percent")
-    pivots = {name: _pivot_panel(_panel_rows(rows, name)) for name in panels}
-    widths = [max(1, pivots[name].shape[1]) for name in panels]
-    fig = plt.figure(figsize=(2.4 + 1.35 * sum(widths), 4.8))
-    spec = fig.add_gridspec(
-        1,
-        len(panels) + 1,
-        width_ratios=[*widths, 0.18],
-        wspace=0.22,
-    )
-    axes = [fig.add_subplot(spec[0, i]) for i in range(len(panels))]
+    pivots = [_pivot_context(items) for _, _, items in setups]
+    cmap = _niah_cmap()
+    n = len(setups)
+    fig = plt.figure(figsize=(3.6 * n + 1.4, 5.0))
+    spec = fig.add_gridspec(1, n + 1, width_ratios=[1] * n + [0.07], wspace=0.12)
+    axes = [fig.add_subplot(spec[0, i]) for i in range(n)]
     cax = fig.add_subplot(spec[0, -1])
-    for i, (ax, name) in enumerate(zip(axes, panels)):
-        pivot = pivots[name]
-        sns.heatmap(
+    for i, (ax, (panel, size, _), pivot) in enumerate(zip(axes, setups, pivots)):
+        mesh = sns.heatmap(
             pivot,
             ax=ax,
             vmin=0.0,
             vmax=1.0,
-            cmap="RdYlGn",
+            cmap=cmap,
             annot=True,
-            fmt=".0f",
+            fmt=".1f",
+            annot_kws={"size": 6.5},
             cbar=False,
-            linewidths=0.4,
-            linecolor="white",
-            xticklabels=[f"{col:.2f}" for col in pivot.columns],
+            linewidths=0,
+            xticklabels=[_context_tick(col) for col in pivot.columns],
             yticklabels=[f"{idx:g}" for idx in pivot.index],
             square=False,
         )
-        ax.set_title(_panel_label(name))
-        ax.set_xlabel("KV cache (GiB)")
+        for artist in mesh.collections:
+            artist.set_edgecolor("face")
+            artist.set_linewidth(0)
+        ax.set_title(f"{_panel_label(panel)}  {size:.2f} GiB")
+        ax.set_xlabel("Context (tokens)")
         if i == 0:
             ax.set_ylabel("Needle depth (%)")
         else:
             ax.set_ylabel("")
             ax.tick_params(left=False, labelleft=False)
-    fig.colorbar(
-        ScalarMappable(norm=Normalize(0.0, 1.0), cmap="RdYlGn"),
+        ax.tick_params(axis="x", labelrotation=45, labelsize=7)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+    colorbar = fig.colorbar(
+        ScalarMappable(norm=Normalize(0.0, 1.0), cmap=cmap),
         cax=cax,
-        label="Recall",
+        label="Score",
     )
-    fig.suptitle("Needle-in-a-haystack", y=0.98)
-    fig.subplots_adjust(left=0.10, right=0.90, top=0.86, bottom=0.16, wspace=0.28)
+    colorbar.outline.set_visible(False)
+    cax.set_frame_on(False)
+    for spine in cax.spines.values():
+        spine.set_visible(False)
+    fig.suptitle(
+        "Fact retrieval across context length (needle-in-a-haystack)",
+        y=0.98,
+    )
+    fig.subplots_adjust(left=0.06, right=0.94, top=0.84, bottom=0.18, wspace=0.16)
     dest.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(dest, dpi=160)
     plt.close(fig)
     return dest
 
 
+def _mock_hit(*, panel: str, kv_cache_gib: float, context_tokens: int) -> bool:
+    if panel == "tic":
+        return True
+    if abs(kv_cache_gib - 1.09) < 1e-6:
+        return context_tokens <= 2000
+    if abs(kv_cache_gib - 4.00) < 1e-6:
+        return context_tokens <= 16000
+    return True
+
+
 def mock_rows() -> list[dict[str, Any]]:
     """Qwen-class KV cache story for the report mock figure."""
-    baseline_sizes = (1.09, 4.00, 13.65)
-    depths = DEFAULT_DEPTHS
+    setups = (("tic", 1.09), ("vanilla", 1.09), ("vanilla", 4.00), ("vanilla", 13.65))
     rows: list[dict[str, Any]] = []
-    for depth in depths:
-        rows.append(
-            row(panel="tic", kv_cache_gib=1.09, depth_percent=depth, hit=True)
-        )
-        for kv_cache_gib in baseline_sizes:
-            hit = kv_cache_gib > 1.09
-            rows.append(
-                row(
-                    panel="vanilla",
-                    kv_cache_gib=kv_cache_gib,
-                    depth_percent=depth,
-                    hit=hit,
+    for panel, kv_cache_gib in setups:
+        for depth in DEFAULT_DEPTHS:
+            for context_tokens in DEFAULT_CONTEXT_TOKENS:
+                rows.append(
+                    row(
+                        panel=panel,
+                        kv_cache_gib=kv_cache_gib,
+                        depth_percent=depth,
+                        context_tokens=context_tokens,
+                        hit=_mock_hit(
+                            panel=panel,
+                            kv_cache_gib=kv_cache_gib,
+                            context_tokens=context_tokens,
+                        ),
+                    )
                 )
-            )
     return rows
 
 
@@ -365,15 +412,22 @@ def kv_sweep_table_lines(rows: list[dict[str, Any]]) -> list[str]:
         "longer than TIC's fixed cache. Prompt length stays fixed as Baseline's "
         "KV grows, so the same prefill can fit on the larger rows.",
         "",
-        "| Setup | KV cache | Size (GiB) | Response completes | Fact recalled (needle) | Rejected or OOM |",
-        "|-------|----------|------------|--------------------|------------------------|-----------------|",
+        "| Setup | KV cache | Size (GiB) | Response completes | Fact retrieved (needle) | Rejected or OOM |",
+        "|-------|----------|------------|--------------------|-------------------------|-----------------|",
     ]
     order = sorted(groups, key=lambda key: (0 if key[0] == "tic" else 1, key[1]))
     seen_baseline_hit = False
     for panel, size in order:
         items = groups[(panel, size)]
-        completes = any(item.get("response_completes", True) for item in items)
-        recalled = any(item.get("hit") for item in items)
+        story = [
+            item
+            for item in items
+            if int(item.get("context_tokens", STORY_CONTEXT_TOKENS))
+            == STORY_CONTEXT_TOKENS
+        ]
+        fold = story or items
+        completes = any(item.get("response_completes", True) for item in fold)
+        recalled = any(item.get("hit") for item in fold)
         refused = any(item.get("refuse") or item.get("oom") for item in items)
         if panel == "tic":
             setup, policy = "**TIC**", "Fixed"
@@ -398,18 +452,18 @@ def kv_sweep_table_lines(rows: list[dict[str, Any]]) -> list[str]:
 def report_lines(
     image_rel: str,
     *,
-    heading: str = "## B. Needle-in-a-haystack (KV cache GiB × depth)",
+    heading: str = "## B. Needle-in-a-haystack (context tokens × depth)",
 ) -> list[str]:
     return [
         heading,
         "",
         (
-            "X is KV cache size (GiB). Y is needle depth % "
-            "(0 = start of prompt, 100 = end). "
-            "Color is recall score. TIC KV cache is fixed. Baseline KV cache grows."
+            "Each panel is one KV cache size. X is context tokens. "
+            "Y is needle depth % (0 = start of prompt, 100 = end). "
+            "Color is recall."
         ),
         "",
-        f"![Needle-in-a-haystack]({image_rel})",
+        f"![Fact retrieval (needle-in-a-haystack)]({image_rel})",
         "",
     ]
 
