@@ -314,7 +314,7 @@ def render_heatmap(rows: list[dict[str, Any]], dest: Path) -> Path:
         for artist in mesh.collections:
             artist.set_edgecolor("face")
             artist.set_linewidth(0)
-        ax.set_title(f"{_panel_label(panel)}  {size:.2f} GiB")
+        ax.set_title(f"{_panel_label(panel)}  KV {size:.2f} GiB")
         ax.set_xlabel("Context (tokens)")
         if i == 0:
             ax.set_ylabel("Needle depth (%)")
@@ -334,7 +334,7 @@ def render_heatmap(rows: list[dict[str, Any]], dest: Path) -> Path:
     for spine in cax.spines.values():
         spine.set_visible(False)
     fig.suptitle(
-        "Fact retrieval across context length (needle-in-a-haystack)",
+        "Fact retrieval by KV cache and context length (needle-in-a-haystack)",
         y=0.98,
     )
     fig.subplots_adjust(left=0.06, right=0.94, top=0.84, bottom=0.18, wspace=0.16)
@@ -463,7 +463,7 @@ def report_lines(
             "Color is recall."
         ),
         "",
-        f"![Fact retrieval (needle-in-a-haystack)]({image_rel})",
+        f"![Fact retrieval by KV cache (needle-in-a-haystack)]({image_rel})",
         "",
     ]
 

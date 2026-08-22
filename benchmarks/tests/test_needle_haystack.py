@@ -145,7 +145,7 @@ class NeedleHaystackTests(unittest.TestCase):
             text = dest.read_text(encoding="utf-8")
             self.assertIn("## B. Needle-in-a-haystack", text)
             self.assertIn("Fact retrieved (needle)", text)
-            self.assertIn("Fact retrieval (needle-in-a-haystack)", text)
+            self.assertIn("Fact retrieval by KV cache (needle-in-a-haystack)", text)
             self.assertIn("### KV cache", text)
             self.assertIn("rtx-5090-report-needle-haystack.png", text)
             self.assertTrue(
