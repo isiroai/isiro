@@ -480,8 +480,8 @@ def _section_c(
         "",
         scale_blurb,
         "",
-        "KV token capacity is vLLM-reported full-attn tokens in this serve's "
-        "reserved GPU pool.",
+        "KV token capacity is dest lock slots when TIC printed KV pool, "
+        "else vLLM GPU tokens in this serve's reserved GPU pool.",
         "",
         "| Metric | Baseline | TIC |",
         "|--------|----------|-----|",

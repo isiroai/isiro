@@ -901,15 +901,16 @@ capture_environment() {
     --quiet-host \
     "${image_arg[@]}" \
     "${identity_arg[@]}"
-  python3 - "${RUN_DIR}/${variant}_environment.json" "$(gpu_process_bytes)" "${LOG_DIR}/${variant}-serve.log" "${variant}" "${GPU_PROCESS_BYTES_AFTER_READY:-0}" "${SERVE_GPU_MEMORY_UTILIZATION}" <<'PY'
+  python3 - "${RUN_DIR}/${variant}_environment.json" "$(gpu_process_bytes)" "${LOG_DIR}/${variant}-serve.log" "${variant}" "${GPU_PROCESS_BYTES_AFTER_READY:-0}" "${SERVE_GPU_MEMORY_UTILIZATION}" "${BENCH_ROOT}/scripts" <<'PY'
 import json, math, re, sys
-path, value, log_path, variant, ready_value, util_s = (
+path, value, log_path, variant, ready_value, util_s, scripts = (
     sys.argv[1],
     int(sys.argv[2] or 0),
     sys.argv[3],
     sys.argv[4],
     int(sys.argv[5] or 0),
     sys.argv[6],
+    sys.argv[7],
 )
 doc = json.load(open(path, encoding="utf-8"))
 doc["gpu_process_memory_after_load_bytes_measured"] = value or None
@@ -917,6 +918,15 @@ if variant == "isiro" and ready_value:
     doc["gpu_process_memory_after_ready_bytes_measured"] = ready_value
 text = open(log_path, encoding="utf-8", errors="replace").read()
 gib = 1024 ** 3
+sys.path.insert(0, scripts)
+from needle_haystack import parse_kv_cache_gib, parse_kv_cache_tokens
+pool_gib = pool_tokens = None
+if "KV pool:" in text:
+    try:
+        pool_gib = parse_kv_cache_gib(text)
+        pool_tokens = parse_kv_cache_tokens(text)
+    except ValueError:
+        pool_gib = pool_tokens = None
 kv_gib = re.search(r"Available KV cache memory:\s*([0-9.]+)\s*GiB", text)
 kv_tokens = re.search(r"GPU KV cache size:\s*([0-9,]+)\s*tokens", text)
 load_gib = re.search(r"Model loading took\s*([0-9.]+)\s*GiB", text)
@@ -930,12 +940,18 @@ req_gib = re.search(
     r"Requested memory:\s*[0-9.]+ \(util\),\s*([0-9.]+)\s*GiB",
     text,
 )
-doc["kv_cache_memory_bytes_measured"] = (
-    round(float(kv_gib.group(1)) * gib) if kv_gib else None
-)
-doc["kv_cache_tokens_measured"] = (
-    int(kv_tokens.group(1).replace(",", "")) if kv_tokens else None
-)
+if pool_gib is not None:
+    doc["kv_cache_memory_bytes_measured"] = round(float(pool_gib) * gib)
+else:
+    doc["kv_cache_memory_bytes_measured"] = (
+        round(float(kv_gib.group(1)) * gib) if kv_gib else None
+    )
+if pool_tokens is not None:
+    doc["kv_cache_tokens_measured"] = int(pool_tokens)
+else:
+    doc["kv_cache_tokens_measured"] = (
+        int(kv_tokens.group(1).replace(",", "")) if kv_tokens else None
+    )
 doc["model_loading_bytes_reported"] = (
     round(float(load_gib.group(1)) * gib) if load_gib else None
 )
@@ -1135,13 +1151,12 @@ PY
 
 read_serve_log_kv_tokens() {
   local serve_log="$1"
-  python3 - "${serve_log}" <<'PY'
-import re, sys
-text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
-m = re.search(r"GPU KV cache size:\s*([0-9,]+)\s*tokens", text)
-if not m:
-    raise SystemExit(f"{sys.argv[1]}: GPU KV cache size not found")
-print(int(m.group(1).replace(",", "")))
+  python3 - "${BENCH_ROOT}/scripts" "${serve_log}" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from needle_haystack import parse_kv_cache_tokens
+text = open(sys.argv[2], encoding="utf-8", errors="replace").read()
+print(parse_kv_cache_tokens(text))
 PY
 }
 

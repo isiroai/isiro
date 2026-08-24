@@ -225,6 +225,14 @@ class NeedleHaystackTests(unittest.TestCase):
             parse_kv_cache_tokens("GPU KV cache size: 20,480 tokens\n"),
             20480,
         )
+        dest_only = (
+            "KV pool: 0.25 GiB\n"
+            "Using max model len 18289\n"
+            "GPU KV cache size: 40,831 tokens\n"
+            "estimated maximum model length is 18289.\n"
+        )
+        self.assertEqual(parse_kv_cache_tokens(dest_only), 512 + 4096)
+        self.assertAlmostEqual(parse_kv_cache_gib(dest_only), 0.25)
         cropped = rows_for_heatmap(
             [
                 row(
@@ -362,6 +370,42 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertIn("| **Baseline** | Same size as TIC | 1.09 | no | no | no |", snapped)
         self.assertNotIn("1.0934", snapped)
         self.assertIn("The Baseline serve would not start at 1.09 GiB.", snapped)
+        honest = "\n".join(
+            kv_sweep_table_lines(
+                [
+                    row(
+                        panel="tic",
+                        kv_cache_gib=0.25,
+                        depth_percent=50,
+                        hit=True,
+                        context_tokens=2000,
+                    ),
+                    row(
+                        panel="vanilla",
+                        kv_cache_gib=0.25,
+                        depth_percent=50,
+                        hit=True,
+                        context_tokens=2000,
+                    ),
+                    row(
+                        panel="vanilla",
+                        kv_cache_gib=13.48,
+                        depth_percent=50,
+                        hit=True,
+                        context_tokens=2000,
+                    ),
+                ],
+                reserved_gib=0.4882,
+            )
+        )
+        self.assertIn("| **TIC** | Fixed | 0.25 | yes | yes | yes |", honest)
+        self.assertIn(
+            "| **Baseline** | Same size as TIC | 0.25 | yes | yes | yes |",
+            honest,
+        )
+        self.assertNotIn("0.4882", honest)
+        self.assertNotIn("Larger KV", honest)
+        self.assertNotIn("would not start at 0.49", honest)
         two = "\n".join(
             kv_sweep_table_lines(
                 [

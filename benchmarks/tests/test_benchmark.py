@@ -668,7 +668,7 @@ class BenchmarkTests(unittest.TestCase):
                 report,
             )
             self.assertIn(
-                "KV token capacity is vLLM-reported full-attn tokens",
+                "KV token capacity is dest lock slots",
                 report,
             )
             self.assertIn("reserved GPU pool", report)

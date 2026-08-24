@@ -33,8 +33,16 @@ WINDOW_RESERVE_TOKENS = 1024
 FIGURE_TITLE = (
     "Fact retrieval by KV cache and context length (needle-in-a-haystack)"
 )
+def format_gib_cell(size: float) -> str:
+    """Two decimal GiB. Do not print 0.4882."""
+    return f"{round(float(size), 2):.2f}"
+
+
 def format_gib_list(sizes: Iterable[float]) -> str:
-    vals = [f"{float(size):g} GiB" for size in sorted({round(float(s), 4) for s in sizes})]
+    vals = [
+        f"{format_gib_cell(s)} GiB"
+        for s in sorted({round(float(s), 2) for s in sizes})
+    ]
     if not vals:
         return ""
     if len(vals) == 1:
@@ -84,11 +92,13 @@ def chars_for_context_tokens(context_tokens: int) -> int:
 def parse_kv_cache_gib(log_text: str) -> float:
     """Measured KV pool in GiB from a serve log.
 
-    Prefer vLLM ``Available KV cache memory``. Product TIC logs may only
-    print ``vendor_pool_bytes`` when DEBUG is off.
+    Prefer dest ``KV pool:`` GiB. Fall back to vLLM Available / reserved.
     """
     import re
 
+    kv_pool = re.search(r"KV pool:\s*([0-9.]+)\s*GiB", log_text)
+    if kv_pool:
+        return float(kv_pool.group(1))
     match = re.search(
         r"Available KV cache memory:\s*([0-9.]+)\s*GiB",
         log_text,
@@ -101,9 +111,6 @@ def parse_kv_cache_gib(log_text: str) -> float:
     )
     if reserved:
         return float(reserved.group(1))
-    kv_pool = re.search(r"KV pool:\s*([0-9.]+)\s*GiB", log_text)
-    if kv_pool:
-        return float(kv_pool.group(1))
     pool = re.search(r"vendor_pool_bytes=(\d+)", log_text)
     if pool:
         return int(pool.group(1)) / float(1024**3)
@@ -113,19 +120,32 @@ def parse_kv_cache_gib(log_text: str) -> float:
     raise ValueError("Available KV cache memory not found in serve log")
 
 
+# Dest lock_seqs=1: (W + slack) slots. Serve prints GiB only.
+_DEST_ONE_WINDOW = 512
+_DEST_ONE_WINDOW_SLACK = 4096
+
+
 def parse_kv_cache_tokens(log_text: str) -> int:
-    """GPU KV token count from a serve log (ready or SERV-0301)."""
+    """Dest slot count, or vLLM GPU tokens when dest did not print."""
     import re
 
-    gpu = re.search(r"GPU KV cache size:\s*([0-9,]+)\s*tokens", log_text)
-    if gpu:
-        return int(gpu.group(1).replace(",", ""))
     pool = re.search(
         r"KV pool:\s*[0-9.]+\s*GiB\s*\(([0-9,]+)\s*tokens",
         log_text,
     )
     if pool:
         return int(pool.group(1).replace(",", ""))
+    if re.search(r"KV pool:\s*[0-9.]+\s*GiB", log_text):
+        # One-window dest. vLLM GPU token count is last-W-inflated.
+        # estimated max_model_len is the last-W boot guard, not dest slots.
+        w = _DEST_ONE_WINDOW
+        env_w = re.search(r"ISIRO_KV_SET_WINDOW[=:\s]+(\d+)", log_text)
+        if env_w:
+            w = max(1, int(env_w.group(1)))
+        return w + _DEST_ONE_WINDOW_SLACK
+    gpu = re.search(r"GPU KV cache size:\s*([0-9,]+)\s*tokens", log_text)
+    if gpu:
+        return int(gpu.group(1).replace(",", ""))
     est = re.search(r"estimated maximum model length is\s*([0-9,]+)", log_text)
     if est:
         return int(est.group(1).replace(",", ""))
@@ -700,25 +720,8 @@ def kv_sweep_table_lines(
         groups.setdefault(key, []).append(item)
     if not groups:
         return []
+    del reserved_gib
     tic_fixed = tic_sizes[0] if tic_sizes else None
-    start_lock = (
-        round(float(reserved_gib), 4) if reserved_gib is not None else None
-    )
-    # Measured TIC bytes can print as 1.0934 next to a 1.09 scrape. Same lock.
-    if (
-        start_lock is not None
-        and tic_fixed is not None
-        and abs(start_lock - tic_fixed) < 0.05
-    ):
-        start_lock = tic_fixed
-    if start_lock is not None and ("baseline", start_lock) not in groups:
-        for item in start_fail_rows(panel="baseline", kv_cache_gib=start_lock):
-            groups.setdefault(("baseline", start_lock), []).append(item)
-    has_start_fail = any(
-        item.get("start_fail")
-        for items in groups.values()
-        for item in items
-    )
     intro = (
         "Same long prompt, needle, and question on every setup that starts."
     )
@@ -729,8 +732,6 @@ def kv_sweep_table_lines(
             if panel == "baseline" and any(item.get("start_fail") for item in items)
         }
     )
-    if start_lock is not None and start_lock not in fail_gibs and has_start_fail:
-        fail_gibs = sorted({*fail_gibs, start_lock})
     if fail_gibs:
         intro = (
             f"{intro} The Baseline serve would not start at "
@@ -767,16 +768,16 @@ def kv_sweep_table_lines(
             )
         if panel == "tic":
             setup, policy = "**TIC**", "Fixed"
-            size_cell = f"{size:g}"
+            size_cell = format_gib_cell(size)
         elif tic_fixed is not None and abs(size - tic_fixed) < 1e-6:
             setup, policy = "**Baseline**", "Same size as TIC"
-            size_cell = f"{size:g}"
+            size_cell = format_gib_cell(size)
         elif fill_size is not None and abs(size - fill_size) < 1e-6:
             setup, policy = "**Baseline**", "Default fill"
-            size_cell = f"{size:g}"
+            size_cell = format_gib_cell(size)
         else:
             setup, policy = "**Baseline**", "Larger KV"
-            size_cell = f"{size:g}"
+            size_cell = format_gib_cell(size)
         flag = lambda ok: "yes" if ok else "no"
         lines.append(
             f"| {setup} | {policy} | {size_cell} | {flag(completes)} | "
