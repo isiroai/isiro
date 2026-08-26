@@ -92,11 +92,12 @@ def chars_for_context_tokens(context_tokens: int) -> int:
 def parse_kv_cache_gib(log_text: str) -> float:
     """Measured KV pool in GiB from a serve log.
 
-    Prefer dest ``KV pool:`` GiB. Fall back to vLLM Available / reserved.
+    Prefer the kv pool cap print (``KV pool cap:`` / ``KV pool:``). Fall
+    back to vLLM Available / reserved.
     """
     import re
 
-    kv_pool = re.search(r"KV pool:\s*([0-9.]+)\s*GiB", log_text)
+    kv_pool = re.search(r"KV pool(?: cap)?:\s*([0-9.]+)\s*GiB", log_text)
     if kv_pool:
         return float(kv_pool.group(1))
     match = re.search(
@@ -126,18 +127,18 @@ _DEST_ONE_WINDOW_SLACK = 4096
 
 
 def parse_kv_cache_tokens(log_text: str) -> int:
-    """Dest slot count, or vLLM GPU tokens when dest did not print."""
+    """Kv pool cap slot count. Do not use vLLM GPU tokens when the cap printed."""
     import re
 
     pool = re.search(
-        r"KV pool:\s*[0-9.]+\s*GiB\s*\(([0-9,]+)\s*tokens",
+        r"KV pool(?: cap)?:\s*[0-9.]+\s*GiB\s*\(([0-9,]+)\s*tokens",
         log_text,
     )
     if pool:
         return int(pool.group(1).replace(",", ""))
-    if re.search(r"KV pool:\s*[0-9.]+\s*GiB", log_text):
-        # One-window dest. vLLM GPU token count is last-W-inflated.
-        # estimated max_model_len is the last-W boot guard, not dest slots.
+    if re.search(r"KV pool(?: cap)?:\s*[0-9.]+\s*GiB", log_text):
+        # One-window pool. vLLM GPU token count is last-W-inflated.
+        # estimated max_model_len is the last-W boot guard, not pool slots.
         w = _DEST_ONE_WINDOW
         env_w = re.search(r"ISIRO_KV_SET_WINDOW[=:\s]+(\d+)", log_text)
         if env_w:

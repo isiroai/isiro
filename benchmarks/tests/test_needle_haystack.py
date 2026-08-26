@@ -221,6 +221,15 @@ class NeedleHaystackTests(unittest.TestCase):
             ),
             20480,
         )
+        cap_log = (
+            "KV pool cap: 0.25 GiB (kv pool cap EngineArgs)\n"
+            "KV pool cap: 0.25 GiB (4608 tokens, last-W=512, "
+            "admit_seqs=8192, live~9, src=live)\n"
+            "GPU KV cache size: 294,912 tokens\n"
+            "estimated maximum model length is 32768.\n"
+        )
+        self.assertEqual(parse_kv_cache_tokens(cap_log), 4608)
+        self.assertAlmostEqual(parse_kv_cache_gib(cap_log), 0.25)
         self.assertEqual(
             parse_kv_cache_tokens("GPU KV cache size: 20,480 tokens\n"),
             20480,

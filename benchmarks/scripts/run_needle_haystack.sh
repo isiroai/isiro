@@ -126,7 +126,14 @@ PNG="${RUN_DIR}/needle_haystack.png"
 BASELINE_CONTAINER="isiro-niah-baseline-${API_PORT}"
 TIC_PID=""
 mkdir -p "${LOG_DIR}" "${TIC_BENCH_BUNDLE}"
-: >"${JSONL}"
+if [[ "${NIAH_SKIP_VANILLA_FILL:-}" == "1" ]]; then
+  if [[ ! -s "${JSONL}" ]]; then
+    echo "NIAH_SKIP_VANILLA_FILL=1 needs vanilla rows in ${JSONL}" >&2
+    exit 2
+  fi
+else
+  : >"${JSONL}"
+fi
 
 cleanup() {
   if [[ -n "${TIC_PID}" ]] && kill -0 "${TIC_PID}" 2>/dev/null; then
@@ -440,15 +447,37 @@ echo "TIC KV cache: ${TIC_GIB} GiB (scraped) window=${NIAH_MAX_MODEL_LEN}" >&2
 stop_all
 
 FILL_LOG="${LOG_DIR}/baseline-fill-serve.log"
-if ! start_baseline "${FILL_LOG}"; then
-  echo "Baseline default fill did not start; see ${FILL_LOG}" >&2
-  exit 2
+if [[ "${NIAH_SKIP_VANILLA_FILL:-}" == "1" ]]; then
+  FILL_GIB="$(
+    python3 - "${JSONL}" <<'PY'
+import json, sys
+gibs = []
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = line.strip()
+    if not line:
+        continue
+    row = json.loads(line)
+    if str(row.get("panel") or "").lower() in ("vanilla", "baseline") and not row.get("start_fail"):
+        if "kv_cache_gib" in row:
+            gibs.append(float(row["kv_cache_gib"]))
+if not gibs:
+    raise SystemExit("NIAH_SKIP_VANILLA_FILL=1 needs vanilla rows in the JSONL")
+print(f"{max(gibs):.4f}")
+PY
+  )"
+  echo "Baseline default fill: ${FILL_GIB} GiB (reused JSONL; skip fill serve and grid)" >&2
+  require_tic_smaller_than_fill "${TIC_GIB}" "${FILL_GIB}"
+else
+  if ! start_baseline "${FILL_LOG}"; then
+    echo "Baseline default fill did not start; see ${FILL_LOG}" >&2
+    exit 2
+  fi
+  FILL_GIB="$(scrape_kv_gib "${FILL_LOG}")"
+  echo "Baseline default fill: ${FILL_GIB} GiB (scraped)" >&2
+  require_tic_smaller_than_fill "${TIC_GIB}" "${FILL_GIB}"
+  probe_full vanilla "${FILL_GIB}"
+  stop_all
 fi
-FILL_GIB="$(scrape_kv_gib "${FILL_LOG}")"
-echo "Baseline default fill: ${FILL_GIB} GiB (scraped)" >&2
-require_tic_smaller_than_fill "${TIC_GIB}" "${FILL_GIB}"
-probe_full vanilla "${FILL_GIB}"
-stop_all
 
 start_tic "${TIC_LOG}"
 probe_full tic "${TIC_GIB}"

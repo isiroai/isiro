@@ -921,7 +921,7 @@ gib = 1024 ** 3
 sys.path.insert(0, scripts)
 from needle_haystack import parse_kv_cache_gib, parse_kv_cache_tokens
 pool_gib = pool_tokens = None
-if "KV pool:" in text:
+if "KV pool cap:" in text or "KV pool:" in text:
     try:
         pool_gib = parse_kv_cache_gib(text)
         pool_tokens = parse_kv_cache_tokens(text)
