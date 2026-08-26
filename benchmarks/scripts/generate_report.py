@@ -322,40 +322,15 @@ def _simple_savings_pct(baseline: Any, tic: Any) -> float | None:
 def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
     baseline_fp = footprint["baseline"]
     tic_fp = footprint["tic"]
-    b_non = baseline_fp.get("weights_and_non_kv_gpu_memory_bytes_derived")
-    t_non = tic_fp.get("weights_and_non_kv_gpu_memory_bytes_derived")
     b_load = baseline_fp.get("model_loading_bytes_reported")
     t_load = tic_fp.get("model_loading_bytes_reported")
-    non_kv_win = (
-        isinstance(b_non, (int, float))
-        and isinstance(t_non, (int, float))
-        and float(t_non) < float(b_non)
-    )
     load_win = (
         isinstance(b_load, (int, float))
         and isinstance(t_load, (int, float))
         and float(t_load) < float(b_load)
     )
     load_pct = _simple_savings_pct(b_load, t_load)
-    non_pct = _simple_savings_pct(b_non, t_non)
     load_cell = number(load_pct) + "%" if load_pct is not None else "null"
-    non_cell = number(non_pct) + "%" if non_pct is not None else "null"
-    if t_non is None or b_non is None:
-        return [
-            "## A. GPU memory",
-            "",
-            "### Weights",
-            "",
-            "| Metric | Baseline | TIC | Savings % |",
-            "|--------|----------|-----|-----------|",
-            (
-                "| GPU memory for loaded weights | "
-                f"{bytes_gb(b_load)} | "
-                f"{bold_win(bytes_gb(t_load), win=load_win)} | "
-                f"{bold_win(load_cell, win=load_win)} |"
-            ),
-            "",
-        ]
     return [
         "## A. GPU memory",
         "",
@@ -368,12 +343,6 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
             f"{bytes_gb(b_load)} | "
             f"{bold_win(bytes_gb(t_load), win=load_win)} | "
             f"{bold_win(load_cell, win=load_win)} |"
-        ),
-        (
-            "| GPU memory excluding KV cache | "
-            f"{bytes_gb(b_non)} | "
-            f"{bold_win(bytes_gb(t_non), win=non_kv_win)} | "
-            f"{bold_win(non_cell, win=non_kv_win)} |"
         ),
         "",
     ]

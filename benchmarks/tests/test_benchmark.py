@@ -690,7 +690,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("| Runtime |", report)
             self.assertIn("Savings %", report)
             self.assertNotIn("Savings % uses `1 - TIC/Baseline`.", report)
-            self.assertIn("GPU memory excluding KV cache", report)
+            self.assertNotIn("GPU memory excluding KV cache", report)
             self.assertNotIn("nvidia-smi process usage", report)
             self.assertNotIn("% more", report)
             self.assertNotIn("Model load (reported)", report)

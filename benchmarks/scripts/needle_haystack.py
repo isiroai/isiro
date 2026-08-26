@@ -170,9 +170,8 @@ def context_bins_for_max_len(
     bins: Iterable[int] = DEFAULT_CONTEXT_TOKENS,
 ) -> tuple[int, ...]:
     cap = max(1, int(max_model_len))
-    usable = max(1, cap - WINDOW_RESERVE_TOKENS)
-    kept = tuple(int(b) for b in bins if int(b) <= usable)
-    return kept or (usable,)
+    kept = tuple(int(b) for b in bins if int(b) <= cap)
+    return kept or (cap,)
 
 
 def rows_for_heatmap(
@@ -254,7 +253,7 @@ def first_recall_candidates(
 
 def niah_discover_steps() -> list[str]:
     return [
-        "TIC product serve; scrape GPU KV cache size; window follows pool tokens; full grid (1 serve)",
+        "TIC product serve at NIAH_MAX_MODEL_LEN; scrape KV pool GiB (do not shrink the window); full grid (1 serve)",
         "Baseline default fill; scrape GPU KV cache size; full grid (1 serve)",
         "Refuse if TIC KV is not smaller than Baseline fill (any model)",
         "Baseline same size as TIC; record start-fail if serve does not start; else full grid",
