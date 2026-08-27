@@ -421,15 +421,20 @@ def _one_probe(
     oom = False
     response_completes = True
     completion = ""
+    err = ""
     try:
         completion = _chat_completion(
             url, model=model, messages=messages, timeout=timeout
         )
     except Exception as exc:
         response_completes = False
-        text = str(exc).lower()
+        err = str(exc)
+        text = err.lower()
         refuse = "refuse" in text or "rejected" in text
         oom = "out of memory" in text or "oom" in text
+    extra: dict[str, Any] = {"completion_chars": len(completion)}
+    if err:
+        extra["error"] = err[:500]
     return row(
         panel=panel,
         kv_cache_gib=kv_cache_gib,
@@ -439,7 +444,7 @@ def _one_probe(
         response_completes=response_completes,
         refuse=refuse,
         oom=oom,
-        extra={"completion_chars": len(completion)},
+        extra=extra,
     )
 
 
@@ -790,8 +795,9 @@ def kv_sweep_table_lines(
 def kv_overflow_footnote_lines() -> list[str]:
     return [
         (
-            "† Reserved pool on the GPU. Tokens that do not fit overflow "
-            "to host memory."
+            "† Reserved pool on the GPU. Longer context uses persist after "
+            "vendor reclaim of prefix blocks (TokenIDs plus archived K,V). "
+            "Not a second vendor KV cache on the host."
         ),
         "",
     ]

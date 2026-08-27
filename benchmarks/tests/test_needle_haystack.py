@@ -353,6 +353,11 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertNotIn("1.75", table)
         self.assertNotIn("Needle compare is", table)
         self.assertNotIn("overflow to host memory", table)
+        from needle_haystack import kv_overflow_footnote_lines
+
+        note = "\n".join(kv_overflow_footnote_lines())
+        self.assertIn("persist after vendor reclaim", note)
+        self.assertNotIn("overflow to host memory", note)
         self.assertIn("on every setup that starts.", table)
         self.assertIn("The Baseline serve would not start at 1.09 GiB.", table)
         snapped = "\n".join(

@@ -672,7 +672,7 @@ class BenchmarkTests(unittest.TestCase):
                 report,
             )
             self.assertIn("reserved GPU pool", report)
-            self.assertIn("overflow to host memory", report)
+            self.assertIn("persist after vendor reclaim", report)
             self.assertIn("GiB KV", report)
             self.assertNotIn("% of Baseline", report)
             self.assertIn("### KV cache", report)
