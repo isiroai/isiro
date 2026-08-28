@@ -1220,6 +1220,36 @@ class BenchmarkTests(unittest.TestCase):
         p = derive_tco_point(concurrency=8, output_tok_s=1000.0, gpu_hour_usd=3.6)
         self.assertEqual(p["kind"], "derived")
         self.assertAlmostEqual(p["cost_usd_per_1m_output_tokens"], 1.0)
+        from stock_vllm_story import archived_id_bytes, vram_stack_bytes
+
+        self.assertEqual(archived_id_bytes(1_000_000, 1), 4_000_000)
+        stack = vram_stack_bytes(
+            weight_bytes=11_000_000_000,
+            kv_pool_bytes=1_090_000_000,
+            archived_id_bytes=archived_id_bytes(1_000_000, 1),
+        )
+        self.assertEqual(stack["archived_id_bytes"], 4_000_000)
+        self.assertEqual(
+            stack["stack_bytes"],
+            11_000_000_000 + 1_090_000_000 + 4_000_000,
+        )
+        doc["graph1_vram_vs_context"]["points"] = [
+            {
+                "context_tokens": 1_000_000,
+                "baseline_kv_bytes": 1,
+                "tic_weight_bytes": stack["weight_bytes"],
+                "tic_kv_pool_bytes": stack["kv_pool_bytes"],
+                "tic_archived_id_bytes": stack["archived_id_bytes"],
+                "tic_persist_page_bytes": 0,
+                "baseline_smi_bytes": 2,
+                "tic_smi_bytes": 3,
+                "oom_baseline": True,
+                "oom_tic": False,
+            }
+        ]
+        md1 = "\n".join(render_story_markdown(doc))
+        self.assertIn("T weights", md1)
+        self.assertIn("T ids", md1)
         doc["graph2_toks_vs_concurrency"]["points"] = [
             {"concurrency": 1, "baseline_tok_s": 100.0, "tic_tok_s": 100.0}
         ]

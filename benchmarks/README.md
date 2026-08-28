@@ -81,7 +81,8 @@ and latency under that matched setup.
 
 Commercial A/B vs vanilla vLLM (not a solo ISIRO table):
 
-1. Graph 1: KV bytes and nvidia-smi vs context length (who OOMs).
+1. Graph 1: stacked VRAM vs context: packed weights, vendor KV pool,
+   TokenID archive (4 B/token), persist pages, nvidia-smi. Who OOMs.
 2. Graph 2: output tok/s vs concurrency.
 3. Long-context ITL at concurrency 1 (does tok/s drop with T).
 4. Optional TCO scatter: derived from Graph 2 tok/s and a documented GPU-hour price.

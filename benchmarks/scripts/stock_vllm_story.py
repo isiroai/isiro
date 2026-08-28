@@ -15,6 +15,45 @@ from typing import Any
 
 STORY_SCHEMA = "isiro-benchmark-stock-vllm-story-v1"
 
+# Qwen2.5-7B-class BF16 KV (GQA) vs uint32 id. Inactive KV, not nvidia-smi.
+KV_BF16_BYTES_PER_TOKEN = 56 * 1024
+TOKEN_ID_BYTES = 4
+
+
+def archived_id_bytes(t_tokens: int, n_seqs: int = 1) -> int:
+    """HBM for GPU TokenIDLog. 1M x 1 seq = 4 MiB. 8192 seqs x 1M = 32 GiB."""
+    return max(0, int(t_tokens)) * max(1, int(n_seqs)) * TOKEN_ID_BYTES
+
+
+def inactive_kv_bytes(t_tokens: int, n_seqs: int = 1) -> int:
+    return max(0, int(t_tokens)) * max(1, int(n_seqs)) * KV_BF16_BYTES_PER_TOKEN
+
+
+def vram_stack_bytes(
+    *,
+    weight_bytes: int | float,
+    kv_pool_bytes: int | float,
+    archived_id_bytes: int | float = 0,
+    persist_page_bytes: int | float = 0,
+) -> dict[str, int]:
+    """Live HBM model for Graph 1. Allocator slack is not in this sum.
+
+    Stock vLLM grows ``kv_pool`` with T. ISIRO keeps ``kv_pool`` as the vendor
+    last-W lock and grows ``archived_id`` at 4 B/token (plus CAM persist pages,
+    not dump-all KV).
+    """
+    w = int(weight_bytes)
+    kv = int(kv_pool_bytes)
+    ids = int(archived_id_bytes)
+    persist = int(persist_page_bytes)
+    return {
+        "weight_bytes": w,
+        "kv_pool_bytes": kv,
+        "archived_id_bytes": ids,
+        "persist_page_bytes": persist,
+        "stack_bytes": w + kv + ids + persist,
+    }
+
 
 def empty_story() -> dict[str, Any]:
     return {
@@ -74,9 +113,10 @@ def render_story_markdown(doc: dict[str, Any]) -> list[str]:
         "## Stock vLLM A/B (memory, concurrency, long context)",
         "",
         "Vanilla vLLM vs `isiro serve --target vllm` on the same host. "
-        "Archived token ids are 4 B/token vs ~56 KiB BF16 KV per token "
-        "(~14,336x bytes for **inactive** KV). That is not a 14,000x cut "
-        "of the live vendor KV pool.",
+        "Graph 1 stack is packed weights + vendor KV pool (last-W lock) + "
+        "GPU TokenID archive (4 B/token) + CAM persist pages. Unread T is "
+        "not stored as KV. 4 B vs ~56 KiB is inactive KV vs ids (~14,336x), "
+        "not a 14,000x cut of the live pool.",
         "",
     ]
     if errors:
@@ -95,11 +135,15 @@ def render_story_markdown(doc: dict[str, Any]) -> list[str]:
     else:
         lines.extend(
             [
-                "### Graph 1. KV and GPU memory vs context",
+                "### Graph 1. VRAM stack vs context",
                 "",
-                "| Context | Baseline KV B | TIC KV B | "
-                "Baseline nvidia-smi B | TIC nvidia-smi B | OOM |",
-                "|---|---:|---:|---:|---:|---|",
+                "TIC columns: packed weights, vendor KV pool, TokenID archive, "
+                "optional persist pages, nvidia-smi. Baseline KV still grows "
+                "with T.",
+                "",
+                "| Context | B KV | T weights | T KV pool | T ids | T persist | "
+                "B smi | T smi | OOM |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---|",
             ]
         )
         for p in g1:
@@ -107,8 +151,11 @@ def render_story_markdown(doc: dict[str, Any]) -> list[str]:
             oom_t = "yes" if p.get("oom_tic") else "no"
             lines.append(
                 f"| {p.get('context_tokens')} | {p.get('baseline_kv_bytes')} | "
-                f"{p.get('tic_kv_bytes')} | {p.get('baseline_smi_bytes')} | "
-                f"{p.get('tic_smi_bytes')} | B {oom_b} / T {oom_t} |"
+                f"{p.get('tic_weight_bytes')} | {p.get('tic_kv_pool_bytes')} | "
+                f"{p.get('tic_archived_id_bytes')} | "
+                f"{p.get('tic_persist_page_bytes')} | "
+                f"{p.get('baseline_smi_bytes')} | {p.get('tic_smi_bytes')} | "
+                f"B {oom_b} / T {oom_t} |"
             )
         lines.append("")
     if not g2:
@@ -135,8 +182,9 @@ def render_story_markdown(doc: dict[str, Any]) -> list[str]:
     if not g3:
         lines.append(
             "Long-context ITL sweep (concurrency=1) has no measured points "
-            "in this run. GPU TokenIDLog removes ID streaming; in-pool ITL "
-            "still tracks the weight stack plus vendor FA on last-W."
+            "in this run. Decode FA is last-W plus CAM persist pages that "
+            "survive Cauchy. Unread hay is GPU ids (4 B/token), not FA(T). "
+            "ITL stays near the weight stack when skip/inherit hits."
         )
         lines.append("")
     else:
