@@ -22,19 +22,27 @@ except ImportError:
 
 from needle_haystack import (  # noqa: E402
     NEEDLE,
+    NEEDLE_BINDER,
     STORY_CONTEXT_TOKENS,
+    LONG_CONTEXT_TOKENS,
+    CHAT_MAX_TOKENS,
+    TEMPLATE_SLACK_TOKENS,
     build_messages,
     chars_for_context_tokens,
     context_bins_for_max_len,
     first_recall_candidates,
+    hay_tokens_for_context,
     insert_needle,
     kv_sweep_table_lines,
     load_jsonl,
+    long_needle_text,
     mock_rows,
     niah_discover_steps,
     needle_window_tokens,
     parse_kv_cache_gib,
     parse_kv_cache_tokens,
+    extra_prompt_tokens,
+    prompt_token_budget,
     render_heatmap,
     rows_for_heatmap,
     row,
@@ -52,6 +60,57 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertTrue(score_hit("84932017"))
         self.assertTrue(score_hit("The number is " + NEEDLE))
         self.assertFalse(score_hit("I do not know"))
+        self.assertFalse(
+            score_hit("a- to- er 0_0 soup with 84932017 buried in noise " * 4)
+        )
+
+    def test_window_fit_keeps_8k_bin_inside_8192(self) -> None:
+        self.assertEqual(chars_for_context_tokens(1000), 4000)
+        hay = hay_tokens_for_context(8000, 8192)
+        self.assertLessEqual(
+            hay + CHAT_MAX_TOKENS + TEMPLATE_SLACK_TOKENS, 8192
+        )
+        fitted = chars_for_context_tokens(8000, 8192)
+        self.assertLess(fitted, chars_for_context_tokens(8000))
+        self.assertEqual(
+            prompt_token_budget(8192),
+            8192 - CHAT_MAX_TOKENS - TEMPLATE_SLACK_TOKENS,
+        )
+        extra = extra_prompt_tokens(long_needle_text(n_words=128), "x")
+        fitted_long = chars_for_context_tokens(8000, 8192, extra_tokens=extra)
+        self.assertLess(fitted_long, chars_for_context_tokens(8000, 8192))
+        self.assertIn(
+            LONG_CONTEXT_TOKENS,
+            context_bins_for_max_len(
+                LONG_CONTEXT_TOKENS,
+                (8000, LONG_CONTEXT_TOKENS),
+            ),
+        )
+        self.assertNotIn(
+            LONG_CONTEXT_TOKENS,
+            context_bins_for_max_len(8192, (8000, LONG_CONTEXT_TOKENS)),
+        )
+
+    def test_long_needle_survives_depths_and_1m_hay(self) -> None:
+        needle = long_needle_text(n_words=128)
+        self.assertIn(NEEDLE, needle)
+        self.assertIn(NEEDLE_BINDER, needle)
+        self.assertGreater(len(needle.split()), 120)
+        hay = "x" * 2000
+        for depth in (0, 50, 100):
+            body = insert_needle(hay, needle, depth)
+            self.assertIn(needle, body)
+        huge = "y" * 50_000
+        body = insert_needle(huge, needle, 0)
+        self.assertTrue(body.strip().startswith(needle.strip()[:24]) or needle in body)
+        self.assertIn(NEEDLE_BINDER + "-0000", body)
+        self.assertIn(NEEDLE_BINDER + "-0127", body)
+        self.assertLessEqual(
+            hay_tokens_for_context(LONG_CONTEXT_TOKENS, LONG_CONTEXT_TOKENS)
+            + CHAT_MAX_TOKENS
+            + TEMPLATE_SLACK_TOKENS,
+            LONG_CONTEXT_TOKENS,
+        )
 
     def test_insert_needle_depth(self) -> None:
         hay = "aaaaaa"

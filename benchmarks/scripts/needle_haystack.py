@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 NEEDLE = "The special magic number is 84932017."
+NEEDLE_BINDER = "ISIRO-NIAH-QX7K29"
 QUESTION = "What is the special magic number? Reply with the number only."
 HAYSTACK_LINE = (
     "The grass is green. The sky is blue. The sun is yellow. "
@@ -25,9 +26,15 @@ HAYSTACK_LINE = (
 
 DEFAULT_DEPTHS = (0, 10, 25, 50, 75, 90, 100)
 DEFAULT_CONTEXT_TOKENS = (1000, 2000, 4000, 8000, 12000, 16000, 24000, 32000)
+LONG_CONTEXT_TOKENS = 1_000_000
 # Table A folds the grid at this bin when the model window allows it.
 STORY_CONTEXT_TOKENS = 16000
 CHARS_PER_TOKEN = 4
+# English hay is denser than 4 chars/token. Fitted hay uses this so an 8k
+# bin plus chat template plus a short reply stays inside max_model_len.
+HAY_CHARS_PER_TOKEN_FIT = 2.7
+CHAT_MAX_TOKENS = 32
+TEMPLATE_SLACK_TOKENS = 160
 # Haystack bin plus needle, question, chat template, and a short reply.
 WINDOW_RESERVE_TOKENS = 1024
 FIGURE_TITLE = (
@@ -75,18 +82,80 @@ def _start_fail_gibs(rows: Iterable[dict[str, Any]]) -> list[float]:
 
 
 def score_hit(completion: str, needle: str = NEEDLE) -> bool:
-    """Exact needle, or the magic number if the needle contains one."""
+    """Exact needle, or the magic number as a short answer.
+
+    Buried digits inside token soup are not a hit. That used to look like
+    recall while the completion was incoherent.
+    """
     text = (completion or "").strip()
     if not text:
         return False
     if needle in text:
         return True
     digits = "".join(ch for ch in needle if ch.isdigit())
-    return bool(digits) and digits in text
+    if not digits or digits not in text:
+        return False
+    compact = "".join(text.split()).rstrip(".")
+    if compact == digits:
+        return True
+    if len(text) > 160:
+        return False
+    leftover = text.replace(digits, " ")
+    words = [w for w in leftover.split() if any(ch.isalnum() for ch in w)]
+    return len(words) <= 12
 
 
-def chars_for_context_tokens(context_tokens: int) -> int:
-    return max(1, int(context_tokens) * CHARS_PER_TOKEN)
+def long_needle_text(*, n_words: int = 128, needle: str = NEEDLE) -> str:
+    """Unique multi-token needle. Harder to hallucinate than eight digits."""
+    n = max(1, int(n_words))
+    codes = " ".join(f"{NEEDLE_BINDER}-{i:04d}" for i in range(n))
+    return f"{needle} Binder {codes}."
+
+
+def prompt_token_budget(
+    max_model_len: int,
+    *,
+    max_tokens: int = CHAT_MAX_TOKENS,
+    slack: int = TEMPLATE_SLACK_TOKENS,
+) -> int:
+    """Hay tokens that still leave room for template and the reply."""
+    return max(1, int(max_model_len) - max(0, int(max_tokens)) - max(0, int(slack)))
+
+
+def extra_prompt_tokens(*parts: str) -> int:
+    """Word count undercounts hyphenated binder codes. Use char density too."""
+    n = 0
+    for part in parts:
+        text = str(part or "")
+        n += max(len(text.split()), int(len(text) / HAY_CHARS_PER_TOKEN_FIT))
+    return n
+
+
+def hay_tokens_for_context(
+    context_tokens: int,
+    max_model_len: int | None = None,
+    *,
+    extra_tokens: int = 0,
+) -> int:
+    n = max(1, int(context_tokens))
+    if max_model_len is not None and int(max_model_len) > 0:
+        n = min(n, prompt_token_budget(int(max_model_len)))
+    n = max(1, n - max(0, int(extra_tokens)))
+    return n
+
+
+def chars_for_context_tokens(
+    context_tokens: int,
+    max_model_len: int | None = None,
+    *,
+    extra_tokens: int = 0,
+) -> int:
+    n = hay_tokens_for_context(
+        context_tokens, max_model_len, extra_tokens=extra_tokens
+    )
+    if max_model_len is not None and int(max_model_len) > 0:
+        return max(1, int(n * HAY_CHARS_PER_TOKEN_FIT))
+    return max(1, int(n) * CHARS_PER_TOKEN)
 
 
 def parse_kv_cache_gib(log_text: str) -> float:
@@ -381,7 +450,7 @@ def _chat_completion(
         {
             "model": model,
             "messages": messages,
-            "max_tokens": 32,
+            "max_tokens": CHAT_MAX_TOKENS,
             "temperature": 0,
         }
     ).encode("utf-8")
@@ -395,7 +464,15 @@ def _chat_completion(
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"needle haystack chat HTTP {exc.code}") from exc
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            detail = ""
+        err = f"needle haystack chat HTTP {exc.code}"
+        if detail:
+            err = f"{err}: {detail}"
+        raise RuntimeError(err) from exc
     choices = body.get("choices") or []
     if not choices:
         return ""
@@ -412,13 +489,24 @@ def _one_probe(
     depth: float,
     context_tokens: int,
     timeout: float,
+    max_model_len: int = 0,
+    needle: str = NEEDLE,
+    question: str = QUESTION,
 ) -> dict[str, Any]:
+    cap = int(max_model_len) if int(max_model_len) > 0 else None
+    extra = extra_prompt_tokens(needle, question)
+    hay_chars = chars_for_context_tokens(
+        context_tokens, cap, extra_tokens=extra
+    )
     messages = build_messages(
         depth_percent=float(depth),
-        approx_chars=chars_for_context_tokens(context_tokens),
+        approx_chars=hay_chars,
+        needle=needle,
+        question=question,
     )
     refuse = False
     oom = False
+    window_overflow = False
     response_completes = True
     completion = ""
     err = ""
@@ -430,17 +518,30 @@ def _one_probe(
         response_completes = False
         err = str(exc)
         text = err.lower()
-        refuse = "refuse" in text or "rejected" in text
+        refuse = "refuse" in text or "rejected" in text or "bad request" in text
         oom = "out of memory" in text or "oom" in text
-    extra: dict[str, Any] = {"completion_chars": len(completion)}
+        window_overflow = (
+            "maximum context length" in text or "input_tokens" in text
+        )
+        if window_overflow:
+            refuse = True
+    extra: dict[str, Any] = {
+        "completion_chars": len(completion),
+        "hay_chars": hay_chars,
+        "hay_tokens": hay_tokens_for_context(
+            context_tokens, cap, extra_tokens=extra
+        ),
+    }
     if err:
         extra["error"] = err[:500]
+    if window_overflow:
+        extra["window_overflow"] = True
     return row(
         panel=panel,
         kv_cache_gib=kv_cache_gib,
         depth_percent=float(depth),
         context_tokens=int(context_tokens),
-        hit=score_hit(completion),
+        hit=score_hit(completion, needle=needle),
         response_completes=response_completes,
         refuse=refuse,
         oom=oom,
@@ -457,6 +558,9 @@ def probe_grid(
     depths: Iterable[float] = DEFAULT_DEPTHS,
     context_tokens: Iterable[int] = DEFAULT_CONTEXT_TOKENS,
     timeout: float = 300.0,
+    max_model_len: int = 0,
+    needle: str = NEEDLE,
+    question: str = QUESTION,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for tokens in context_tokens:
@@ -470,6 +574,9 @@ def probe_grid(
                     depth=float(depth),
                     context_tokens=int(tokens),
                     timeout=timeout,
+                    max_model_len=max_model_len,
+                    needle=needle,
+                    question=question,
                 )
             )
     return rows
@@ -484,6 +591,9 @@ def probe_story(
     depths: Iterable[float] = DEFAULT_DEPTHS,
     story_tokens: int = STORY_CONTEXT_TOKENS,
     timeout: float = 300.0,
+    max_model_len: int = 0,
+    needle: str = NEEDLE,
+    question: str = QUESTION,
 ) -> list[dict[str, Any]]:
     return probe_grid(
         url=url,
@@ -493,6 +603,9 @@ def probe_story(
         depths=depths,
         context_tokens=(int(story_tokens),),
         timeout=timeout,
+        max_model_len=max_model_len,
+        needle=needle,
+        question=question,
     )
 
 
@@ -912,6 +1025,7 @@ def main(argv: list[str] | None = None) -> int:
                 panel=args.panel,
                 kv_cache_gib=args.kv_cache_gib,
                 story_tokens=story_tokens,
+                max_model_len=args.max_model_len,
             )
         else:
             rows = probe_grid(
@@ -920,6 +1034,7 @@ def main(argv: list[str] | None = None) -> int:
                 panel=args.panel,
                 kv_cache_gib=args.kv_cache_gib,
                 context_tokens=tokens,
+                max_model_len=args.max_model_len,
             )
         if args.jsonl:
             existing = load_jsonl(args.jsonl) if args.jsonl.is_file() else []
