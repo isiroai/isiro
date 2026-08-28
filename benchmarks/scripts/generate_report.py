@@ -670,6 +670,11 @@ def render(run_dir: Path) -> str:
     lines = _section_intro(summary)
     lines.extend(_section_a(footprint, correctness))
     lines.extend(_mode_sections(summary))
+    story_path = run_dir / "stock_vllm_story.json"
+    if story_path.is_file():
+        from stock_vllm_story import render_story_markdown
+
+        lines.extend(render_story_markdown(load_json(story_path)))
     lines.extend(_section_g(summary, environment, commands, graph_mode))
     return "\n".join(lines)
 
@@ -719,7 +724,13 @@ def _copy_sanitized_json(source: Path, dest: Path, scratch: Path) -> None:
 
 
 def _stage_sanitized_tree(run_dir: Path, temp: Path) -> None:
-    for name in ("environment.json", "commands.json", "summary.json", "verify.json"):
+    for name in (
+        "environment.json",
+        "commands.json",
+        "summary.json",
+        "verify.json",
+        "stock_vllm_story.json",
+    ):
         src = run_dir / name
         if src.is_file():
             _copy_sanitized_json(src, temp / name, run_dir)

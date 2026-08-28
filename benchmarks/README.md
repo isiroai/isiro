@@ -76,3 +76,23 @@ Each run compares vLLM (**baseline**) to ISIRO (**TIC** using vLLM target) on th
 
 The report records correctness, GPU memory, capacity, generation throughput
 and latency under that matched setup.
+
+## Stock vLLM story sweeps (optional)
+
+Commercial A/B vs vanilla vLLM (not a solo ISIRO table):
+
+1. Graph 1: KV bytes and nvidia-smi vs context length (who OOMs).
+2. Graph 2: output tok/s vs concurrency.
+3. Long-context ITL at concurrency 1 (does tok/s drop with T).
+4. Optional TCO scatter: derived from Graph 2 tok/s and a documented GPU-hour price.
+
+Put measured points in `stock_vllm_story.json` in the run dir (schema
+`isiro-benchmark-stock-vllm-story-v1`). `generate_report.py` renders that
+file when present. Template:
+
+```bash
+python3 benchmarks/scripts/stock_vllm_story.py --print-empty
+```
+
+Do not fill 70B / 8xH100 template cells without that SKU. Do not treat
+4 B/token vs ~56 KiB KV as live pool VRAM savings.

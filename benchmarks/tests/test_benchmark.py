@@ -1202,6 +1202,30 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("| Verify mode |", report)
             self.assertNotIn("greedy vLLM", report)
 
+    def test_stock_vllm_story_tco_derived_and_empty_report(self) -> None:
+        from stock_vllm_story import (
+            STORY_SCHEMA,
+            derive_tco_point,
+            empty_story,
+            render_story_markdown,
+            validate_story,
+        )
+
+        doc = empty_story()
+        self.assertEqual(doc["schema"], STORY_SCHEMA)
+        self.assertEqual(validate_story(doc), [])
+        md = "\n".join(render_story_markdown(doc))
+        self.assertIn("no measured points", md)
+        self.assertNotIn("90%", md)
+        p = derive_tco_point(concurrency=8, output_tok_s=1000.0, gpu_hour_usd=3.6)
+        self.assertEqual(p["kind"], "derived")
+        self.assertAlmostEqual(p["cost_usd_per_1m_output_tokens"], 1.0)
+        doc["graph2_toks_vs_concurrency"]["points"] = [
+            {"concurrency": 1, "baseline_tok_s": 100.0, "tic_tok_s": 100.0}
+        ]
+        md2 = "\n".join(render_story_markdown(doc))
+        self.assertIn("Graph 2", md2)
+
 
 if __name__ == "__main__":
     unittest.main()
