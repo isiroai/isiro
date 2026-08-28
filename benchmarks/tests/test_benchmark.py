@@ -1250,6 +1250,37 @@ class BenchmarkTests(unittest.TestCase):
         md1 = "\n".join(render_story_markdown(doc))
         self.assertIn("T weights", md1)
         self.assertIn("T ids", md1)
+        self.assertIn("Graph 1a", md1)
+        from stock_vllm_story import (
+            graph1_composition_row,
+            leftover_fill_smi_is_failure,
+            inactive_kv_bytes,
+        )
+
+        self.assertTrue(
+            leftover_fill_smi_is_failure(
+                tic_smi_bytes=31_000_000_000,
+                dest_lock_ready_ceiling_bytes=28_000 * 1024 * 1024,
+            )
+        )
+        self.assertFalse(
+            leftover_fill_smi_is_failure(
+                tic_smi_bytes=14_000_000_000,
+                dest_lock_ready_ceiling_bytes=28_000 * 1024 * 1024,
+            )
+        )
+        doc["graph1_composition"]["points"] = [
+            graph1_composition_row(
+                context_tokens=1_000_000,
+                weight_bytes=stack["weight_bytes"],
+                kv_pool_bytes=stack["kv_pool_bytes"],
+                archived_id_bytes=stack["archived_id_bytes"],
+                baseline_kv_bytes=inactive_kv_bytes(1_000_000, 1),
+            )
+        ]
+        md1b = "\n".join(render_story_markdown(doc))
+        self.assertIn("Graph 1b", md1b)
+        self.assertIn("derived", md1b)
         doc["graph2_toks_vs_concurrency"]["points"] = [
             {"concurrency": 1, "baseline_tok_s": 100.0, "tic_tok_s": 100.0}
         ]

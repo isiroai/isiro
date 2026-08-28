@@ -55,14 +55,51 @@ def vram_stack_bytes(
     }
 
 
+def leftover_fill_smi_is_failure(
+    *,
+    tic_smi_bytes: int | float,
+    dest_lock_ready_ceiling_bytes: int | float,
+) -> bool:
+    """True when TIC smi looks like util leftover fill, not dest lock."""
+    return int(tic_smi_bytes) > int(dest_lock_ready_ceiling_bytes)
+
+
+def graph1_composition_row(
+    *,
+    context_tokens: int,
+    weight_bytes: int | float,
+    kv_pool_bytes: int | float,
+    archived_id_bytes: int | float = 0,
+    persist_page_bytes: int | float = 0,
+    baseline_kv_bytes: int | float = 0,
+    kind: str = "derived",
+) -> dict[str, Any]:
+    """Graph 1b stacked composition. TIC kv_pool stays the lock (flat vs T)."""
+    stack = vram_stack_bytes(
+        weight_bytes=weight_bytes,
+        kv_pool_bytes=kv_pool_bytes,
+        archived_id_bytes=archived_id_bytes,
+        persist_page_bytes=persist_page_bytes,
+    )
+    return {
+        "context_tokens": int(context_tokens),
+        "kind": str(kind),
+        "baseline_kv_bytes": int(baseline_kv_bytes),
+        **stack,
+    }
+
+
 def empty_story() -> dict[str, Any]:
     return {
         "schema": STORY_SCHEMA,
         "notes": (
             "Fill points from matched A/B runs. Do not paste 70B/8xH100 "
-            "template cells. Weight ~29% is a separate measured footprint."
+            "template cells. Weight ~29% is a separate measured footprint. "
+            "Do not leftover-fill the util ceiling. That series is failure, "
+            "not dest lock."
         ),
         "graph1_vram_vs_context": {"points": []},
+        "graph1_composition": {"points": []},
         "graph2_toks_vs_concurrency": {"points": []},
         "long_ctx_itl": {"points": []},
         "tco": {"gpu_hour_usd": None, "points": []},
@@ -75,6 +112,7 @@ def validate_story(doc: dict[str, Any]) -> list[str]:
         errors.append(f"schema must be {STORY_SCHEMA}")
     for key in (
         "graph1_vram_vs_context",
+        "graph1_composition",
         "graph2_toks_vs_concurrency",
         "long_ctx_itl",
         "tco",
@@ -113,10 +151,11 @@ def render_story_markdown(doc: dict[str, Any]) -> list[str]:
         "## Stock vLLM A/B (memory, concurrency, long context)",
         "",
         "Vanilla vLLM vs `isiro serve --target vllm` on the same host. "
-        "Graph 1 stack is packed weights + vendor KV pool (last-W lock) + "
-        "GPU TokenID archive (4 B/token) + CAM persist pages. Unread T is "
-        "not stored as KV. 4 B vs ~56 KiB is inactive KV vs ids (~14,336x), "
-        "not a 14,000x cut of the live pool.",
+        "Graph 1a is measured nvidia-smi vs context T (vanilla grows; TIC "
+        "is a band). Graph 1b is derived composition: TIC weights + last-W "
+        "lock + TokenID archive + persist. Unread T is not stored as KV. "
+        "4 B vs ~56 KiB is inactive KV vs ids (~14,336x), not a 14,000x cut "
+        "of live smi. Util leftover fill is a failure series, not dest lock.",
         "",
     ]
     if errors:
@@ -124,22 +163,23 @@ def render_story_markdown(doc: dict[str, Any]) -> list[str]:
         lines.append("")
         return lines
     g1 = list((doc.get("graph1_vram_vs_context") or {}).get("points") or [])
+    g1b = list((doc.get("graph1_composition") or {}).get("points") or [])
     g2 = list((doc.get("graph2_toks_vs_concurrency") or {}).get("points") or [])
     g3 = list((doc.get("long_ctx_itl") or {}).get("points") or [])
     tco = list((doc.get("tco") or {}).get("points") or [])
     if not g1:
         lines.append(
-            "Graph 1 (VRAM / KV vs context) has no measured points in this run."
+            "Graph 1a (measured nvidia-smi vs context) has no measured points "
+            "in this run."
         )
         lines.append("")
     else:
         lines.extend(
             [
-                "### Graph 1. VRAM stack vs context",
+                "### Graph 1a. Measured nvidia-smi vs context",
                 "",
-                "TIC columns: packed weights, vendor KV pool, TokenID archive, "
-                "optional persist pages, nvidia-smi. Baseline KV still grows "
-                "with T.",
+                "Vanilla climbs with T. TIC stays near paid READY if the dest "
+                "lock bound. A TIC line that tracks leftover fill is failure.",
                 "",
                 "| Context | B KV | T weights | T KV pool | T ids | T persist | "
                 "B smi | T smi | OOM |",
@@ -156,6 +196,32 @@ def render_story_markdown(doc: dict[str, Any]) -> list[str]:
                 f"{p.get('tic_persist_page_bytes')} | "
                 f"{p.get('baseline_smi_bytes')} | {p.get('tic_smi_bytes')} | "
                 f"B {oom_b} / T {oom_t} |"
+            )
+        lines.append("")
+    if not g1b:
+        lines.append(
+            "Graph 1b (derived composition) has no points in this run."
+        )
+        lines.append("")
+    else:
+        lines.extend(
+            [
+                "### Graph 1b. Derived composition",
+                "",
+                "TIC KV pool is the dest lock (flat vs T). Ids grow at 4 B/token. "
+                "Kind is derived, not nvidia-smi.",
+                "",
+                "| Context | kind | B KV(T) | T weights | T KV lock | T ids | "
+                "T persist | T stack |",
+                "|---|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for p in g1b:
+            lines.append(
+                f"| {p.get('context_tokens')} | {p.get('kind', 'derived')} | "
+                f"{p.get('baseline_kv_bytes')} | {p.get('weight_bytes')} | "
+                f"{p.get('kv_pool_bytes')} | {p.get('archived_id_bytes')} | "
+                f"{p.get('persist_page_bytes')} | {p.get('stack_bytes')} |"
             )
         lines.append("")
     if not g2:
