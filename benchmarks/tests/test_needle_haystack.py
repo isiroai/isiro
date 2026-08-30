@@ -23,31 +23,49 @@ except ImportError:
 from needle_haystack import (  # noqa: E402
     NEEDLE,
     NEEDLE_BINDER,
+    NEEDLES,
     STORY_CONTEXT_TOKENS,
     LONG_CONTEXT_TOKENS,
     CHAT_MAX_TOKENS,
     TEMPLATE_SLACK_TOKENS,
+    DEFAULT_DEPTHS,
     build_messages,
     chars_for_context_tokens,
+    context_axis_tokens,
     context_bins_for_max_len,
-    first_recall_candidates,
     hay_tokens_for_context,
     insert_needle,
+    insert_needles,
+    needle_spread_depths,
     kv_sweep_table_lines,
     load_jsonl,
+    log_context_bins,
     long_needle_text,
     mock_rows,
     niah_discover_steps,
     needle_window_tokens,
     parse_kv_cache_gib,
     parse_kv_cache_tokens,
+    parse_non_kv_cache_bytes,
+    parse_prometheus_kv_usage_perc,
+    derived_kv_in_use_bytes,
+    kv_in_use_bytes,
+    gib_to_bytes,
+    bytes_to_gib,
+    resolve_non_kv_bytes,
+    reserved_vram_y_bytes,
+    vram_in_use_y_bytes,
     extra_prompt_tokens,
+    figure_tagline,
+    haystack_text,
     prompt_token_budget,
+    _context_tick,
     render_heatmap,
+    render_vram_vs_context,
     rows_for_heatmap,
     row,
     score_hit,
-    figure_unstarted_note,
+    score_needles,
     start_fail_rows,
     story_tokens_for_max_len,
     tic_pool_smaller_than_fill,
@@ -91,6 +109,151 @@ class NeedleHaystackTests(unittest.TestCase):
             context_bins_for_max_len(8192, (8000, LONG_CONTEXT_TOKENS)),
         )
 
+    def test_score_needles_fractions(self) -> None:
+        self.assertEqual(score_needles(""), 0.0)
+        self.assertEqual(score_needles(NEEDLES[0]), 0.3333)
+        self.assertEqual(score_needles(NEEDLES[0] + " " + NEEDLES[1]), 0.6667)
+        self.assertEqual(score_needles(" ".join(NEEDLES)), 1.0)
+        self.assertEqual(
+            figure_tagline(
+                gpu="NVIDIA GeForce RTX 5090",
+                model="qwen2.5-7b-instruct",
+            ),
+            "NVIDIA GeForce RTX 5090 | qwen2.5-7b-instruct",
+        )
+
+    def test_kv_in_use_metrics_and_derived(self) -> None:
+        text = (
+            "# HELP vllm:kv_cache_usage_perc GPU KV cache usage.\n"
+            "# TYPE vllm:kv_cache_usage_perc gauge\n"
+            "vllm:kv_cache_usage_perc{engine=\"0\"} 0.25\n"
+        )
+        self.assertAlmostEqual(parse_prometheus_kv_usage_perc(text), 0.25)
+        gpu = (
+            "vllm:gpu_cache_usage_perc 12.5\n"
+        )
+        self.assertAlmostEqual(parse_prometheus_kv_usage_perc(gpu), 0.125)
+        used = derived_kv_in_use_bytes(10240, 1.09, 20480)
+        self.assertEqual(used, int(round(0.5 * gib_to_bytes(1.09))))
+        metered, kind = kv_in_use_bytes(
+            context_tokens=10240,
+            pool_gib=1.09,
+            pool_tokens=20480,
+            usage_perc=0.4,
+        )
+        self.assertEqual(kind, "metrics")
+        self.assertEqual(metered, int(round(0.4 * gib_to_bytes(1.09))))
+        derived, kind = kv_in_use_bytes(
+            context_tokens=10240,
+            pool_gib=1.09,
+            pool_tokens=20480,
+            usage_perc=None,
+        )
+        self.assertEqual(kind, "derived")
+        self.assertEqual(derived, used)
+
+    def test_parse_non_kv_and_vram_y_intercept(self) -> None:
+        tight = "Total non KV cache memory: 11.76GiB\n"
+        spaced = "Total non KV cache memory: 11.19 GiB\n"
+        self.assertEqual(parse_non_kv_cache_bytes(tight), gib_to_bytes(11.76))
+        self.assertEqual(parse_non_kv_cache_bytes(spaced), gib_to_bytes(11.19))
+        self.assertIsNone(parse_non_kv_cache_bytes("Available KV cache memory: 1.09 GiB\n"))
+        reported, kind = resolve_non_kv_bytes(
+            reported=gib_to_bytes(11.19),
+            process_bytes=gib_to_bytes(12.28),
+            pool_gib=1.09,
+        )
+        self.assertEqual(kind, "reported")
+        self.assertEqual(reported, gib_to_bytes(11.19))
+        fallback, kind = resolve_non_kv_bytes(
+            reported=None,
+            process_bytes=gib_to_bytes(12.28),
+            pool_gib=1.09,
+        )
+        self.assertEqual(kind, "smi_minus_pool")
+        self.assertEqual(fallback, gib_to_bytes(12.28) - gib_to_bytes(1.09))
+        rows = [r for r in mock_rows() if not r.get("start_fail")]
+        tic = next(
+            r
+            for r in rows
+            if r["panel"] == "tic" and int(r["context_tokens"]) == 1000
+        )
+        base = next(
+            r
+            for r in rows
+            if r["panel"] == "vanilla" and int(r["context_tokens"]) == 1000
+        )
+        self.assertEqual(tic["non_kv_kind"], "reported")
+        self.assertEqual(tic["non_kv_bytes_reported"], gib_to_bytes(11.19))
+        self.assertEqual(base["non_kv_bytes_reported"], gib_to_bytes(15.34))
+        self.assertLess(
+            abs(vram_in_use_y_bytes(tic) - tic["non_kv_bytes_reported"]),
+            gib_to_bytes(0.15),
+        )
+        self.assertEqual(
+            reserved_vram_y_bytes(tic),
+            tic["non_kv_bytes_reported"] + gib_to_bytes(1.09),
+        )
+        self.assertEqual(
+            reserved_vram_y_bytes(base),
+            base["non_kv_bytes_reported"] + gib_to_bytes(13.48),
+        )
+        filled = next(
+            r
+            for r in rows
+            if r["panel"] == "tic" and int(r["context_tokens"]) == 32768
+        )
+        self.assertGreater(vram_in_use_y_bytes(filled), vram_in_use_y_bytes(tic))
+        self.assertAlmostEqual(bytes_to_gib(vram_in_use_y_bytes(filled)), 11.19 + 1.09, places=2)
+
+    def test_log_context_bins_32k_and_1m(self) -> None:
+        bins_32k = log_context_bins(32768)
+        self.assertEqual(bins_32k[0], 1000)
+        self.assertEqual(bins_32k[-1], 32768)
+        self.assertLessEqual(len(bins_32k), 20)
+        self.assertGreaterEqual(len(bins_32k), 18)
+        self.assertEqual(len(bins_32k), len(set(bins_32k)))
+        bins_1m = log_context_bins(1_048_576)
+        self.assertEqual(bins_1m[0], 1000)
+        self.assertEqual(bins_1m[-1], 1_048_576)
+        self.assertLessEqual(len(bins_1m), 20)
+        self.assertGreaterEqual(len(bins_1m), 18)
+        self.assertEqual(context_bins_for_max_len(32768), bins_32k)
+        self.assertEqual(_context_tick(1000), "1,000")
+        self.assertEqual(_context_tick(32768), "32,768")
+        self.assertEqual(_context_tick(1_048_576), "1,048,576")
+        axis = context_axis_tokens(mock_rows())
+        self.assertEqual(axis[0], 1000)
+        self.assertEqual(axis[-1], 32768)
+        self.assertEqual(axis, log_context_bins(32768))
+        self.assertEqual(context_bins_for_max_len(1_048_576), bins_1m)
+        self.assertEqual(DEFAULT_DEPTHS, (0, 11, 22, 33, 44, 56, 67, 78, 89, 100))
+        hay = "aaaaaa"
+        body = insert_needles(hay, NEEDLES, 50)
+        for fact in NEEDLES:
+            self.assertIn(fact, body)
+        self.assertEqual(
+            needle_spread_depths(3, 0),
+            (0.0, 100.0 / 3.0, 200.0 / 3.0),
+        )
+        self.assertEqual(needle_spread_depths(3, 100), (100.0, 100.0, 100.0))
+        long_hay = haystack_text(approx_chars=4000)
+        at_zero = insert_needles(long_hay, NEEDLES, 0)
+        at_mid = insert_needles(long_hay, NEEDLES, 50)
+        at_end = insert_needles(long_hay, NEEDLES, 100)
+        pos_zero = [at_zero.find(fact) for fact in NEEDLES]
+        pos_mid = [at_mid.find(fact) for fact in NEEDLES]
+        self.assertEqual(pos_zero, sorted(pos_zero))
+        self.assertEqual(pos_mid, sorted(pos_mid))
+        self.assertLess(pos_zero[0], pos_zero[1])
+        self.assertLess(pos_zero[1], pos_zero[2])
+        self.assertLess(pos_mid[0], pos_mid[1])
+        self.assertLess(pos_mid[1], pos_mid[2])
+        self.assertGreater(pos_mid[0], pos_zero[0])
+        self.assertTrue(at_end.endswith(NEEDLES[-1]))
+        for fact in NEEDLES:
+            self.assertGreater(at_end.find(fact), len(long_hay) - 8)
+
     def test_long_needle_survives_depths_and_1m_hay(self) -> None:
         needle = long_needle_text(n_words=128)
         self.assertIn(NEEDLE, needle)
@@ -123,17 +286,28 @@ class NeedleHaystackTests(unittest.TestCase):
         msgs = build_messages(depth_percent=50, approx_chars=200)
         self.assertEqual(len(msgs), 1)
         self.assertIn(NEEDLE, msgs[0]["content"])
+        self.assertIn(NEEDLES[1], msgs[0]["content"])
+        self.assertIn(NEEDLES[2], msgs[0]["content"])
         self.assertIn("special magic number", msgs[0]["content"])
+        self.assertIn("secret city code", msgs[0]["content"])
+        self.assertIn("hidden river name", msgs[0]["content"])
 
     @unittest.skipUnless(HAS_PLOT, "matplotlib seaborn pandas required")
     def test_jsonl_roundtrip_and_png(self) -> None:
         rows = mock_rows()
-        self.assertEqual(len(rows), 169)
+        bins = log_context_bins(32768)
+        self.assertEqual(len(rows), 1 + 2 * len(DEFAULT_DEPTHS) * len(bins))
         tic_sizes = {
             r["kv_cache_gib"] for r in rows if r["panel"] == "tic"
         }
         self.assertEqual(tic_sizes, {1.09})
         self.assertTrue(all(r["hit"] for r in rows if r["panel"] == "tic"))
+        vanilla_scores = {
+            round(float(r["score"]), 4)
+            for r in rows
+            if r["panel"] == "vanilla" and not r.get("start_fail")
+        }
+        self.assertTrue({0.3333, 0.6667, 1.0, 0.0} <= vanilla_scores)
         self.assertTrue(
             any(
                 r.get("start_fail")
@@ -150,11 +324,12 @@ class NeedleHaystackTests(unittest.TestCase):
                 for r in rows
             )
         )
-        depths = {r["depth_percent"] for r in rows}
-        self.assertTrue({0, 50, 100}.issubset(depths))
-        contexts = {r["context_tokens"] for r in rows}
+        depths = {r["depth_percent"] for r in rows if not r.get("start_fail")}
+        self.assertEqual(depths, set(DEFAULT_DEPTHS))
+        contexts = {r["context_tokens"] for r in rows if not r.get("start_fail")}
         self.assertIn(1000, contexts)
-        self.assertIn(32000, contexts)
+        self.assertIn(32768, contexts)
+        self.assertNotIn(2.18, {r["kv_cache_gib"] for r in rows})
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "needle_haystack.jsonl"
             write_jsonl(path, rows)
@@ -169,6 +344,10 @@ class NeedleHaystackTests(unittest.TestCase):
             render_heatmap(loaded, png)
             self.assertTrue(png.is_file())
             self.assertGreater(png.stat().st_size, 1000)
+            vram = Path(tmp) / "vram-vs-context.png"
+            render_vram_vs_context(loaded, vram)
+            self.assertTrue(vram.is_file())
+            self.assertGreater(vram.stat().st_size, 1000)
 
     @unittest.skipUnless(HAS_PLOT, "matplotlib seaborn pandas required")
     def test_write_report_embeds_heatmap_png(self) -> None:
@@ -225,51 +404,68 @@ class NeedleHaystackTests(unittest.TestCase):
             (run / "commands.json").write_text(
                 json.dumps({"enforce_eager": False}), encoding="utf-8"
             )
-            dest = Path(tmp) / "out" / "rtx-5090-report.md"
+            dest = (
+                Path(tmp) / "out" / "rtx-5090-report-20260821T000000Z" / "report.md"
+            )
             write_report(run, dest)
             text = dest.read_text(encoding="utf-8")
             self.assertIn("## B. Needle-in-a-haystack", text)
-            self.assertIn("Fact retrieved (needle)", text)
-            self.assertIn("Fact retrieval by KV cache (needle-in-a-haystack)", text)
+            self.assertNotIn("Fact retrieved (needle)", text)
+            self.assertNotIn("| **TIC** | Fixed |", text)
+            self.assertIn("Fact retrieval by context length (multi-needle haystack)", text)
             self.assertIn(
-                "Figure. Fact retrieval by KV cache (needle-in-a-haystack).",
+                "Figure. Fact retrieval by context length (multi-needle haystack).",
                 text,
             )
             self.assertIn("The Baseline serve would not start at 1.09 GiB.", text)
             self.assertIn("### KV cache", text)
-            self.assertIn("rtx-5090-report-needle-haystack.png", text)
-            self.assertTrue(
-                (dest.parent / "rtx-5090-report-needle-haystack.png").is_file()
+            self.assertIn("needle-haystack.png", text)
+            self.assertNotIn("rtx-5090-report-needle-haystack.png", text)
+            self.assertTrue((dest.parent / "needle-haystack.png").is_file())
+            self.assertIn("vram-vs-context.png", text)
+            self.assertTrue((dest.parent / "vram-vs-context.png").is_file())
+            self.assertIn(
+                "Figure. VRAM usage vs context tokens.",
+                text,
             )
+            self.assertIn("Reported non-KV plus pool occupancy", text)
+            self.assertIn("not a process nvidia-smi meter", text)
+            self.assertIn("An X on the GPU HBM line is OOM", text)
+            self.assertNotIn("Above GPU HBM (OOM)", text)
+
+    def test_mock_report_dir_has_figures(self) -> None:
+        mock = ROOT / "qwen2.5-7b-instruct" / "rtx-5090-report_mock"
+        text = (mock / "report.md").read_text(encoding="utf-8")
+        self.assertIn("](needle-haystack.png)", text)
+        self.assertIn("](vram-vs-context.png)", text)
+        self.assertIn("Reported non-KV plus pool occupancy", text)
+        self.assertIn("An X on the GPU HBM line is OOM", text)
+        self.assertNotIn("Above GPU HBM (OOM)", text)
+        self.assertNotIn("Larger KV", text)
+        self.assertNotIn("Same size as TIC", text)
+        self.assertNotIn("Fact retrieved (needle)", text)
+        self.assertTrue((mock / "needle-haystack.png").is_file())
+        self.assertTrue((mock / "vram-vs-context.png").is_file())
+        self.assertGreater((mock / "needle-haystack.png").stat().st_size, 1000)
+        self.assertGreater((mock / "vram-vs-context.png").stat().st_size, 1000)
 
     def test_discover_helpers_are_measured_not_fixed(self) -> None:
-        self.assertEqual(
-            figure_unstarted_note(1.09),
-            "Baseline did not start at 1.09 GiB, so it is not shown.",
-        )
-        self.assertEqual(
-            figure_unstarted_note([1.09, 2.18]),
-            "Baseline did not start at 1.09 GiB or 2.18 GiB, so they are not shown.",
-        )
-        self.assertEqual(
-            figure_unstarted_note([1.09, 2.18, 4.36]),
-            "Baseline did not start at 1.09 GiB, 2.18 GiB, or 4.36 GiB, so they are not shown.",
-        )
         self.assertEqual(chars_for_context_tokens(1000), 4000)
         self.assertEqual(STORY_CONTEXT_TOKENS, 16000)
-        self.assertEqual(context_bins_for_max_len(8192)[-1], 8000)
-        self.assertIn(32000, context_bins_for_max_len(32768))
-        self.assertIn(24000, context_bins_for_max_len(32768))
-        self.assertEqual(story_tokens_for_max_len(8192), 8000)
-        self.assertEqual(story_tokens_for_max_len(32768), 16000)
+        crop = (1000, 8000, 16000, 24000, 32000)
+        self.assertEqual(context_bins_for_max_len(8192, crop)[-1], 8000)
+        self.assertIn(32000, context_bins_for_max_len(32768, crop))
+        self.assertIn(24000, context_bins_for_max_len(32768, crop))
+        self.assertEqual(story_tokens_for_max_len(8192, bins=crop), 8000)
+        self.assertEqual(story_tokens_for_max_len(32768, bins=crop), 16000)
         self.assertEqual(needle_window_tokens(20480), 20480)
         self.assertEqual(needle_window_tokens(20480, cap=32768), 20480)
         self.assertEqual(needle_window_tokens(20480, cap=8192), 8192)
-        qwen_bins = context_bins_for_max_len(20480)
+        qwen_bins = context_bins_for_max_len(20480, crop)
         self.assertIn(16000, qwen_bins)
         self.assertNotIn(24000, qwen_bins)
         self.assertNotIn(32000, qwen_bins)
-        self.assertEqual(story_tokens_for_max_len(20480), 16000)
+        self.assertEqual(story_tokens_for_max_len(20480, bins=crop), 16000)
         self.assertEqual(
             parse_kv_cache_tokens(
                 "KV pool: 1.09 GiB (20480 tokens, last-W spec)\n"
@@ -336,10 +532,6 @@ class NeedleHaystackTests(unittest.TestCase):
             ]
         )
         self.assertFalse(any(item.get("start_fail") for item in heat))
-        cands = first_recall_candidates(1.09, cap=13.65)
-        self.assertGreaterEqual(cands[0], 2.0)
-        self.assertLess(cands[-1], 13.65)
-        self.assertNotEqual(cands, [4.0])
         self.assertTrue(tic_pool_smaller_than_fill(1.09, 13.65))
         self.assertTrue(tic_pool_smaller_than_fill(3.5, 10.0))
         self.assertFalse(tic_pool_smaller_than_fill(13.0, 13.65))
@@ -365,7 +557,8 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertIn("scrape GPU KV cache size", steps)
         self.assertIn("NIAH_MAX_MODEL_LEN", steps)
         self.assertIn("do not shrink the window", steps)
-        self.assertIn("first recall", steps)
+        self.assertNotIn("first recall", steps)
+        self.assertIn("no extra KV-size grids", steps)
         self.assertIn("start-fail", steps)
         self.assertIn("any model", steps)
         self.assertNotIn("4.00", steps)
@@ -400,15 +593,11 @@ class NeedleHaystackTests(unittest.TestCase):
                 reserved_gib=1.09,
             )
         )
-        self.assertIn("| **TIC** | Fixed | 1.09 | yes | yes | yes |", table)
-        self.assertIn(
-            "| **Baseline** | Same size as TIC | 1.09 | no | no | no |",
-            table,
-        )
-        self.assertIn("| **Baseline** | Larger KV | 2.18 | yes | yes | yes |", table)
-        self.assertIn("Started without OOM", table)
-        self.assertNotIn("Rejected or OOM", table)
-        self.assertIn("Default fill", table)
+        self.assertNotIn("| **TIC** | Fixed |", table)
+        self.assertNotIn("Fact retrieved (needle)", table)
+        self.assertNotIn("Same size as TIC", table)
+        self.assertNotIn("Larger KV", table)
+        self.assertNotIn("Started without OOM", table)
         self.assertNotIn("1.75", table)
         self.assertNotIn("Needle compare is", table)
         self.assertNotIn("overflow to host memory", table)
@@ -441,7 +630,8 @@ class NeedleHaystackTests(unittest.TestCase):
                 reserved_gib=1.0934,
             )
         )
-        self.assertIn("| **Baseline** | Same size as TIC | 1.09 | no | no | no |", snapped)
+        self.assertIn("The Baseline serve would not start at 1.09 GiB.", snapped)
+        self.assertNotIn("| **Baseline** | Default fill |", snapped)
         self.assertNotIn("1.0934", snapped)
         self.assertIn("The Baseline serve would not start at 1.09 GiB.", snapped)
         honest = "\n".join(
@@ -472,11 +662,8 @@ class NeedleHaystackTests(unittest.TestCase):
                 reserved_gib=0.4882,
             )
         )
-        self.assertIn("| **TIC** | Fixed | 0.25 | yes | yes | yes |", honest)
-        self.assertIn(
-            "| **Baseline** | Same size as TIC | 0.25 | yes | yes | yes |",
-            honest,
-        )
+        self.assertNotIn("| **TIC** | Fixed |", honest)
+        self.assertNotIn("| **Baseline** | Default fill |", honest)
         self.assertNotIn("0.4882", honest)
         self.assertNotIn("Larger KV", honest)
         self.assertNotIn("would not start at 0.49", honest)
@@ -548,6 +735,8 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertIn("same lock and the same window", out)
         self.assertIn("fill scrape and compare", out)
         self.assertIn("same-size start or start-fail", out)
+        self.assertNotIn("double-until-recall", out)
+        self.assertNotIn("first-recall", out)
         self.assertNotIn("max_num_seqs=1", out)
         self.assertNotIn("dest_gib", out)
         self.assertNotIn("dest-from-live", out)

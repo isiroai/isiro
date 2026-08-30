@@ -57,38 +57,34 @@ benchmarks/run_ab.sh {model} --graph-off
 
 ## Output
 
-The report includes needle-in-a-haystack (fact retrieval by KV cache) and
+The report includes needle-in-a-haystack (fact retrieval by context length) and
 `vllm bench serve` (tok/s, ITL). Plot deps: `benchmarks/requirements-plot.txt`.
 
-Harness writes a timestamped copy (gitignored):
+Harness writes a timestamped report directory (gitignored):
 
-`benchmarks/{model}/{system_id}-report-<UTC>.md`
+`benchmarks/{model}/{system_id}-report-<UTC>/`
 
-The published snapshot (tracked) is:
+That folder holds `report.md` and the PNGs below. The published snapshot (tracked) is:
 
-`benchmarks/{model}/{system_id}-report.md`
+`benchmarks/{model}/{system_id}-report/`
+
+A made-up illustration of that layout is
+`benchmarks/qwen2.5-7b-instruct/rtx-5090-report_mock/`.
 
 Logs and other run artifacts are under gitignored `benchmarks/scratch/`.
 
 ### Figures this command writes
 
-`benchmarks/run_ab.sh {model}` (Graph ON default) writes one PNG:
+`benchmarks/run_ab.sh {model}` (Graph ON default) writes **two PNGs**:
 
-1. **Needle-in-a-haystack heatmap** (seaborn). X is context tokens. Y is needle depth %. Color is recall. One panel per KV size that started, typically:
-   - TIC product KV pool
-   - Baseline same size as TIC (or a start-fail note if that serve does not start)
-   - Baseline default fill (`gpu_memory_utilization`)
-   - Baseline first-recall size, if the double-until-recall sweep finds a distinct size
+1. `needle-haystack.png`: multi-needle recall heatmap. X is context tokens (20 log-spaced bins from 1k to `NIAH_MAX_MODEL_LEN`). Y is needle depth % (EvalScope 11.11% steps). Color is recall fraction. Two panels: TIC product KV, Baseline default fill.
+2. `vram-vs-context.png`: VRAM usage vs context T (reported non-KV plus vendor KV occupancy). Dashed is Baseline non-KV plus reserved pool. Dotted usable VRAM. Light red above usable VRAM; darker red above GPU HBM. An X on the GPU HBM line is OOM at that context. Reported non-KV plus pool occupancy, not a process nvidia-smi meter.
 
-Scratch copy: `benchmarks/scratch/{UTC}-{system_id}/needle_haystack.png`
+Scratch copies live under `benchmarks/scratch/{UTC}-{system_id}/`.
 
-Report copy (next to the markdown): `benchmarks/{model}/{system_id}-report-<UTC>-needle-haystack.png`
+Tok/s, ITL, GPU memory, and equal-batch are markdown tables, not extra PNGs. CUDA graphs ON is the timed serve mode for those tables. Needle probes use eager serve so long-context starts.
 
-Tok/s, ITL, GPU memory, and equal-batch are markdown tables in that report, not extra PNGs. CUDA graphs ON is the timed serve mode for those tables (not a figure). Needle probes use eager serve so long-context starts.
-
-`--graph-off` is a second launch: same heatmap if needle already ran in that scratch dir, plus eager tok/s tables. It does not draw a second heatmap.
-
-Stock vLLM Graph 1a / 1b / 2, long-context ITL, and TCO are not produced by `run_ab.sh`. Those need a filled `stock_vllm_story.json` in the run dir. See below.
+`--graph-off` is a second launch: same figures if needle already ran in that scratch dir, plus eager tok/s tables. It does not draw extra PNGs.
 
 ## Methodology
 
@@ -99,23 +95,18 @@ TIC uses the product `isiro serve` default, including isiro-fa (CUSTOM vendor-fa
 The report records correctness, GPU memory, capacity, generation throughput
 and latency under that matched setup.
 
-## Stock vLLM story sweeps (optional)
+## Optional story JSON
 
-Commercial A/B vs vanilla vLLM (not a solo ISIRO table):
-
-1. Graph 1: stacked VRAM vs context: packed weights, vendor KV pool,
-   TokenID archive (4 B/token), persist pages, nvidia-smi. Who OOMs.
-2. Graph 2: output tok/s vs concurrency.
-3. Long-context ITL at concurrency 1 (does tok/s drop with T).
-4. Optional TCO scatter: derived from Graph 2 tok/s and a documented GPU-hour price.
-
-Put measured points in `stock_vllm_story.json` in the run dir (schema
-`isiro-benchmark-stock-vllm-story-v1`). `generate_report.py` renders that
-file when present. Template:
+Default `run_ab.sh` already draws VRAM usage vs context from needle
+serves (reported non-KV plus pool occupancy). Extra plots (stacked composition, tok/s vs concurrency, long-context
+ITL, TCO) are optional. Put measured points in `stock_vllm_story.json` in the
+run dir (schema `isiro-benchmark-stock-vllm-story-v1`). `generate_report.py`
+renders that file when present. Template:
 
 ```bash
 python3 benchmarks/scripts/stock_vllm_story.py --print-empty
 ```
 
-Do not fill 70B / 8xH100 template cells without that SKU. Do not treat
-4 B/token vs ~56 KiB KV as live pool VRAM savings.
+TCO is derived from tok/s and a GPU-hour price you supply. It is not a
+meter. Do not fill 70B / 8xH100 template cells without that SKU. Do not
+treat 4 B/token vs ~56 KiB KV as live pool VRAM savings.

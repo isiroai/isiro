@@ -55,12 +55,12 @@ def vram_stack_bytes(
     }
 
 
-def leftover_fill_smi_is_failure(
+def util_fill_smi_is_failure(
     *,
     tic_smi_bytes: int | float,
     dest_lock_ready_ceiling_bytes: int | float,
 ) -> bool:
-    """True when TIC smi looks like util leftover fill, not dest lock."""
+    """True when TIC smi looks like util fill, not dest lock."""
     return int(tic_smi_bytes) > int(dest_lock_ready_ceiling_bytes)
 
 
@@ -95,7 +95,7 @@ def empty_story() -> dict[str, Any]:
         "notes": (
             "Fill points from matched A/B runs. Do not paste 70B/8xH100 "
             "template cells. Weight ~29% is a separate measured footprint. "
-            "Do not leftover-fill the util ceiling. That series is failure, "
+            "Do not fill the util ceiling. That series is failure, "
             "not dest lock."
         ),
         "graph1_vram_vs_context": {"points": []},
@@ -155,7 +155,7 @@ def render_story_markdown(doc: dict[str, Any]) -> list[str]:
         "is a band). Graph 1b is derived composition: TIC weights + last-W "
         "lock + TokenID archive + persist. Unread T is not stored as KV. "
         "4 B vs ~56 KiB is inactive KV vs ids (~14,336x), not a 14,000x cut "
-        "of live smi. Util leftover fill is a failure series, not dest lock.",
+        "of live smi. Util fill is a failure series, not dest lock.",
         "",
     ]
     if errors:
@@ -179,7 +179,7 @@ def render_story_markdown(doc: dict[str, Any]) -> list[str]:
                 "### Graph 1a. Measured nvidia-smi vs context",
                 "",
                 "Vanilla climbs with T. TIC stays near paid READY if the dest "
-                "lock bound. A TIC line that tracks leftover fill is failure.",
+                "lock bound. A TIC line that tracks util fill is failure.",
                 "",
                 "| Context | B KV | T weights | T KV pool | T ids | T persist | "
                 "B smi | T smi | OOM |",

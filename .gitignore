@@ -33,7 +33,8 @@ benchmarks/*/common.env*
 !benchmarks/*/common.env.example
 benchmarks/*/private/
 # Timestamped harness reports (local runs). Published snapshots are
-# benchmarks/{model}/{system_id}-report.md only.
+# benchmarks/{model}/{system_id}-report/ (directory).
+benchmarks/**/*-report-*T*Z/
 benchmarks/**/*-report-*T*Z.md
 *_mock.md
 *_mock.png

@@ -235,7 +235,7 @@ def _section_intro(summary: dict[str, Any]) -> list[str]:
         "- `vllm bench serve` (tok/s, ITL)",
         *(
             [
-                "- Needle-in-a-haystack (single fact; Kamradt / RULER style) "
+                "- Needle-in-a-haystack (multi-needle; Kamradt / RULER / EvalScope-style) "
                 "for long-context recall",
             ]
             if (summary.get("needle_haystack") or {}).get("rows")
@@ -586,6 +586,10 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
         if haystack_rows:
             kwargs["heading"] = ""
         lines.extend(report_lines(str(haystack["image"]), **kwargs))
+    if haystack and haystack.get("vram_image"):
+        from needle_haystack import vram_report_lines
+
+        lines.extend(vram_report_lines(str(haystack["vram_image"])))
     lines.extend(
         [
             "## Serve at recall-matched KV cache",
@@ -776,10 +780,11 @@ def write_report(run_dir: Path, output: Path) -> Path:
         _stage_sanitized_tree(run_dir, temp)
         haystack_jsonl = run_dir / "needle_haystack.jsonl"
         if haystack_jsonl.is_file():
-            from needle_haystack import load_jsonl, render_heatmap
+            from needle_haystack import load_jsonl, render_heatmap, render_vram_vs_context
 
             rows = load_jsonl(haystack_jsonl)
-            image = output.parent / f"{output.stem}-needle-haystack.png"
+            image = output.parent / "needle-haystack.png"
+            vram = output.parent / "vram-vs-context.png"
             sizes_path = run_dir / "niah_sizes.json"
             max_len = None
             if sizes_path.is_file():
@@ -787,14 +792,29 @@ def write_report(run_dir: Path, output: Path) -> Path:
                 raw_len = sizes.get("max_model_len")
                 if isinstance(raw_len, (int, float)) and int(raw_len) > 0:
                     max_len = int(raw_len)
-            render_heatmap(rows, image, max_model_len=max_len)
+            gpu = ""
+            model = ""
             summary_path = temp / "summary.json"
+            env_path = temp / "environment.json"
+            if summary_path.is_file():
+                summary = load_json(summary_path)
+                model = str(summary.get("model") or "")
+            if env_path.is_file():
+                env = load_json(env_path)
+                gpu = str(env.get("gpu_model") or "")
+            render_heatmap(
+                rows, image, max_model_len=max_len, gpu=gpu, model=model
+            )
+            render_vram_vs_context(
+                rows, vram, max_model_len=max_len, gpu=gpu, model=model
+            )
             if summary_path.is_file():
                 summary = load_json(summary_path)
                 summary["needle_haystack"] = {
                     "rows": True,
                     "table_rows": rows,
                     "image": image.name,
+                    "vram_image": vram.name,
                 }
                 write_json(summary_path, summary)
         output.parent.mkdir(parents=True, exist_ok=True)

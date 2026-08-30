@@ -17,8 +17,8 @@ for arg in "$@"; do
     --dry-run) DRY_RUN=1 ;;
     -h|--help)
       echo "usage: needle phase via benchmarks/run_ab.sh {model} (or this script)" >&2
-      echo "  Discovers TIC KV GiB, Baseline same size, first recall, and default fill." >&2
-      echo "  Writes JSONL + heatmap under the shared run directory." >&2
+      echo "  Discovers TIC KV GiB, Baseline same-size start-fail, and default fill." >&2
+      echo "  Writes JSONL + heatmap + VRAM figure under the shared run directory." >&2
       exit 0
       ;;
     *) POSITIONAL+=("${arg}") ;;
@@ -83,9 +83,9 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "Needle bins follow NIAH_MAX_MODEL_LEN. Do not crop them to the pool. Do not grow TIC to 1.75."
   echo "Baseline same-size uses the same lock and the same window. Record start-fail only if the serve does not start (not a fixed 4.00)."
   echo "Default fill scrapes GPU KV cache size at gpu_memory_utilization=${SERVE_GPU_MEMORY_UTILIZATION}."
-  echo "Serve order: TIC scrape, fill scrape and compare, fill grid, TIC grid, same-size start or start-fail, double-until-recall (full grid on hit only)."
+  echo "Serve order: TIC scrape, fill scrape and compare, fill grid, TIC grid, same-size start or start-fail (no extra KV-size grids)."
   echo "TIC ISIRO_ATTN: ${ISIRO_ATTN:-unset (product isiro_fa)}"
-  echo "Figure: needle-in-a-haystack heatmap PNG (TIC KV, Baseline same size or start-fail, Baseline fill, first-recall if distinct)"
+  echo "Figures: needle-haystack.png and vram-vs-context.png (TIC product KV + Baseline default fill)"
   exit 0
 fi
 
@@ -132,6 +132,7 @@ TIC_BENCH_BUNDLE="${RUN_DIR}/tic-bundle"
 JSONL="${RUN_DIR}/needle_haystack.jsonl"
 SCOUT="${RUN_DIR}/scout.jsonl"
 PNG="${RUN_DIR}/needle_haystack.png"
+VRAM_PNG="${RUN_DIR}/vram-vs-context.png"
 BASELINE_CONTAINER="isiro-niah-baseline-${API_PORT}"
 TIC_PID=""
 mkdir -p "${LOG_DIR}" "${TIC_BENCH_BUNDLE}"
@@ -206,6 +207,10 @@ scrape_kv_gib() {
 
 scrape_kv_tokens() {
   python3 "${NIAH_PY}" --parse-log-tokens "$1"
+}
+
+scrape_non_kv_bytes() {
+  python3 "${NIAH_PY}" --parse-log-non-kv "$1"
 }
 
 # TIC product serve prints "estimated maximum model length" on a successful
@@ -332,12 +337,22 @@ record_start_fail() {
 probe_full() {
   local panel="$1"
   local gib="$2"
+  local log="${3:-}"
+  local tokens="0"
+  local non_kv="0"
+  if [[ -n "${log}" && -f "${log}" ]]; then
+    tokens="$(scrape_kv_tokens "${log}")"
+    non_kv="$(scrape_non_kv_bytes "${log}")"
+  fi
   python3 "${NIAH_PY}" \
     --probe-url "${API_URL}" \
     --model "${MODEL_ID}" \
     --panel "${panel}" \
     --kv-cache-gib "${gib}" \
     --max-model-len "${NIAH_MAX_MODEL_LEN}" \
+    --pool-tokens "${tokens:-0}" \
+    --non-kv-bytes "${non_kv:-0}" \
+    --gpu-memory-utilization "${SERVE_GPU_MEMORY_UTILIZATION}" \
     --jsonl "${JSONL}"
 }
 
@@ -458,80 +473,35 @@ else
   FILL_GIB="$(scrape_kv_gib "${FILL_LOG}")"
   echo "Baseline default fill: ${FILL_GIB} GiB (scraped)" >&2
   require_tic_smaller_than_fill "${TIC_GIB}" "${FILL_GIB}"
-  probe_full vanilla "${FILL_GIB}"
+  probe_full vanilla "${FILL_GIB}" "${FILL_LOG}"
   stop_all
 fi
 
 start_tic "${TIC_LOG}"
-probe_full tic "${TIC_GIB}"
+probe_full tic "${TIC_GIB}" "${TIC_LOG}"
 stop_all
 
 TIC_BYTES="$(python3 -c "import sys; sys.path.insert(0, '${HERE}'); from needle_haystack import gib_to_bytes; print(gib_to_bytes(float('${TIC_GIB}')))")"
 SAME_LOG="${LOG_DIR}/baseline-same-serve.log"
-SAME_STARTED=0
 if start_baseline "${SAME_LOG}" "${TIC_BYTES}"; then
   SAME_GIB="$(scrape_kv_gib "${SAME_LOG}")"
-  echo "Baseline same size as TIC: ${SAME_GIB} GiB (scraped)" >&2
-  probe_full vanilla "${SAME_GIB}"
-  SAME_STARTED=1
+  echo "Baseline same size as TIC started at ${SAME_GIB} GiB; no extra grid" >&2
+  stop_all
 else
   SAME_GIB="${TIC_GIB}"
   echo "Baseline would not start at ${TIC_GIB} GiB (same size as TIC)" >&2
   record_start_fail "${TIC_GIB}"
   stop_all
 fi
-if [[ "${SAME_STARTED}" -eq 1 ]] && jsonl_story_hit "${SAME_GIB}"; then
-  FIRST_RECALL_GIB="${SAME_GIB}"
-  echo "First recall is same size as TIC ${SAME_GIB} GiB" >&2
-  stop_all
-else
-  stop_all
-  FIRST_RECALL_GIB=""
-  mapfile -t CANDIDATES < <(
-    python3 -c "
-import sys
-sys.path.insert(0, '${HERE}')
-from needle_haystack import first_recall_candidates
-for x in first_recall_candidates(float('${TIC_GIB}'), cap=float('${FILL_GIB}')):
-    print(f'{x:.2f}')
-"
-  )
-  for cand in "${CANDIDATES[@]}"; do
-    CAND_BYTES="$(python3 -c "import sys; sys.path.insert(0, '${HERE}'); from needle_haystack import gib_to_bytes; print(gib_to_bytes(float('${cand}')))")"
-    CAND_LOG="${LOG_DIR}/baseline-sweep-${cand}.log"
-    echo "Baseline sweep lock ${cand} GiB" >&2
-    if ! start_baseline "${CAND_LOG}" "${CAND_BYTES}"; then
-      echo "Baseline would not start at ${cand} GiB; continue sweep" >&2
-      record_start_fail "${cand}"
-      stop_all
-      continue
-    fi
-    MEAS="$(scrape_kv_gib "${CAND_LOG}")"
-    probe_story vanilla "${MEAS}"
-    if story_hit "${MEAS}"; then
-      FIRST_RECALL_GIB="${MEAS}"
-      echo "First recall: ${FIRST_RECALL_GIB} GiB (scraped)" >&2
-      probe_full vanilla "${MEAS}"
-      stop_all
-      break
-    fi
-    stop_all
-  done
-  if [[ -z "${FIRST_RECALL_GIB}" ]]; then
-    FIRST_RECALL_GIB="${FILL_GIB}"
-    echo "Sweep did not hit; first recall is default fill ${FILL_GIB} GiB" >&2
-  fi
-fi
 
-"${PLOT_PY}" "${NIAH_PY}" --jsonl "${JSONL}" --out "${PNG}"
-python3 - "${RUN_DIR}/niah_sizes.json" "${TIC_GIB}" "${SAME_GIB}" "${FIRST_RECALL_GIB}" "${FILL_GIB}" "${NIAH_MAX_MODEL_LEN}" <<'PY'
+"${PLOT_PY}" "${NIAH_PY}" --jsonl "${JSONL}" --out "${PNG}" --vram-out "${VRAM_PNG}"
+python3 - "${RUN_DIR}/niah_sizes.json" "${TIC_GIB}" "${SAME_GIB}" "${FILL_GIB}" "${NIAH_MAX_MODEL_LEN}" <<'PY'
 import json, sys
-path, tic, same, first, fill, max_len = sys.argv[1:7]
+path, tic, same, fill, max_len = sys.argv[1:6]
 json.dump(
     {
         "tic_gib": float(tic),
         "baseline_same_gib": float(same),
-        "baseline_first_recall_gib": float(first),
         "baseline_fill_gib": float(fill),
         "max_num_seqs": "product",
         "max_model_len": int(max_len),
@@ -544,5 +514,6 @@ print(path)
 PY
 echo "JSONL ${JSONL}" >&2
 echo "heatmap ${PNG}" >&2
+echo "vram ${VRAM_PNG}" >&2
 echo "sizes ${RUN_DIR}/niah_sizes.json" >&2
 echo "needle phase done" >&2

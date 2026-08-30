@@ -1004,16 +1004,16 @@ class BenchmarkTests(unittest.TestCase):
                 repo
                 / "benchmarks"
                 / summary["model"].lower()
-                / f"{summary['system_id']}-report-20260811T120000Z.md"
+                / f"{summary['system_id']}-report-20260811T120000Z"
+                / "report.md"
             )
             write_report(run, dest)
             self.assertTrue(dest.is_file())
             names = {p.name for p in dest.parent.iterdir()}
-            self.assertEqual(names, {"rtx-5090-report-20260811T120000Z.md"})
-            self.assertFalse((dest.parent / "report.md").exists())
+            self.assertEqual(names, {"report.md"})
+            self.assertFalse((dest.parent / "summary.json").exists())
             self.assertFalse((dest.parent / "tic").exists())
             self.assertFalse((dest.parent / "isiro").exists())
-            self.assertFalse((dest.parent / "summary.json").exists())
 
     def test_public_methodology_omits_research_claims(self) -> None:
         text = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -1026,9 +1026,9 @@ class BenchmarkTests(unittest.TestCase):
         self.assertNotIn("Do not scale", text)
         self.assertNotIn("upstream", text)
         self.assertIn("vllm bench serve", text)
-        self.assertIn("{model}/{system_id}-report-<UTC>.md", text)
-        self.assertIn("benchmarks/{model}/{system_id}-report-<UTC>.md", text)
-        self.assertIn("benchmarks/{model}/{system_id}-report.md", text)
+        self.assertIn("{model}/{system_id}-report-<UTC>/", text)
+        self.assertIn("benchmarks/{model}/{system_id}-report-<UTC>/", text)
+        self.assertIn("benchmarks/{model}/{system_id}-report/", text)
         self.assertNotIn("benchmarks/scratch/<run-id>/report.md", text)
         self.assertIn("benchmarks/scratch/", text)
         self.assertNotIn("Rename to `report.md`", text)
@@ -1291,18 +1291,18 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("Graph 1a", md1)
         from stock_vllm_story import (
             graph1_composition_row,
-            leftover_fill_smi_is_failure,
+            util_fill_smi_is_failure,
             inactive_kv_bytes,
         )
 
         self.assertTrue(
-            leftover_fill_smi_is_failure(
+            util_fill_smi_is_failure(
                 tic_smi_bytes=31_000_000_000,
                 dest_lock_ready_ceiling_bytes=28_000 * 1024 * 1024,
             )
         )
         self.assertFalse(
-            leftover_fill_smi_is_failure(
+            util_fill_smi_is_failure(
                 tic_smi_bytes=14_000_000_000,
                 dest_lock_ready_ceiling_bytes=28_000 * 1024 * 1024,
             )

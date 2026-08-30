@@ -145,8 +145,9 @@ def _write_model_report(
     run_dir: Path,
 ) -> Path:
     stamp = _report_stamp(run_dir, system_id)
-    report_out = model_dir / f"{system_id}-report-{stamp}.md"
-    report_out.parent.mkdir(parents=True, exist_ok=True)
+    report_dir = model_dir / f"{system_id}-report-{stamp}"
+    report_out = report_dir / "report.md"
+    report_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         _report_python(),
         str(root / "benchmarks" / "scripts" / "generate_report.py"),
