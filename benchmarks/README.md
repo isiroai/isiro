@@ -70,9 +70,31 @@ The published snapshot (tracked) is:
 
 Logs and other run artifacts are under gitignored `benchmarks/scratch/`.
 
+### Figures this command writes
+
+`benchmarks/run_ab.sh {model}` (Graph ON default) writes one PNG:
+
+1. **Needle-in-a-haystack heatmap** (seaborn). X is context tokens. Y is needle depth %. Color is recall. One panel per KV size that started, typically:
+   - TIC product KV pool
+   - Baseline same size as TIC (or a start-fail note if that serve does not start)
+   - Baseline default fill (`gpu_memory_utilization`)
+   - Baseline first-recall size, if the double-until-recall sweep finds a distinct size
+
+Scratch copy: `benchmarks/scratch/{UTC}-{system_id}/needle_haystack.png`
+
+Report copy (next to the markdown): `benchmarks/{model}/{system_id}-report-<UTC>-needle-haystack.png`
+
+Tok/s, ITL, GPU memory, and equal-batch are markdown tables in that report, not extra PNGs. CUDA graphs ON is the timed serve mode for those tables (not a figure). Needle probes use eager serve so long-context starts.
+
+`--graph-off` is a second launch: same heatmap if needle already ran in that scratch dir, plus eager tok/s tables. It does not draw a second heatmap.
+
+Stock vLLM Graph 1a / 1b / 2, long-context ITL, and TCO are not produced by `run_ab.sh`. Those need a filled `stock_vllm_story.json` in the run dir. See below.
+
 ## Methodology
 
 Each run compares vLLM (**baseline**) to ISIRO (**TIC** using vLLM target) on the same host with matched vLLM version, BF16, memory util, max len, TP, graph mode, seed, warmups, prompts, and I/O lengths. Fresh server per side.
+
+TIC uses the product `isiro serve` default, including isiro-fa (CUSTOM vendor-family drop-in when `ISIRO_ATTN` is unset). The harness clears an inherited `ISIRO_ATTN=0` so a parent shell cannot skip that default. Pin only with `ISIRO_BENCH_ISIRO_ATTN` if you need to override. Attention backend is recorded in serve config JSON; it is not a fairness key (baseline FLASH_ATTN vs TIC CUSTOM is expected).
 
 The report records correctness, GPU memory, capacity, generation throughput
 and latency under that matched setup.

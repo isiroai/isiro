@@ -95,6 +95,14 @@ fi
 # shellcheck disable=SC1090
 source "${CONFIG}"
 
+# Public TIC vs vLLM must not inherit a parent ISIRO_ATTN=0 (that skips the
+# product CUSTOM drop-in). Pin only via ISIRO_BENCH_ISIRO_ATTN.
+if [[ -n "${ISIRO_BENCH_ISIRO_ATTN:-}" ]]; then
+  export ISIRO_ATTN="${ISIRO_BENCH_ISIRO_ATTN}"
+else
+  unset ISIRO_ATTN || true
+fi
+
 : "${MODEL_SLUG:?set MODEL_SLUG (launch_ab.py sets it to the model directory name)}"
 : "${BASELINE_MODEL_DIR:?set BASELINE_MODEL_DIR in common.env}"
 : "${TIC_MODEL_DIR:?set TIC_MODEL_DIR in common.env}"
@@ -489,6 +497,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
     echo "Equal-batch: matched max_num_seqs=${SERVE_MAX_NUM_SEQS} concurrency=${BENCH_MAX_CONCURRENCY}"
     echo "  (eng transparency; capacity benefit not active)"
   fi
+  echo "TIC ISIRO_ATTN: ${ISIRO_ATTN:-unset (product isiro_fa)}"
   echo "Baseline server:"
   print_command "${BASELINE_SERVE[@]}"
   echo "TIC verification:"
@@ -750,9 +759,13 @@ write_effective_config() {
     "${LOG_DIR}/${variant}-serve.log" \
     "${RUN_DIR}/${variant}_serve_config.json" \
     "${yaml_path}" \
-    "${SERVE_ENFORCE_EAGER}" <<'PY'
+    "${SERVE_ENFORCE_EAGER}" \
+    "${BENCH_ROOT}/scripts" <<'PY'
 import json, re, sys
 from pathlib import Path
+
+sys.path.insert(0, sys.argv[5])
+from attention_ab import parse_serve_attention, requested_isiro_attn
 
 text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 yaml_path = Path(sys.argv[3]) if sys.argv[3] else None
@@ -791,6 +804,11 @@ doc = {
     "flashinfer_autotune": None,
     "sources": {},
 }
+doc.update(parse_serve_attention(text))
+doc["isiro_attn"] = requested_isiro_attn()
+if doc.get("attention_backend") is not None:
+    doc["sources"]["attention_backend"] = "server_log"
+doc["sources"]["isiro_attn"] = "env"
 pc_flag = flag(r"enable_prefix_caching=(True|False)")
 if pc_flag is not None:
     doc["prefix_caching"] = as_bool(pc_flag)

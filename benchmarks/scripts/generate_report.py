@@ -646,6 +646,25 @@ def _section_g(
     ]
     if reused:
         lines.append(f"| Baseline reused from | `{reused}` |")
+    attn = (
+        summary.get("attention")
+        if isinstance(summary.get("attention"), dict)
+        else {}
+    )
+    tic_attn = attn.get("tic") if isinstance(attn.get("tic"), dict) else {}
+    base_attn = (
+        attn.get("baseline") if isinstance(attn.get("baseline"), dict) else {}
+    )
+    if tic_attn.get("attention_backend") or tic_attn.get("isiro_attn"):
+        lines.append(
+            "| TIC attention | `"
+            f"{tic_attn.get('attention_backend')}` "
+            f"(`ISIRO_ATTN` {tic_attn.get('isiro_attn')}) |"
+        )
+    if base_attn.get("attention_backend"):
+        lines.append(
+            f"| Baseline attention | `{base_attn.get('attention_backend')}` |"
+        )
     lines.extend(
         [
             "",

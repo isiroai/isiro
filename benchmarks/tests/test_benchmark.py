@@ -48,6 +48,7 @@ from compare_ab import (  # noqa: E402
     build_equal_batch_block,
     fold_serve_output_match,
 )
+from attention_ab import parse_serve_attention  # noqa: E402
 from generate_report import pct_of_baseline, render, sanitize, write_report  # noqa: E402
 from launch_ab import (  # noqa: E402
     resolve_system_id,
@@ -372,6 +373,29 @@ class BenchmarkTests(unittest.TestCase):
             fairness_mismatches(baseline, tic, baseline_env, tic_env), []
         )
 
+    def test_fairness_ignores_attention_backend(self) -> None:
+        baseline = profile("baseline", "ttft-128", 128, 64)
+        tic = profile("isiro", "ttft-128", 128, 64)
+        baseline["serve_config"]["attention_backend"] = "FLASH_ATTN"
+        baseline["serve_config"]["isiro_attn"] = "unset"
+        tic["serve_config"]["attention_backend"] = "CUSTOM"
+        tic["serve_config"]["isiro_attn"] = "unset"
+        env = {
+            "gpu_model": "RTX 5090",
+            "gpu_count": 1,
+            "driver_version": "1",
+            "cuda_version": "1",
+            "vllm_version": "0.25.1",
+        }
+        self.assertEqual(fairness_mismatches(baseline, tic, env, env), [])
+
+    def test_parse_serve_attention(self) -> None:
+        parsed = parse_serve_attention(
+            "Using AttentionBackendEnum.CUSTOM\n"
+            "ready: CUSTOM vendor-family drop-in\n"
+        )
+        self.assertEqual(parsed["attention_backend"], "CUSTOM")
+
     def test_fairness_equal_batch_requires_matched_concurrency(self) -> None:
         baseline = profile("baseline", "generation-32-256", 32, 256)
         tic = profile("isiro", "generation-32-256", 32, 256)
@@ -636,6 +660,20 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("ISIRO_SERVE_CUDA_GRAPHS", report)
             self.assertNotIn("Fairness gate", report)
             self.assertIn("Fairness check", report)
+
+    def test_report_records_product_attention(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            summary = _sample_summary(ttft_tic_slower=True)
+            summary["attention"] = {
+                "baseline": {"attention_backend": "FLASH_ATTN", "isiro_attn": None},
+                "tic": {"attention_backend": "CUSTOM", "isiro_attn": "unset"},
+            }
+            _write_run(run, summary)
+            report = render(run)
+            self.assertIn("| TIC attention | `CUSTOM` (`ISIRO_ATTN` unset) |", report)
+            self.assertIn("| Baseline attention | `FLASH_ATTN` |", report)
+            self.assertNotIn("## F. Same TIC", report)
 
     def test_report_publish(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

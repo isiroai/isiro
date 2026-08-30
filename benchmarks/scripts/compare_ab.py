@@ -538,6 +538,19 @@ def main() -> int:
     # Optional greedy serve output match (token IDs), captured while servers are up.
     fold_serve_output_match(args.run_dir, summary["correctness"])
 
+    attention: dict[str, Any] = {}
+    for label, mapping in (("baseline", baseline_profiles), ("tic", tic_profiles)):
+        if not mapping:
+            continue
+        _, doc = next(iter(mapping.values()))
+        cfg = doc.get("serve_config") or {}
+        attention[label] = {
+            "attention_backend": cfg.get("attention_backend"),
+            "isiro_attn": cfg.get("isiro_attn"),
+        }
+    if attention:
+        summary["attention"] = attention
+
     summary["fairness"] = {"passed": not errors, "mismatches": errors}
     environment = dict(baseline_env)
     environment["variant_runtime"] = {

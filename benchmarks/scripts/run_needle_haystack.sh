@@ -43,6 +43,13 @@ fi
 # shellcheck disable=SC1090
 source "${CONFIG}"
 
+# Same pin as the tok/s harness: product isiro-fa unless ISIRO_BENCH_ISIRO_ATTN.
+if [[ -n "${ISIRO_BENCH_ISIRO_ATTN:-}" ]]; then
+  export ISIRO_ATTN="${ISIRO_BENCH_ISIRO_ATTN}"
+else
+  unset ISIRO_ATTN || true
+fi
+
 : "${BASELINE_MODEL_DIR:?set BASELINE_MODEL_DIR in common.env}"
 : "${TIC_MODEL_DIR:?set TIC_MODEL_DIR in common.env}"
 : "${MODEL_ID:?set MODEL_ID in common.env}"
@@ -77,6 +84,8 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "Baseline same-size uses the same lock and the same window. Record start-fail only if the serve does not start (not a fixed 4.00)."
   echo "Default fill scrapes GPU KV cache size at gpu_memory_utilization=${SERVE_GPU_MEMORY_UTILIZATION}."
   echo "Serve order: TIC scrape, fill scrape and compare, fill grid, TIC grid, same-size start or start-fail, double-until-recall (full grid on hit only)."
+  echo "TIC ISIRO_ATTN: ${ISIRO_ATTN:-unset (product isiro_fa)}"
+  echo "Figure: needle-in-a-haystack heatmap PNG (TIC KV, Baseline same size or start-fail, Baseline fill, first-recall if distinct)"
   exit 0
 fi
 
