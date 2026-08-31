@@ -223,6 +223,8 @@ def _latency_row(
 
 
 def _section_intro(summary: dict[str, Any]) -> list[str]:
+    from needle_haystack import NEEDLE_COUNT
+
     model = str(summary.get("model") or "")
     return [
         f"# ISIRO Benchmark Report: `{model}`",
@@ -239,7 +241,8 @@ def _section_intro(summary: dict[str, Any]) -> list[str]:
         "- `vllm bench serve` (tok/s, ITL)",
         *(
             [
-                "- Needle-in-a-haystack (multi-needle; Kamradt / RULER / EvalScope-style) "
+                "- Needle-in-a-haystack "
+                f"({NEEDLE_COUNT}-needle; Kamradt / RULER / EvalScope-style) "
                 "for long-context recall",
             ]
             if (summary.get("needle_haystack") or {}).get("rows")
@@ -793,6 +796,7 @@ def write_report(run_dir: Path, output: Path) -> Path:
                 if isinstance(raw_len, (int, float)) and int(raw_len) > 0:
                     max_len = int(raw_len)
             gpu = ""
+            gpu_count = None
             model = ""
             summary_path = temp / "summary.json"
             env_path = temp / "environment.json"
@@ -802,11 +806,27 @@ def write_report(run_dir: Path, output: Path) -> Path:
             if env_path.is_file():
                 env = load_json(env_path)
                 gpu = str(env.get("gpu_model") or "")
+                raw_n = env.get("gpu_count")
+                try:
+                    if raw_n is not None and int(raw_n) > 0:
+                        gpu_count = int(raw_n)
+                except (TypeError, ValueError):
+                    gpu_count = None
             render_heatmap(
-                rows, image, max_model_len=max_len, gpu=gpu, model=model
+                rows,
+                image,
+                max_model_len=max_len,
+                gpu=gpu,
+                gpu_count=gpu_count,
+                model=model,
             )
             render_vram_vs_context(
-                rows, vram, max_model_len=max_len, gpu=gpu, model=model
+                rows,
+                vram,
+                max_model_len=max_len,
+                gpu=gpu,
+                gpu_count=gpu_count,
+                model=model,
             )
             if summary_path.is_file():
                 summary = load_json(summary_path)

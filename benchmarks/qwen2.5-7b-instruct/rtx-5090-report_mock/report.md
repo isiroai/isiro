@@ -5,7 +5,7 @@
 Tooling:
 
 - `vllm bench serve` (tok/s, ITL)
-- Needle-in-a-haystack (multi-needle; Kamradt / RULER / EvalScope-style) for long-context recall
+- Needle-in-a-haystack (3-needle; Kamradt / RULER / EvalScope-style) for long-context recall
 
 Compared:
 
@@ -48,11 +48,11 @@ This directory is a mock: tables and figures use invented numbers so you can see
 
 Same long prompt, needles, and question on every setup that starts. The Baseline serve would not start at 1.09 GiB.
 
-X is context tokens. Y is needle depth % (0 = start of prompt, 100 = end). Color is recall. A 0.0 cell at the longest context is OOM, same as the VRAM X.
+X is context tokens. Y is needle depth % (0 = start of prompt, 100 = end). Color is recall. An X in a column is OOM, same as the VRAM figure.
 
-Figure. Fact retrieval by context length (multi-needle haystack).
+Figure. Fact retrieval by context length (3-needle haystack).
 
-![Fact retrieval by context length (multi-needle haystack)](needle-haystack.png)
+![Fact retrieval by context length (3-needle haystack)](needle-haystack.png)
 
 Figure. VRAM usage vs context tokens.
 

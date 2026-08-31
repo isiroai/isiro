@@ -14,7 +14,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 NEEDLE = "The special magic number is 84932017."
 NEEDLES: tuple[str, ...] = (
@@ -45,8 +45,9 @@ CHAT_MAX_TOKENS = 64
 TEMPLATE_SLACK_TOKENS = 160
 # Haystack bin plus needle, question, chat template, and a short reply.
 WINDOW_RESERVE_TOKENS = 1024
+NEEDLE_COUNT = len(NEEDLES)
 FIGURE_TITLE = (
-    "Fact retrieval by context length (multi-needle haystack)"
+    f"Fact retrieval by context length ({NEEDLE_COUNT}-needle haystack)"
 )
 VRAM_TITLE = "VRAM usage vs context"
 VRAM_TAGLINE_AXES_GAP_PT = 16.0
@@ -56,21 +57,32 @@ def figure_tagline(
     rows: Iterable[dict[str, Any]] | None = None,
     *,
     gpu: str = "",
+    gpu_count: int | None = None,
     model: str = "",
 ) -> str:
-    """GPU box and model under the figure title. Empty if both missing."""
+    """GPU box (name x count) and model under the figure title."""
     gpu_s = str(gpu or "").strip()
     model_s = str(model or "").strip()
+    count: int | None = int(gpu_count) if gpu_count else None
     if rows is not None:
         for item in rows:
             if not gpu_s:
                 gpu_s = str(item.get("gpu_model") or "").strip()
+            if count is None:
+                raw_n = item.get("gpu_count")
+                try:
+                    if raw_n is not None and int(raw_n) > 0:
+                        count = int(raw_n)
+                except (TypeError, ValueError):
+                    pass
             if not model_s:
                 model_s = str(
                     item.get("model") or item.get("model_id") or ""
                 ).strip()
             if gpu_s and model_s:
                 break
+    if gpu_s and count is not None and count > 0:
+        gpu_s = f"{gpu_s} x {count}"
     return " | ".join(part for part in (gpu_s, model_s) if part)
 
 
@@ -150,6 +162,56 @@ def prompt_token_budget(
 ) -> int:
     """Hay tokens that still leave room for template and the reply."""
     return max(1, int(max_model_len) - max(0, int(max_tokens)) - max(0, int(slack)))
+
+
+def advertised_max_model_len(source: Any) -> int | None:
+    """Advertised context window from HF config.json. Not safetensors.
+
+    Reads max_position_embeddings. If rope_scaling has
+    original_max_position_embeddings and factor, take the larger of that
+    product and max_position_embeddings. Unwraps text_config.
+    """
+    cfg: Mapping[str, Any] | None = None
+    if isinstance(source, Mapping):
+        cfg = dict(source)
+    else:
+        path = Path(source)
+        if path.is_dir():
+            path = path / "config.json"
+        if not path.is_file():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        cfg = raw
+    text = cfg.get("text_config")
+    if isinstance(text, Mapping):
+        merged = dict(cfg)
+        merged.update(text)
+        cfg = merged
+    candidates: list[int] = []
+    for key in ("max_position_embeddings", "max_sequence_length"):
+        raw_m = cfg.get(key)
+        try:
+            if raw_m is not None and int(raw_m) > 0:
+                candidates.append(int(raw_m))
+        except (TypeError, ValueError):
+            pass
+    rope = cfg.get("rope_scaling")
+    if isinstance(rope, Mapping):
+        try:
+            orig = rope.get("original_max_position_embeddings")
+            factor = rope.get("factor")
+            if orig is not None and factor is not None:
+                scaled = int(round(float(orig) * float(factor)))
+                if scaled > 0:
+                    candidates.append(scaled)
+        except (TypeError, ValueError):
+            pass
+    return max(candidates) if candidates else None
 
 
 def extra_prompt_tokens(*parts: str) -> int:
@@ -365,22 +427,23 @@ def parse_prometheus_kv_usage_perc(text: str) -> float | None:
     return best
 
 
-def log_context_bins(
+def context_length_bins(
     cap: int,
     *,
     n: int = CONTEXT_BIN_COUNT,
     lo: int = CONTEXT_BIN_MIN,
 ) -> tuple[int, ...]:
-    """Geometric bins from lo to cap. Always includes both ends."""
+    """Kamradt / EvalScope linspace: n context lengths from lo to cap inclusive."""
     hi = max(1, int(cap))
     start = min(max(1, int(lo)), hi)
     count = max(2, int(n))
     if hi <= start:
         return (hi,)
     raw: list[int] = []
+    span = float(hi - start)
     for i in range(count):
         t = i / (count - 1)
-        raw.append(int(round(start * ((hi / start) ** t))))
+        raw.append(int(round(start + t * span)))
     ordered: list[int] = []
     for value in raw:
         clipped = min(hi, max(start, value))
@@ -393,7 +456,24 @@ def log_context_bins(
     return tuple(ordered)
 
 
-DEFAULT_CONTEXT_TOKENS = log_context_bins(32768)
+def log_context_bins(
+    cap: int,
+    *,
+    n: int = CONTEXT_BIN_COUNT,
+    lo: int = CONTEXT_BIN_MIN,
+) -> tuple[int, ...]:
+    return context_length_bins(cap, n=n, lo=lo)
+
+
+MOCK_ADVERTISED_CONFIG = {"max_position_embeddings": 32768}
+
+
+def mock_advertised_max() -> int:
+    """Qwen2.5-7B-Instruct advertised window. Same parser as live HF config.json."""
+    return int(advertised_max_model_len(MOCK_ADVERTISED_CONFIG) or 32768)
+
+
+DEFAULT_CONTEXT_TOKENS = context_length_bins(mock_advertised_max())
 
 
 def context_axis_tokens(
@@ -425,7 +505,7 @@ def context_bins_for_max_len(
     if bins is not None:
         kept = tuple(int(b) for b in bins if int(b) <= cap)
         return kept or (cap,)
-    return log_context_bins(cap)
+    return context_length_bins(cap)
 
 
 def rows_for_heatmap(
@@ -450,10 +530,10 @@ def rows_for_heatmap(
         ctx
         for ctx, group in by_ctx.items()
         if group
+        and all(not item.get("oom") for item in group)
         and all(
             (not item.get("response_completes", True))
             or item.get("refuse")
-            or item.get("oom")
             for item in group
         )
     }
@@ -1085,16 +1165,20 @@ def _niah_cmap():
     )
 
 
+_VRAM_COLORS = {"tic": "#1b6ca8", "baseline": "#c45c26"}
+
+
 def render_heatmap(
     rows: list[dict[str, Any]],
     dest: Path,
     max_model_len: int | None = None,
     *,
     gpu: str = "",
+    gpu_count: int | None = None,
     model: str = "",
 ) -> Path:
     """JSONL pivot to seaborn heatmap. Product path is PNG."""
-    tagline = figure_tagline(rows, gpu=gpu, model=model)
+    tagline = figure_tagline(rows, gpu=gpu, gpu_count=gpu_count, model=model)
     axis = context_axis_tokens(rows, max_model_len)
     rows = rows_for_heatmap(rows, max_model_len)
     try:
@@ -1113,7 +1197,8 @@ def render_heatmap(
     pivots = [_pivot_context(items) for _, _, items in setups]
     cmap = _niah_cmap()
     n = len(setups)
-    fig = plt.figure(figsize=(11.2, 5.15 * n + (1.05 if tagline else 0.85)))
+    any_oom = any(item.get("oom") for item in rows)
+    fig = plt.figure(figsize=(11.2, 5.15 * n + (1.15 if tagline else 0.95)))
     spec = fig.add_gridspec(
         n,
         2,
@@ -1121,19 +1206,34 @@ def render_heatmap(
         wspace=0.10,
         hspace=0.34,
     )
-    for i, ((panel, _size, _), pivot) in enumerate(zip(setups, pivots)):
+    for i, ((panel, _size, items), pivot) in enumerate(zip(setups, pivots)):
         if axis:
             pivot = pivot.reindex(columns=list(axis))
+        oom_cols = {
+            int(item["context_tokens"])
+            for item in items
+            if item.get("oom") and item.get("context_tokens") is not None
+        }
+        annot = pivot.copy().astype(object)
+        plot = pivot.astype(float)
+        for col in list(pivot.columns):
+            if int(col) in oom_cols:
+                plot[col] = float("nan")
+                annot[col] = ""
+            else:
+                annot[col] = pivot[col].map(
+                    lambda v: "" if v != v else f"{float(v):.1f}"
+                )
         ax = fig.add_subplot(spec[i, 0])
         cax = fig.add_subplot(spec[i, 1])
         mesh = sns.heatmap(
-            pivot,
+            plot,
             ax=ax,
             vmin=0.0,
             vmax=1.0,
             cmap=cmap,
-            annot=True,
-            fmt=".1f",
+            annot=annot,
+            fmt="",
             annot_kws={"size": 7.2},
             cbar=True,
             cbar_ax=cax,
@@ -1147,6 +1247,22 @@ def render_heatmap(
         for artist in mesh.collections:
             artist.set_edgecolor("#f7f7f7")
             artist.set_linewidth(0.35)
+        color = _VRAM_COLORS.get(panel, "#333333")
+        col_list = list(pivot.columns)
+        row_n = len(pivot.index)
+        for j, col in enumerate(col_list):
+            if int(col) not in oom_cols:
+                continue
+            for i_row in range(row_n):
+                ax.scatter(
+                    j + 0.5,
+                    i_row + 0.5,
+                    marker="x",
+                    s=42,
+                    color=color,
+                    linewidths=1.3,
+                    zorder=5,
+                )
         ax.set_title(_panel_label(panel), fontsize=11, pad=8)
         ax.set_xlabel("Context (tokens)")
         ax.set_ylabel("Needle depth (%)")
@@ -1168,14 +1284,37 @@ def render_heatmap(
             color="#444444",
         )
         top = 0.90
-    fig.subplots_adjust(left=0.08, right=0.90, top=top, bottom=0.08)
+    bottom = 0.14 if any_oom else 0.08
+    if any_oom:
+        from matplotlib.lines import Line2D
+
+        fig.legend(
+            handles=[
+                Line2D(
+                    [0],
+                    [0],
+                    color=_VRAM_COLORS["baseline"],
+                    marker="x",
+                    ls="none",
+                    ms=8,
+                    mew=1.6,
+                    markeredgecolor=_VRAM_COLORS["baseline"],
+                    markerfacecolor=_VRAM_COLORS["baseline"],
+                    label="Out of memory (OOM)",
+                )
+            ],
+            loc="upper center",
+            bbox_to_anchor=(0.49, 0.02),
+            frameon=True,
+            fancybox=False,
+            edgecolor="#c8c8c8",
+            fontsize=9,
+        )
+    fig.subplots_adjust(left=0.08, right=0.90, top=top, bottom=bottom)
     dest.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(dest, dpi=160, bbox_inches="tight", pad_inches=0.28)
     plt.close(fig)
     return dest
-
-
-_VRAM_COLORS = {"tic": "#1b6ca8", "baseline": "#c45c26"}
 
 
 def render_vram_vs_context(
@@ -1184,6 +1323,7 @@ def render_vram_vs_context(
     max_model_len: int | None = None,
     *,
     gpu: str = "",
+    gpu_count: int | None = None,
     model: str = "",
 ) -> Path:
     """Non-KV plus KV occupancy vs context. Dashed non-KV plus pool."""
@@ -1235,7 +1375,7 @@ def render_vram_vs_context(
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     ymax = hbm_gib * 1.08
-    tagline = figure_tagline(rows, gpu=gpu, model=model)
+    tagline = figure_tagline(rows, gpu=gpu, gpu_count=gpu_count, model=model)
     axis = context_axis_tokens(rows, max_model_len)
     fig, ax = plt.subplots(figsize=(10.4, 5.6))
     ax.axhspan(usable_gib, hbm_gib, color="#c0392b", alpha=0.12, zorder=0)
@@ -1298,7 +1438,7 @@ def render_vram_vs_context(
             )
     ax.set_xlabel("Context (tokens)", fontsize=11)
     ax.set_ylabel("VRAM usage (GiB)", fontsize=11)
-    ax.set_xscale("log")
+    ax.set_xscale("linear")
     ax.set_ylim(0.0, ymax)
     fig_h = float(fig.get_size_inches()[1])
     title_h = 13.0 / (72.0 * fig_h)
@@ -1329,7 +1469,10 @@ def render_vram_vs_context(
             ha="right",
         )
         lo, hi = unique_ticks[0], unique_ticks[-1]
-        if lo > 0 and hi >= lo:
+        if hi > lo:
+            pad = 0.03 * (hi - lo)
+            ax.set_xlim(lo - pad, hi + pad)
+        elif lo > 0:
             ax.set_xlim(lo / 1.12, hi * 1.12)
     ax.xaxis.set_minor_locator(plt.NullLocator())
     ax.tick_params(
@@ -1421,7 +1564,7 @@ def mock_rows() -> list[dict[str, Any]]:
     fill_tokens = 238064
     hbm_bytes = gib_to_bytes(32.0)
     util = 0.90
-    bins = log_context_bins(32768)
+    bins = context_length_bins(mock_advertised_max())
     last = bins[-1]
     prior = [b for b in bins if b < last]
     rows: list[dict[str, Any]] = start_fail_rows(
@@ -1474,10 +1617,12 @@ def mock_rows() -> list[dict[str, Any]]:
                 )
                 item["non_kv_kind"] = "reported"
                 item["gpu_model"] = "NVIDIA GeForce RTX 5090"
+                item["gpu_count"] = 1
                 item["model"] = "qwen2.5-7b-instruct"
                 rows.append(item)
     for item in rows:
         item.setdefault("gpu_model", "NVIDIA GeForce RTX 5090")
+        item.setdefault("gpu_count", 1)
         item.setdefault("model", "qwen2.5-7b-instruct")
     return rows
 
@@ -1533,12 +1678,12 @@ def report_lines(
                 "X is context tokens. "
                 "Y is needle depth % (0 = start of prompt, 100 = end). "
                 "Color is recall. "
-                "A 0.0 cell at the longest context is OOM, same as the VRAM X."
+                "An X in a column is OOM, same as the VRAM figure."
             ),
             "",
-            "Figure. Fact retrieval by context length (multi-needle haystack).",
+            f"Figure. {FIGURE_TITLE}.",
             "",
-            f"![Fact retrieval by context length (multi-needle haystack)]({image_rel})",
+            f"![{FIGURE_TITLE}]({image_rel})",
             "",
         ]
     )
@@ -1584,12 +1729,18 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="GPU name for the figure tagline, e.g. NVIDIA GeForce RTX 5090",
     )
+    parser.add_argument(
+        "--gpu-count",
+        type=int,
+        default=0,
+        help="GPU count for the figure tagline (e.g. 1 for 'x 1')",
+    )
     parser.add_argument("--panel", default="tic")
     parser.add_argument("--kv-cache-gib", type=float, default=0.0)
     parser.add_argument(
         "--context-tokens",
         default="",
-        help="Comma-separated context bins (default: 1k-32k)",
+        help="Comma-separated context bins (default: 1k to advertised max)",
     )
     parser.add_argument("--story-only", action="store_true")
     parser.add_argument("--story-tokens", type=int, default=STORY_CONTEXT_TOKENS)
@@ -1605,6 +1756,11 @@ def main(argv: list[str] | None = None) -> int:
         "--gpu-memory-utilization",
         type=float,
         default=0.90,
+    )
+    parser.add_argument(
+        "--advertised-max",
+        type=Path,
+        help="Print advertised max_position_embeddings from HF config.json",
     )
     parser.add_argument("--plan", action="store_true", help="Print discover steps")
     parser.add_argument("--parse-log", type=Path, help="Print scraped KV GiB from a serve log")
@@ -1625,6 +1781,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.advertised_max is not None:
+        found = advertised_max_model_len(args.advertised_max)
+        print("" if found is None else str(found))
+        return 0
     if args.plan:
         for line in niah_discover_steps():
             print(line)
@@ -1720,6 +1880,7 @@ def main(argv: list[str] | None = None) -> int:
             args.out,
             max_model_len=max_len,
             gpu=args.gpu_model,
+            gpu_count=args.gpu_count or None,
             model=args.model,
         )
         print(args.out)
@@ -1729,6 +1890,7 @@ def main(argv: list[str] | None = None) -> int:
             args.vram_out,
             max_model_len=max_len,
             gpu=args.gpu_model,
+            gpu_count=args.gpu_count or None,
             model=args.model,
         )
         print(args.vram_out)

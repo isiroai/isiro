@@ -64,20 +64,16 @@ BASELINE_PROBE_SEQS=1
 SYSTEM_ID="${SYSTEM_ID:-rtx-5090}"
 # Serve window for needle. Do not rewrite this to KV pool tokens.
 NIAH_MAX_MODEL_LEN="${NIAH_MAX_MODEL_LEN:-}"
-STORY_TOKENS="$(
-  python3 -c "
-import sys
-sys.path.insert(0, '${HERE}')
-from needle_haystack import STORY_CONTEXT_TOKENS, story_tokens_for_max_len
-cap = '${NIAH_MAX_MODEL_LEN}'.strip()
-print(story_tokens_for_max_len(int(cap)) if cap else STORY_CONTEXT_TOKENS)
-"
-)"
+if [[ -z "${NIAH_MAX_MODEL_LEN}" && -n "${BASELINE_MODEL_DIR:-}" && -d "${BASELINE_MODEL_DIR}" ]]; then
+  NIAH_MAX_MODEL_LEN="$(
+    python3 "${NIAH_PY}" --advertised-max "${BASELINE_MODEL_DIR}"
+  )"
+fi
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   echo "Config: ${CONFIG}"
   echo "max_num_seqs=product (shipped serve.yaml; do not overlay 1)"
-  echo "max_model_len follows NIAH_MAX_MODEL_LEN (product long-context window), not KV pool tokens"
+  echo "max_model_len follows advertised HF config.json (NIAH_MAX_MODEL_LEN overrides), not KV pool tokens"
   python3 "${NIAH_PY}" --plan
   echo "TIC KV is scraped from product serve (model-shaped pool, not a fixed GiB)."
   echo "Needle bins follow NIAH_MAX_MODEL_LEN. Do not crop them to the pool. Do not grow TIC to 1.75."
@@ -110,6 +106,24 @@ fi
 
 [[ -d "${BASELINE_MODEL_DIR}" ]] || { echo "baseline model directory not found" >&2; exit 2; }
 [[ -d "${TIC_MODEL_DIR}" ]] || { echo "TIC model directory not found" >&2; exit 2; }
+if [[ -z "${NIAH_MAX_MODEL_LEN}" ]]; then
+  NIAH_MAX_MODEL_LEN="$(
+    python3 "${NIAH_PY}" --advertised-max "${BASELINE_MODEL_DIR}"
+  )"
+fi
+if [[ -z "${NIAH_MAX_MODEL_LEN}" ]]; then
+  echo "could not read advertised max from ${BASELINE_MODEL_DIR}/config.json; set NIAH_MAX_MODEL_LEN" >&2
+  exit 2
+fi
+STORY_TOKENS="$(
+  python3 -c "
+import sys
+sys.path.insert(0, '${HERE}')
+from needle_haystack import STORY_CONTEXT_TOKENS, story_tokens_for_max_len
+cap = '${NIAH_MAX_MODEL_LEN}'.strip()
+print(story_tokens_for_max_len(int(cap)) if cap else STORY_CONTEXT_TOKENS)
+"
+)"
 
 export PATH="${HOME}/.isiro/bin:${PATH}"
 ISIRO_SERVE_BIN="${ISIRO_SERVE_BIN:-${HOME}/.isiro/bin/isiro}"
@@ -438,7 +452,7 @@ if ! start_tic "${TIC_LOG}"; then
 fi
 TIC_GIB="$(scrape_kv_gib "${TIC_LOG}")"
 if [[ -z "${NIAH_MAX_MODEL_LEN}" ]]; then
-  echo "set NIAH_MAX_MODEL_LEN in common.env for the needle serve window; see ${TIC_LOG}" >&2
+  echo "could not read advertised max from ${BASELINE_MODEL_DIR}/config.json; set NIAH_MAX_MODEL_LEN" >&2
   exit 2
 fi
 echo "TIC KV cache: ${TIC_GIB} GiB (scraped) window=${NIAH_MAX_MODEL_LEN}" >&2

@@ -39,6 +39,8 @@ from needle_haystack import (  # noqa: E402
     needle_spread_depths,
     kv_sweep_table_lines,
     load_jsonl,
+    advertised_max_model_len,
+    context_length_bins,
     log_context_bins,
     long_needle_text,
     mock_rows,
@@ -56,6 +58,7 @@ from needle_haystack import (  # noqa: E402
     reserved_vram_y_bytes,
     vram_in_use_y_bytes,
     extra_prompt_tokens,
+    NEEDLE_COUNT,
     figure_tagline,
     haystack_text,
     prompt_token_budget,
@@ -110,6 +113,8 @@ class NeedleHaystackTests(unittest.TestCase):
         )
 
     def test_score_needles_fractions(self) -> None:
+        self.assertEqual(NEEDLE_COUNT, 3)
+        self.assertEqual(len(NEEDLES), 3)
         self.assertEqual(score_needles(""), 0.0)
         self.assertEqual(score_needles(NEEDLES[0]), 0.3333)
         self.assertEqual(score_needles(NEEDLES[0] + " " + NEEDLES[1]), 0.6667)
@@ -117,9 +122,10 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertEqual(
             figure_tagline(
                 gpu="NVIDIA GeForce RTX 5090",
+                gpu_count=1,
                 model="qwen2.5-7b-instruct",
             ),
-            "NVIDIA GeForce RTX 5090 | qwen2.5-7b-instruct",
+            "NVIDIA GeForce RTX 5090 x 1 | qwen2.5-7b-instruct",
         )
 
     def test_kv_in_use_metrics_and_derived(self) -> None:
@@ -206,18 +212,55 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertGreater(vram_in_use_y_bytes(filled), vram_in_use_y_bytes(tic))
         self.assertAlmostEqual(bytes_to_gib(vram_in_use_y_bytes(filled)), 11.19 + 1.09, places=2)
 
+    def test_advertised_max_model_len_from_config(self) -> None:
+        self.assertEqual(
+            advertised_max_model_len({"max_position_embeddings": 32768}),
+            32768,
+        )
+        self.assertEqual(
+            advertised_max_model_len(
+                {
+                    "text_config": {"max_position_embeddings": 8192},
+                    "max_position_embeddings": 2048,
+                }
+            ),
+            8192,
+        )
+        self.assertEqual(
+            advertised_max_model_len(
+                {
+                    "max_position_embeddings": 32768,
+                    "rope_scaling": {
+                        "type": "yarn",
+                        "factor": 4.0,
+                        "original_max_position_embeddings": 32768,
+                    },
+                }
+            ),
+            131072,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "config.json"
+            cfg.write_text(
+                json.dumps({"max_position_embeddings": 1048576}),
+                encoding="utf-8",
+            )
+            self.assertEqual(advertised_max_model_len(Path(tmp)), 1048576)
+            self.assertEqual(advertised_max_model_len(cfg), 1048576)
+        self.assertIsNone(advertised_max_model_len({}))
+
     def test_log_context_bins_32k_and_1m(self) -> None:
-        bins_32k = log_context_bins(32768)
+        bins_32k = context_length_bins(32768)
         self.assertEqual(bins_32k[0], 1000)
         self.assertEqual(bins_32k[-1], 32768)
-        self.assertLessEqual(len(bins_32k), 20)
-        self.assertGreaterEqual(len(bins_32k), 18)
-        self.assertEqual(len(bins_32k), len(set(bins_32k)))
-        bins_1m = log_context_bins(1_048_576)
+        self.assertEqual(len(bins_32k), 20)
+        step = (32768 - 1000) / 19
+        self.assertEqual(bins_32k[1], int(round(1000 + step)))
+        self.assertEqual(log_context_bins(32768), bins_32k)
+        bins_1m = context_length_bins(1_048_576)
         self.assertEqual(bins_1m[0], 1000)
         self.assertEqual(bins_1m[-1], 1_048_576)
-        self.assertLessEqual(len(bins_1m), 20)
-        self.assertGreaterEqual(len(bins_1m), 18)
+        self.assertEqual(len(bins_1m), 20)
         self.assertEqual(context_bins_for_max_len(32768), bins_32k)
         self.assertEqual(_context_tick(1000), "1,000")
         self.assertEqual(_context_tick(32768), "32,768")
@@ -295,7 +338,9 @@ class NeedleHaystackTests(unittest.TestCase):
     @unittest.skipUnless(HAS_PLOT, "matplotlib seaborn pandas required")
     def test_jsonl_roundtrip_and_png(self) -> None:
         rows = mock_rows()
-        bins = log_context_bins(32768)
+        from needle_haystack import mock_advertised_max
+
+        bins = context_length_bins(mock_advertised_max())
         self.assertEqual(len(rows), 1 + 2 * len(DEFAULT_DEPTHS) * len(bins))
         tic_sizes = {
             r["kv_cache_gib"] for r in rows if r["panel"] == "tic"
@@ -412,9 +457,9 @@ class NeedleHaystackTests(unittest.TestCase):
             self.assertIn("## B. Needle-in-a-haystack", text)
             self.assertNotIn("Fact retrieved (needle)", text)
             self.assertNotIn("| **TIC** | Fixed |", text)
-            self.assertIn("Fact retrieval by context length (multi-needle haystack)", text)
+            self.assertIn("Fact retrieval by context length (3-needle haystack)", text)
             self.assertIn(
-                "Figure. Fact retrieval by context length (multi-needle haystack).",
+                "Figure. Fact retrieval by context length (3-needle haystack).",
                 text,
             )
             self.assertIn("The Baseline serve would not start at 1.09 GiB.", text)
@@ -431,10 +476,7 @@ class NeedleHaystackTests(unittest.TestCase):
             self.assertIn("Reported non-KV plus pool occupancy", text)
             self.assertIn("not a process nvidia-smi meter", text)
             self.assertIn("An X on the GPU HBM line is OOM", text)
-            self.assertIn(
-                "A 0.0 cell at the longest context is OOM, same as the VRAM X.",
-                text,
-            )
+            self.assertIn("An X in a column is OOM, same as the VRAM figure.", text)
             self.assertNotIn("Above GPU HBM (OOM)", text)
             self.assertNotIn("## Serve at recall-matched KV cache", text)
             self.assertNotIn("Not default fill", text)
@@ -446,10 +488,7 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertIn("](vram-vs-context.png)", text)
         self.assertIn("Reported non-KV plus pool occupancy", text)
         self.assertIn("An X on the GPU HBM line is OOM", text)
-        self.assertIn(
-            "A 0.0 cell at the longest context is OOM, same as the VRAM X.",
-            text,
-        )
+        self.assertIn("An X in a column is OOM, same as the VRAM figure.", text)
         self.assertNotIn("Above GPU HBM (OOM)", text)
         self.assertNotIn("## Serve at recall-matched KV cache", text)
         self.assertNotIn("Not default fill", text)
@@ -533,6 +572,22 @@ class NeedleHaystackTests(unittest.TestCase):
             max_model_len=32768,
         )
         self.assertEqual({int(item["context_tokens"]) for item in cropped}, {24000})
+        oom_col = rows_for_heatmap(
+            [
+                row(
+                    panel="vanilla",
+                    kv_cache_gib=13.48,
+                    depth_percent=50,
+                    hit=False,
+                    score=0.0,
+                    context_tokens=32768,
+                    oom=True,
+                    response_completes=False,
+                    refuse=True,
+                )
+            ]
+        )
+        self.assertEqual({int(item["context_tokens"]) for item in oom_col}, {32768})
         heat = rows_for_heatmap(
             start_fail_rows(panel="vanilla", kv_cache_gib=1.09)
             + [
@@ -742,7 +797,10 @@ class NeedleHaystackTests(unittest.TestCase):
         out = completed.stdout
         self.assertIn("max_num_seqs=product", out)
         self.assertIn("do not overlay 1", out)
-        self.assertIn("max_model_len follows NIAH_MAX_MODEL_LEN", out)
+        self.assertIn(
+            "max_model_len follows advertised HF config.json (NIAH_MAX_MODEL_LEN overrides)",
+            out,
+        )
         self.assertIn("not KV pool tokens", out)
         self.assertIn("not a fixed 4.00", out)
         self.assertIn("Do not grow TIC to 1.75.", out)
