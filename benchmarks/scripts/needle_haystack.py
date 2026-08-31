@@ -1240,8 +1240,7 @@ def render_vram_vs_context(
     fig, ax = plt.subplots(figsize=(10.4, 5.6))
     ax.axhspan(usable_gib, hbm_gib, color="#c0392b", alpha=0.12, zorder=0)
     ax.axhspan(hbm_gib, ymax, color="#c0392b", alpha=0.38, zorder=0)
-    ax.axhline(hbm_gib, color="#4a4a4a", ls=":", lw=1.4, zorder=2)
-    ax.axhline(usable_gib, color="#4a4a4a", ls=":", lw=0.9, alpha=0.7, zorder=2)
+    ax.axhline(usable_gib, color="#4a4a4a", ls=":", lw=1.4, zorder=2)
     tick_xs: list[int] = []
     oom_legend_color = _VRAM_COLORS["baseline"]
     for (panel, size), points in sorted(
@@ -1391,7 +1390,7 @@ def render_vram_vs_context(
             ls="none",
             ms=8,
             mew=1.6,
-            label="OOM",
+            label="Out of memory (OOM)",
         ),
     ]
     ax.legend(
@@ -1533,7 +1532,8 @@ def report_lines(
             (
                 "X is context tokens. "
                 "Y is needle depth % (0 = start of prompt, 100 = end). "
-                "Color is recall."
+                "Color is recall. "
+                "A 0.0 cell at the longest context is OOM, same as the VRAM X."
             ),
             "",
             "Figure. Fact retrieval by context length (multi-needle haystack).",

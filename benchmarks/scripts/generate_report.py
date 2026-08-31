@@ -50,6 +50,10 @@ def bytes_gb(value: Any) -> str:
     return "null" if value is None else f"{int(value) / 1e9:.2f} GB"
 
 
+def bytes_gib(value: Any) -> str:
+    return "null" if value is None else f"{int(value) / float(1024**3):.2f} GiB"
+
+
 def pool_gib(
     memory_bytes: Any,
     tokens: Any = None,
@@ -340,8 +344,8 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
         "|--------|----------|-----|-----------|",
         (
             "| GPU memory for loaded weights | "
-            f"{bytes_gb(b_load)} | "
-            f"{bold_win(bytes_gb(t_load), win=load_win)} | "
+            f"{bytes_gib(b_load)} | "
+            f"{bold_win(bytes_gib(t_load), win=load_win)} | "
             f"{bold_win(load_cell, win=load_win)} |"
         ),
         "",
@@ -496,10 +500,15 @@ def _section_d(
     if capacity is not None and tps:
         b_tps = tps.get("baseline")
         t_tps = tps.get("tic")
+        tps_win = (
+            isinstance(b_tps, (int, float))
+            and isinstance(t_tps, (int, float))
+            and float(t_tps) > float(b_tps)
+        )
         lines.append(
             "| Output tok/s | "
             f"{number(b_tps)} | "
-            f"{bold_win(number(t_tps), win=True)} |"
+            f"{bold_win(number(t_tps), win=tps_win)} |"
         )
     elif decode_rows:
         row = decode_rows[0]
@@ -590,15 +599,6 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
         from needle_haystack import vram_report_lines
 
         lines.extend(vram_report_lines(str(haystack["vram_image"])))
-    lines.extend(
-        [
-            "## Serve at recall-matched KV cache",
-            "",
-            "`vllm bench serve` at the KV cache sizes where both sides recall. "
-            "Not default fill (`gpu_memory_utilization=0.90`).",
-            "",
-        ]
-    )
     if capacity is not None and experiment_kind == "capacity":
         lines.extend(
             _section_c(

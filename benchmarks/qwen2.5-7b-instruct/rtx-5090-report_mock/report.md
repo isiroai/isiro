@@ -31,7 +31,7 @@ This directory is a mock: tables and figures use invented numbers so you can see
 
 | Metric                        | Baseline | TIC          | Savings %  |
 | ----------------------------- | -------- | ------------ | ---------- |
-| GPU memory for loaded weights | 15.34 GB | **11.19 GB** | **27.08%** |
+| GPU memory for loaded weights | 15.34 GiB | **11.19 GiB** | **27.08%** |
 
 
 ### KV cache
@@ -48,7 +48,7 @@ This directory is a mock: tables and figures use invented numbers so you can see
 
 Same long prompt, needles, and question on every setup that starts. The Baseline serve would not start at 1.09 GiB.
 
-X is context tokens. Y is needle depth % (0 = start of prompt, 100 = end). Color is recall.
+X is context tokens. Y is needle depth % (0 = start of prompt, 100 = end). Color is recall. A 0.0 cell at the longest context is OOM, same as the VRAM X.
 
 Figure. Fact retrieval by context length (multi-needle haystack).
 
@@ -59,10 +59,6 @@ Figure. VRAM usage vs context tokens.
 Solid line is reported non-KV plus vLLM pool occupancy (metrics, or derived T/pool if /metrics is missing). Dashed line is Baseline non-KV plus its reserved KV pool. The dotted line is usable VRAM. The light red band is above usable VRAM. The darker red band is above GPU HBM. An X on the GPU HBM line is OOM at that context. Reported non-KV plus pool occupancy, not a process nvidia-smi meter.
 
 ![VRAM usage vs context tokens](vram-vs-context.png)
-
-## Serve at recall-matched KV cache
-
-`vllm bench serve` at the KV cache sizes where both sides recall. Not default fill (`gpu_memory_utilization=0.90`).
 
 ## C. Capacity
 
@@ -84,7 +80,7 @@ Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. Not equa
 
 | Metric                    | Baseline                | TIC                      |
 | ------------------------- | ----------------------- | ------------------------ |
-| Output tok/s              | 1876.21                 | **1860.33**              |
+| Output tok/s              | 1876.21                 | 1860.33                  |
 | ITL (ms) p50 / p95 / p99  | 10.65 / 11.35 / 11.89   | 10.97 / 11.57 / 32.48    |
 | TPOT (ms) p50 / p95 / p99 | 10.83 / 10.90 / 11.11   | 11.10 / 11.42 / 11.51    |
 | TTFT (ms) p50 / p95 / p99 | 94.70 / 152.51 / 152.60 | 124.30 / 201.38 / 201.68 |

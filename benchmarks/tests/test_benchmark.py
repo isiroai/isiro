@@ -724,6 +724,8 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("| System |", report)
             self.assertIn("| CUDA graphs |", report)
             self.assertIn("| GPU memory for loaded weights |", report)
+            self.assertNotIn("## Serve at recall-matched KV cache", report)
+            self.assertNotIn("Not default fill", report)
             self.assertIn("| Compiler |", report)
             self.assertIn("| Runtime |", report)
             self.assertIn("Savings %", report)

@@ -431,7 +431,13 @@ class NeedleHaystackTests(unittest.TestCase):
             self.assertIn("Reported non-KV plus pool occupancy", text)
             self.assertIn("not a process nvidia-smi meter", text)
             self.assertIn("An X on the GPU HBM line is OOM", text)
+            self.assertIn(
+                "A 0.0 cell at the longest context is OOM, same as the VRAM X.",
+                text,
+            )
             self.assertNotIn("Above GPU HBM (OOM)", text)
+            self.assertNotIn("## Serve at recall-matched KV cache", text)
+            self.assertNotIn("Not default fill", text)
 
     def test_mock_report_dir_has_figures(self) -> None:
         mock = ROOT / "qwen2.5-7b-instruct" / "rtx-5090-report_mock"
@@ -440,7 +446,15 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertIn("](vram-vs-context.png)", text)
         self.assertIn("Reported non-KV plus pool occupancy", text)
         self.assertIn("An X on the GPU HBM line is OOM", text)
+        self.assertIn(
+            "A 0.0 cell at the longest context is OOM, same as the VRAM X.",
+            text,
+        )
         self.assertNotIn("Above GPU HBM (OOM)", text)
+        self.assertNotIn("## Serve at recall-matched KV cache", text)
+        self.assertNotIn("Not default fill", text)
+        self.assertIn("| GPU memory for loaded weights | 15.34 GiB |", text)
+        self.assertNotIn("| GPU memory for loaded weights | 15.34 GB |", text)
         self.assertNotIn("Larger KV", text)
         self.assertNotIn("Same size as TIC", text)
         self.assertNotIn("Fact retrieved (needle)", text)
