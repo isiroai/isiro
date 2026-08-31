@@ -78,7 +78,7 @@ Logs and other run artifacts are under gitignored `benchmarks/scratch/`.
 `benchmarks/run_ab.sh {model}` (Graph ON default) writes **two PNGs**:
 
 1. `needle-haystack.png`: 3-needle recall heatmap. X is context tokens (EvalScope/Kamradt: 20 linear bins from 1k to the advertised model max). Y is needle depth % (EvalScope 11.11% steps). Color is recall fraction. An X in a column is OOM. Two panels: TIC product KV, Baseline default fill.
-2. `vram-vs-context.png`: VRAM usage vs context T (reported non-KV plus vendor KV occupancy). Dashed is Baseline non-KV plus reserved pool. Dotted usable VRAM. Light red above usable VRAM; darker red above GPU HBM. An X on the GPU HBM line is OOM at that context. Reported non-KV plus pool occupancy, not a process nvidia-smi meter.
+2. `vram-vs-context.png`: VRAM in-use vs context T (non-KV plus live pool blocks plus TokenID/persist). Dashed is reserved pool on each side. Dotted usable VRAM. Light red above usable VRAM; darker red above GPU HBM. An X on the GPU HBM line is OOM at that context. Not nvidia-smi reserved.
 
 Scratch copies live under `benchmarks/scratch/{UTC}-{system_id}/`.
 
@@ -97,8 +97,8 @@ and latency under that matched setup.
 
 ## Optional story JSON
 
-Default `run_ab.sh` already draws VRAM usage vs context from needle
-serves (reported non-KV plus pool occupancy). Extra plots (stacked composition, tok/s vs concurrency, long-context
+Default `run_ab.sh` already draws VRAM in-use vs context from needle
+serves (non-KV plus live pool plus persist/ids). Extra plots (stacked composition, tok/s vs concurrency, long-context
 ITL, TCO) are optional. Put measured points in `stock_vllm_story.json` in the
 run dir (schema `isiro-benchmark-stock-vllm-story-v1`). `generate_report.py`
 renders that file when present. Template:

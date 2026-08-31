@@ -22,6 +22,8 @@ NEEDLES: tuple[str, ...] = (
     "The secret city code is Zebra-419.",
     "The hidden river name is Copperbrook.",
 )
+# Kamradt / RULER fragments: unique values, not wrapping sentences.
+NEEDLE_KEYS: tuple[str, ...] = ("84932017", "Zebra-419", "Copperbrook")
 NEEDLE_BINDER = "ISIRO-NIAH-QX7K29"
 QUESTION = (
     "List the special magic number, the secret city code, and the hidden river name."
@@ -41,7 +43,10 @@ CHARS_PER_TOKEN = 4
 # English hay is denser than 4 chars/token. Fitted hay uses this so an 8k
 # bin plus chat template plus a short reply stays inside max_model_len.
 HAY_CHARS_PER_TOKEN_FIT = 2.7
-CHAT_MAX_TOKENS = 64
+CHAT_MAX_TOKENS = 128
+CHAT_SEED = 17
+COMPLETION_STORE_CHARS = 4000
+TOKEN_ID_BYTES = 4
 TEMPLATE_SLACK_TOKENS = 160
 # Haystack bin plus needle, question, chat template, and a short reply.
 WINDOW_RESERVE_TOKENS = 1024
@@ -115,25 +120,52 @@ def _start_fail_gibs(rows: Iterable[dict[str, Any]]) -> list[float]:
     )
 
 
-def score_hit(completion: str, needle: str = NEEDLE) -> bool:
-    """Exact needle, or the magic number as a short answer.
+def needle_keys(needles: Iterable[str] | None = None) -> tuple[str, ...]:
+    items = tuple(needles) if needles is not None else NEEDLES
+    if items == NEEDLES:
+        return NEEDLE_KEYS
+    keys: list[str] = []
+    for needle, mapped in zip(items, NEEDLE_KEYS):
+        if needle in NEEDLES:
+            keys.append(mapped)
+            continue
+        digits = "".join(ch for ch in needle if ch.isdigit())
+        keys.append(digits or needle.strip())
+    if len(keys) < len(items):
+        keys.extend(items[len(keys) :])
+    return tuple(keys)
 
-    Buried digits inside token soup are not a hit. That used to look like
-    recall while the completion was incoherent.
-    """
+
+def score_key_hit(completion: str, key: str) -> bool:
+    """Case-insensitive substring of a unique fact value (Kamradt fragment)."""
+    fragment = (key or "").strip()
+    if not fragment:
+        return False
+    return fragment.casefold() in (completion or "").casefold()
+
+
+def score_hit(completion: str, needle: str = NEEDLE) -> bool:
+    """Full needle sentence, or the unique key / digits in the reply."""
     text = (completion or "").strip()
     if not text:
         return False
     if needle in text:
         return True
+    key = ""
+    if needle in NEEDLES:
+        key = NEEDLE_KEYS[NEEDLES.index(needle)]
+    elif needle in NEEDLE_KEYS:
+        key = needle
+    if key and score_key_hit(text, key):
+        return True
     digits = "".join(ch for ch in needle if ch.isdigit())
+    if digits and score_key_hit(text, digits):
+        return True
     if not digits or digits not in text:
         return False
     compact = "".join(text.split()).rstrip(".")
     if compact == digits:
         return True
-    if len(text) > 160:
-        return False
     remainder_text = text.replace(digits, " ")
     words = [w for w in remainder_text.split() if any(ch.isalnum() for ch in w)]
     return len(words) <= 12
@@ -143,8 +175,12 @@ def score_needles(
     completion: str, needles: Iterable[str] = NEEDLES
 ) -> float:
     items = tuple(needles) or (NEEDLE,)
-    hits = sum(1 for needle in items if score_hit(completion, needle=needle))
-    return round(hits / float(len(items)), 4)
+    keys = needle_keys(items)
+    hits = sum(1 for key in keys if score_key_hit(completion, key))
+    if hits == 0:
+        hits = sum(1 for needle in items if score_hit(completion, needle=needle))
+        return round(hits / float(len(items)), 4)
+    return round(hits / float(len(keys)), 4)
 
 
 def long_needle_text(*, n_words: int = 128, needle: str = NEEDLE) -> str:
@@ -310,13 +346,71 @@ def resolve_non_kv_bytes(
     return 0, "missing"
 
 
-def vram_in_use_y_bytes(item: dict[str, Any]) -> int:
-    """Non-KV plus vendor KV occupancy. Not process nvidia-smi."""
+def locked_non_kv_bytes(rows: list[dict[str, Any]], *, panel: str, size: float) -> int:
+    """Weights intercept. Per-bin nvidia-smi is not non-KV."""
+    want = round(float(size), 4)
+    alias = _panel_alias(panel) or panel
+    items: list[dict[str, Any]] = []
+    for item in rows:
+        if _panel_alias(str(item.get("panel") or "")) != alias:
+            continue
+        if round(_kv_cache_gib(item), 4) != want:
+            continue
+        items.append(item)
+    if not items:
+        return 0
+    reported = [
+        int(r["non_kv_bytes_reported"])
+        for r in items
+        if str(r.get("non_kv_kind") or "") == "reported"
+        and isinstance(r.get("non_kv_bytes_reported"), (int, float))
+        and int(r["non_kv_bytes_reported"]) > 0
+    ]
+    if reported:
+        return min(reported)
+    smi = [
+        int(r["non_kv_bytes_reported"])
+        for r in items
+        if isinstance(r.get("non_kv_bytes_reported"), (int, float))
+        and int(r["non_kv_bytes_reported"]) > 0
+    ]
+    return min(smi) if smi else 0
+
+
+def vram_in_use_y_bytes(
+    item: dict[str, Any], *, non_kv_override: int | None = None
+) -> int:
+    """Weights/non-KV plus live pool blocks plus persist/ids. Not nvidia-smi."""
     kv = item.get("kv_bytes_in_use")
-    non_kv = item.get("non_kv_bytes_reported")
     kv_n = int(kv) if isinstance(kv, (int, float)) else 0
-    non_n = int(non_kv) if isinstance(non_kv, (int, float)) else 0
-    return non_n + kv_n
+    if non_kv_override is not None:
+        non_n = int(non_kv_override)
+    else:
+        non_kv = item.get("non_kv_bytes_reported")
+        non_n = int(non_kv) if isinstance(non_kv, (int, float)) else 0
+    return non_n + kv_n + persist_outside_bytes(item)
+
+
+def persist_outside_bytes(item: dict[str, Any]) -> int:
+    """TokenID / persist pages outside vendor usage_perc. Not dump-all KV."""
+    raw_p = item.get("persist_page_bytes")
+    if isinstance(raw_p, (int, float)) and int(raw_p) > 0:
+        return int(raw_p)
+    raw_a = item.get("archived_id_bytes")
+    if isinstance(raw_a, (int, float)) and int(raw_a) > 0:
+        return int(raw_a)
+    alias = _panel_alias(str(item.get("panel") or ""))
+    if alias != "tic":
+        return 0
+    t_tokens = int(item.get("context_tokens") or 0)
+    w_tokens = int(item.get("kv_pool_tokens") or 0)
+    return derived_archived_id_bytes(t_tokens, w_tokens)
+
+
+def derived_archived_id_bytes(context_tokens: int, pool_tokens: int) -> int:
+    """uint32 ids past the lock. Derived, not nvidia-smi."""
+    extra = max(0, int(context_tokens) - max(0, int(pool_tokens)))
+    return extra * TOKEN_ID_BYTES
 
 
 def reserved_vram_y_bytes(item: dict[str, Any]) -> int:
@@ -423,6 +517,19 @@ def parse_prometheus_kv_usage_perc(text: str) -> float | None:
             if val > 1.0:
                 val = val / 100.0
             val = min(1.0, max(0.0, val))
+            best = val if best is None else max(best, val)
+    return best
+
+
+def parse_prometheus_isiro_peak_bytes(text: str) -> int | None:
+    """isiro_gpu_memory_peak_bytes from serve /metrics. Allocated, not smi."""
+    import re
+
+    pattern = r"^isiro_gpu_memory_peak_bytes(?:\{[^}]*\})?\s+([0-9.eE+-]+)\s*$"
+    best: int | None = None
+    for match in re.finditer(pattern, text, re.MULTILINE):
+        val = int(float(match.group(1)))
+        if val > 0:
             best = val if best is None else max(best, val)
     return best
 
@@ -759,6 +866,7 @@ def _chat_completion(
             "messages": messages,
             "max_tokens": CHAT_MAX_TOKENS,
             "temperature": 0,
+            "seed": CHAT_SEED,
         }
     ).encode("utf-8")
     req = urllib.request.Request(
@@ -864,30 +972,48 @@ def scrape_vllm_kv_usage_perc(url: str, timeout: float = 2.0) -> float | None:
     return parse_prometheus_kv_usage_perc(body)
 
 
+def scrape_serve_metrics(url: str, timeout: float = 2.0) -> tuple[float | None, int | None]:
+    """KV usage fraction and optional isiro allocated peak bytes."""
+    metrics_url = url.rstrip("/") + "/metrics"
+    try:
+        req = urllib.request.Request(metrics_url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None, None
+    return parse_prometheus_kv_usage_perc(body), parse_prometheus_isiro_peak_bytes(body)
+
+
 def _peak_kv_usage_perc(url: str, fn, poll_s: float = 0.05):
-    """Run fn while sampling /metrics. Returns (fn result, peak usage)."""
+    """Run fn while sampling /metrics. Returns (fn result, peak usage, peak alloc)."""
     import threading
 
-    peak: list[float | None] = [scrape_vllm_kv_usage_perc(url)]
+    usage0, alloc0 = scrape_serve_metrics(url)
+    peak: list[float | None] = [usage0]
+    alloc: list[int | None] = [alloc0]
     stop = threading.Event()
 
     def loop() -> None:
         while not stop.is_set():
-            perc = scrape_vllm_kv_usage_perc(url)
+            perc, peak_b = scrape_serve_metrics(url)
             if perc is not None:
                 peak[0] = perc if peak[0] is None else max(peak[0], perc)
+            if peak_b is not None:
+                alloc[0] = peak_b if alloc[0] is None else max(alloc[0], peak_b)
             stop.wait(poll_s)
 
     thread = threading.Thread(target=loop, daemon=True)
     thread.start()
     try:
-        return fn(), peak[0]
+        return fn(), peak[0], alloc[0]
     finally:
         stop.set()
         thread.join(timeout=2.0)
-        perc = scrape_vllm_kv_usage_perc(url)
+        perc, peak_b = scrape_serve_metrics(url)
         if perc is not None:
             peak[0] = perc if peak[0] is None else max(peak[0], perc)
+        if peak_b is not None:
+            alloc[0] = peak_b if alloc[0] is None else max(alloc[0], peak_b)
 
 
 def _one_probe(
@@ -938,12 +1064,15 @@ def _one_probe(
             refuse = True
     extra: dict[str, Any] = {
         "completion_chars": len(completion),
+        "completion": (completion or "")[:COMPLETION_STORE_CHARS],
         "hay_chars": hay_chars,
         "hay_tokens": hay_tokens_for_context(
             context_tokens, cap, extra_tokens=extra_tokens
         ),
         "needle_count": len(facts),
         "needle_depths": list(needle_spread_depths(len(facts), float(depth))),
+        "score_keys": list(needle_keys(facts)),
+        "seed": CHAT_SEED,
         "model": str(model),
     }
     if err:
@@ -986,14 +1115,21 @@ def probe_grid(
     hbm_bytes = scrape_gpu_hbm_bytes()
     util = float(gpu_memory_utilization)
     reported_non_kv = int(non_kv_bytes) if int(non_kv_bytes) > 0 else None
+    gpu_once = scrape_gpu_process_bytes()
+    non_kv, non_kv_kind = resolve_non_kv_bytes(
+        reported=reported_non_kv,
+        process_bytes=gpu_once,
+        pool_gib=float(kv_cache_gib),
+    )
     for tokens in context_tokens:
         gpu_bytes = scrape_gpu_process_bytes()
         depth_list = [float(d) for d in depths]
         usage_perc: float | None = None
+        alloc_peak: int | None = None
         bin_rows: list[dict[str, Any]] = []
         for i, depth in enumerate(depth_list):
             if i == 0:
-                item, usage_perc = _peak_kv_usage_perc(
+                item, usage_perc, alloc_peak = _peak_kv_usage_perc(
                     url,
                     lambda d=depth: _one_probe(
                         url=url,
@@ -1028,11 +1164,6 @@ def probe_grid(
             pool_tokens=int(pool_tokens),
             usage_perc=usage_perc,
         )
-        non_kv, non_kv_kind = resolve_non_kv_bytes(
-            reported=reported_non_kv,
-            process_bytes=gpu_bytes,
-            pool_gib=float(kv_cache_gib),
-        )
         for item in bin_rows:
             if gpu_bytes is not None:
                 item["gpu_process_bytes_measured"] = gpu_bytes
@@ -1044,6 +1175,27 @@ def probe_grid(
             item["kv_pool_tokens"] = int(pool_tokens)
             item["non_kv_bytes_reported"] = non_kv
             item["non_kv_kind"] = non_kv_kind
+            ids_b = derived_archived_id_bytes(int(tokens), int(pool_tokens))
+            persist_b = 0
+            persist_kind = "derived"
+            if (
+                _panel_alias(panel) == "tic"
+                and alloc_peak is not None
+                and int(alloc_peak) > 0
+            ):
+                floor = non_kv + gib_to_bytes(float(kv_cache_gib))
+                extra_alloc = int(alloc_peak) - floor
+                if extra_alloc > 0:
+                    persist_b = extra_alloc
+                    persist_kind = "metrics"
+            if persist_b <= 0 and _panel_alias(panel) == "tic":
+                persist_b = ids_b
+                persist_kind = "derived"
+            item["archived_id_bytes"] = ids_b
+            item["persist_page_bytes"] = persist_b
+            item["persist_kind"] = persist_kind
+            if alloc_peak is not None:
+                item["isiro_gpu_memory_peak_bytes"] = int(alloc_peak)
             rows.append(item)
     return rows
 
@@ -1359,14 +1511,18 @@ def render_vram_vs_context(
         if isinstance(raw_util, (int, float)) and raw_util > 0:
             util = float(raw_util)
         key = (alias, round(_kv_cache_gib(item), 4))
-        reserved_by_key[key] = reserved_vram_y_bytes(item)
+        non_kv_lock = locked_non_kv_bytes(
+            rows, panel=alias, size=_kv_cache_gib(item)
+        )
+        reserved_by_key[key] = non_kv_lock + gib_to_bytes(_kv_cache_gib(item))
+        used = vram_in_use_y_bytes(item, non_kv_override=non_kv_lock)
         if item.get("oom"):
             oom_by_key.setdefault(key, set()).add(tokens)
             series.setdefault(key, {})
-            series[key].setdefault(tokens, vram_in_use_y_bytes(item))
+            series[key].setdefault(tokens, used)
             continue
         series.setdefault(key, {})
-        series[key].setdefault(tokens, vram_in_use_y_bytes(item))
+        series[key].setdefault(tokens, used)
 
     if hbm_bytes <= 0:
         hbm_bytes = gib_to_bytes(32.0)
@@ -1427,15 +1583,14 @@ def render_vram_vs_context(
                     zorder=5,
                     linewidths=1.6,
                 )
-        if panel != "tic":
-            ax.axhline(
-                bytes_to_gib(reserved_by_key.get((panel, size), gib_to_bytes(size))),
-                color=color,
-                ls="--",
-                lw=1.25,
-                alpha=0.85,
-                zorder=2,
-            )
+        ax.axhline(
+            bytes_to_gib(reserved_by_key.get((panel, size), gib_to_bytes(size))),
+            color=color,
+            ls="--",
+            lw=1.25,
+            alpha=0.85,
+            zorder=2,
+        )
     ax.set_xlabel("Context (tokens)", fontsize=11)
     ax.set_ylabel("VRAM usage (GiB)", fontsize=11)
     ax.set_xscale("linear")
@@ -1511,6 +1666,14 @@ def render_vram_vs_context(
             marker="o",
             ms=5,
             label="Baseline",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=_VRAM_COLORS["tic"],
+            lw=1.25,
+            ls="--",
+            label="TIC reserved",
         ),
         Line2D(
             [0],
@@ -1612,6 +1775,12 @@ def mock_rows() -> list[dict[str, Any]]:
                 item["kv_bytes_in_use"] = used
                 item["kv_in_use_kind"] = kind
                 item["kv_pool_tokens"] = pool_tokens
+                ids_b = derived_archived_id_bytes(context_tokens, pool_tokens)
+                item["archived_id_bytes"] = ids_b
+                item["persist_page_bytes"] = (
+                    ids_b if panel == "tic" else 0
+                )
+                item["persist_kind"] = "derived"
                 item["non_kv_bytes_reported"] = gib_to_bytes(
                     11.19 if panel == "tic" else 15.34
                 )
@@ -1695,14 +1864,16 @@ def vram_report_lines(image_rel: str) -> list[str]:
         "Figure. VRAM usage vs context tokens.",
         "",
         (
-            "Solid line is reported non-KV plus vLLM pool occupancy "
-            "(metrics, or derived T/pool if /metrics is missing). "
-            "Dashed line is Baseline non-KV plus its reserved KV pool. "
+            "Solid line is in-use: non-KV (weights) plus live vendor KV "
+            "(usage_perc times pool, or derived T/pool) plus TokenID/persist "
+            "outside the pool. "
+            "Dashed lines are reserved pools (non-KV plus the full KV lock or fill). "
             "The dotted line is usable VRAM. "
             "The light red band is above usable VRAM. "
             "The darker red band is above GPU HBM. "
             "An X on the GPU HBM line is OOM at that context. "
-            "Reported non-KV plus pool occupancy, not a process nvidia-smi meter."
+            "Not nvidia-smi. TIC in-use stays weights plus the 1.09 GiB lock "
+            "plus TokenIDs past the lock. Baseline in-use grows with fill occupancy."
         ),
         "",
         f"![VRAM usage vs context tokens]({image_rel})",

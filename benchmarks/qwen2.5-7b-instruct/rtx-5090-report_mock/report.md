@@ -56,7 +56,7 @@ Figure. Fact retrieval by context length (3-needle haystack).
 
 Figure. VRAM usage vs context tokens.
 
-Solid line is reported non-KV plus vLLM pool occupancy (metrics, or derived T/pool if /metrics is missing). Dashed line is Baseline non-KV plus its reserved KV pool. The dotted line is usable VRAM. The light red band is above usable VRAM. The darker red band is above GPU HBM. An X on the GPU HBM line is OOM at that context. Reported non-KV plus pool occupancy, not a process nvidia-smi meter.
+Solid line is in-use: non-KV (weights) plus live vendor KV (usage_perc times pool, or derived T/pool) plus TokenID/persist outside the pool. Dashed lines are reserved pools (non-KV plus the full KV lock or fill). The dotted line is usable VRAM. The light red band is above usable VRAM. The darker red band is above GPU HBM. An X on the GPU HBM line is OOM at that context. Not nvidia-smi. TIC in-use stays weights plus the 1.09 GiB lock plus TokenIDs past the lock. Baseline in-use grows with fill occupancy.
 
 ![VRAM usage vs context tokens](vram-vs-context.png)
 

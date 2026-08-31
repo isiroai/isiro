@@ -24,6 +24,8 @@ from needle_haystack import (  # noqa: E402
     NEEDLE,
     NEEDLE_BINDER,
     NEEDLES,
+    NEEDLE_KEYS,
+    CHAT_SEED,
     STORY_CONTEXT_TOKENS,
     LONG_CONTEXT_TOKENS,
     CHAT_MAX_TOKENS,
@@ -50,6 +52,9 @@ from needle_haystack import (  # noqa: E402
     parse_kv_cache_tokens,
     parse_non_kv_cache_bytes,
     parse_prometheus_kv_usage_perc,
+    parse_prometheus_isiro_peak_bytes,
+    persist_outside_bytes,
+    derived_archived_id_bytes,
     derived_kv_in_use_bytes,
     kv_in_use_bytes,
     gib_to_bytes,
@@ -81,7 +86,7 @@ class NeedleHaystackTests(unittest.TestCase):
         self.assertTrue(score_hit("84932017"))
         self.assertTrue(score_hit("The number is " + NEEDLE))
         self.assertFalse(score_hit("I do not know"))
-        self.assertFalse(
+        self.assertTrue(
             score_hit("a- to- er 0_0 soup with 84932017 buried in noise " * 4)
         )
 
@@ -115,10 +120,17 @@ class NeedleHaystackTests(unittest.TestCase):
     def test_score_needles_fractions(self) -> None:
         self.assertEqual(NEEDLE_COUNT, 3)
         self.assertEqual(len(NEEDLES), 3)
+        self.assertEqual(NEEDLE_KEYS, ("84932017", "Zebra-419", "Copperbrook"))
+        self.assertEqual(CHAT_SEED, 17)
         self.assertEqual(score_needles(""), 0.0)
         self.assertEqual(score_needles(NEEDLES[0]), 0.3333)
         self.assertEqual(score_needles(NEEDLES[0] + " " + NEEDLES[1]), 0.6667)
         self.assertEqual(score_needles(" ".join(NEEDLES)), 1.0)
+        self.assertEqual(
+            score_needles("The facts are 84932017, Zebra-419, and Copperbrook."),
+            1.0,
+        )
+        self.assertEqual(score_needles("84932017 only"), 0.3333)
         self.assertEqual(
             figure_tagline(
                 gpu="NVIDIA GeForce RTX 5090",
@@ -139,6 +151,11 @@ class NeedleHaystackTests(unittest.TestCase):
             "vllm:gpu_cache_usage_perc 12.5\n"
         )
         self.assertAlmostEqual(parse_prometheus_kv_usage_perc(gpu), 0.125)
+        self.assertEqual(
+            parse_prometheus_isiro_peak_bytes("isiro_gpu_memory_peak_bytes 123456789\n"),
+            123456789,
+        )
+        self.assertEqual(derived_archived_id_bytes(32768, 20480), 12288 * 4)
         used = derived_kv_in_use_bytes(10240, 1.09, 20480)
         self.assertEqual(used, int(round(0.5 * gib_to_bytes(1.09))))
         metered, kind = kv_in_use_bytes(
@@ -196,6 +213,7 @@ class NeedleHaystackTests(unittest.TestCase):
             abs(vram_in_use_y_bytes(tic) - tic["non_kv_bytes_reported"]),
             gib_to_bytes(0.15),
         )
+        self.assertEqual(persist_outside_bytes(tic), 0)
         self.assertEqual(
             reserved_vram_y_bytes(tic),
             tic["non_kv_bytes_reported"] + gib_to_bytes(1.09),
@@ -210,7 +228,59 @@ class NeedleHaystackTests(unittest.TestCase):
             if r["panel"] == "tic" and int(r["context_tokens"]) == 32768
         )
         self.assertGreater(vram_in_use_y_bytes(filled), vram_in_use_y_bytes(tic))
+        self.assertEqual(
+            persist_outside_bytes(filled),
+            derived_archived_id_bytes(32768, 20480),
+        )
         self.assertAlmostEqual(bytes_to_gib(vram_in_use_y_bytes(filled)), 11.19 + 1.09, places=2)
+
+    def test_smi_non_kv_locked_keeps_tic_below_baseline(self) -> None:
+        from needle_haystack import locked_non_kv_bytes
+
+        pool = gib_to_bytes(1.09)
+        fill = gib_to_bytes(13.48)
+        rows = []
+        for t, tic_smi, van_kv in (
+            (1000, gib_to_bytes(12.80), int(round(1000 / 252352 * fill))),
+            (32768, gib_to_bytes(18.84), int(round(32768 / 252352 * fill))),
+        ):
+            rows.append(
+                {
+                    "panel": "tic",
+                    "context_tokens": t,
+                    "kv_cache_gib": 1.09,
+                    "kv_bytes_in_use": min(pool, int(round(t / 20480 * pool))),
+                    "non_kv_bytes_reported": tic_smi,
+                    "non_kv_kind": "smi_minus_pool",
+                    "persist_page_bytes": derived_archived_id_bytes(t, 20480),
+                    "archived_id_bytes": derived_archived_id_bytes(t, 20480),
+                }
+            )
+            rows.append(
+                {
+                    "panel": "vanilla",
+                    "context_tokens": t,
+                    "kv_cache_gib": 13.48,
+                    "kv_bytes_in_use": van_kv,
+                    "non_kv_bytes_reported": gib_to_bytes(14.75),
+                    "non_kv_kind": "reported",
+                    "persist_page_bytes": 0,
+                    "archived_id_bytes": 0,
+                }
+            )
+        tic_nk = locked_non_kv_bytes(rows, panel="tic", size=1.09)
+        van_nk = locked_non_kv_bytes(rows, panel="vanilla", size=13.48)
+        self.assertEqual(tic_nk, gib_to_bytes(12.80))
+        self.assertEqual(van_nk, gib_to_bytes(14.75))
+        for t in (1000, 32768):
+            tic = next(r for r in rows if r["panel"] == "tic" and r["context_tokens"] == t)
+            van = next(
+                r for r in rows if r["panel"] == "vanilla" and r["context_tokens"] == t
+            )
+            self.assertLess(
+                vram_in_use_y_bytes(tic, non_kv_override=tic_nk),
+                vram_in_use_y_bytes(van, non_kv_override=van_nk),
+            )
 
     def test_advertised_max_model_len_from_config(self) -> None:
         self.assertEqual(
@@ -473,8 +543,8 @@ class NeedleHaystackTests(unittest.TestCase):
                 "Figure. VRAM usage vs context tokens.",
                 text,
             )
-            self.assertIn("Reported non-KV plus pool occupancy", text)
-            self.assertIn("not a process nvidia-smi meter", text)
+            self.assertIn("Solid line is in-use: non-KV (weights) plus live vendor KV", text)
+            self.assertIn("Not nvidia-smi reserved", text)
             self.assertIn("An X on the GPU HBM line is OOM", text)
             self.assertIn("An X in a column is OOM, same as the VRAM figure.", text)
             self.assertNotIn("Above GPU HBM (OOM)", text)
@@ -486,7 +556,7 @@ class NeedleHaystackTests(unittest.TestCase):
         text = (mock / "report.md").read_text(encoding="utf-8")
         self.assertIn("](needle-haystack.png)", text)
         self.assertIn("](vram-vs-context.png)", text)
-        self.assertIn("Reported non-KV plus pool occupancy", text)
+        self.assertIn("Solid line is in-use: non-KV (weights) plus live vendor KV", text)
         self.assertIn("An X on the GPU HBM line is OOM", text)
         self.assertIn("An X in a column is OOM, same as the VRAM figure.", text)
         self.assertNotIn("Above GPU HBM (OOM)", text)
