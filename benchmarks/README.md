@@ -61,6 +61,8 @@ benchmarks/run_ab.sh {model} --both-graph-modes
 
 `SYSTEM_ID` comes from that model's `common.env` (or GPU auto-detect).
 
+Single-request latency: `SERVE_MAX_NUM_SEQS=1` and `BENCH_MAX_CONCURRENCY=1` (or a second `common.env`). Do not change Hub `serve.yaml` defaults for that; overlay locally.
+
 Long prefix (KV-bound ITL vs vendor FA). Use the overlay and profile; keep
 prefix caching off. Report ITL as `e2e_itl_vs_fa`. That serve meter is not
 Part B `bf16/sak` and is not v0.1.0 `v10/v11`.

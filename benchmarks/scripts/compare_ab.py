@@ -27,6 +27,22 @@ from capacity_plan import scale_seqs_from_kv_measured
 from serve_output_match import compare_captures
 
 
+def _apply_serve_output_match(
+    correctness: dict[str, Any], match_doc: dict[str, Any]
+) -> None:
+    """Fold exact greedy token-ID compare. Skip the row if thinking was still on."""
+    if match_doc.get("protocol_ok") is False:
+        correctness.pop("serve_output_match_ok", None)
+        correctness.pop("serve_output_match_matched", None)
+        correctness.pop("serve_output_match_prompt_count", None)
+        return
+    correctness["serve_output_match_ok"] = bool(match_doc.get("serve_output_match_ok"))
+    correctness["serve_output_match_matched"] = int(match_doc.get("matched") or 0)
+    correctness["serve_output_match_prompt_count"] = int(
+        match_doc.get("prompt_count") or 0
+    )
+
+
 def fold_serve_output_match(
     run_dir: Path, correctness: dict[str, Any]
 ) -> None:
@@ -36,24 +52,11 @@ def fold_serve_output_match(
     if baseline_match.is_file() and isiro_match.is_file():
         match_doc = compare_captures(load_json(baseline_match), load_json(isiro_match))
         write_json(run_dir / "output_match.json", match_doc)
-        correctness["serve_output_match_ok"] = bool(
-            match_doc.get("serve_output_match_ok")
-        )
-        correctness["serve_output_match_matched"] = int(match_doc.get("matched") or 0)
-        correctness["serve_output_match_prompt_count"] = int(
-            match_doc.get("prompt_count") or 0
-        )
+        _apply_serve_output_match(correctness, match_doc)
         return
     legacy = run_dir / "output_match.json"
     if legacy.is_file():
-        match_doc = load_json(legacy)
-        correctness["serve_output_match_ok"] = bool(
-            match_doc.get("serve_output_match_ok")
-        )
-        correctness["serve_output_match_matched"] = int(match_doc.get("matched") or 0)
-        correctness["serve_output_match_prompt_count"] = int(
-            match_doc.get("prompt_count") or 0
-        )
+        _apply_serve_output_match(correctness, load_json(legacy))
 
 
 def artifact_digest(path: Path) -> str:

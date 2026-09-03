@@ -65,7 +65,12 @@ from probe_isiro_versions import (  # noqa: E402
     runtime_version_from_help,
     tic_compiler_version,
 )
-from serve_output_match import compare_captures  # noqa: E402
+from serve_output_match import (  # noqa: E402
+    compare_captures,
+    greedy_chat_payload,
+    greedy_protocol_errors,
+    thinking_controls_present,
+)
 
 
 def _sample_capacity() -> dict:
@@ -1170,12 +1175,26 @@ class BenchmarkTests(unittest.TestCase):
             "kind": "capture",
             "seed": 17,
             "max_tokens": 32,
+            "enable_thinking": False,
             "prompts": [
-                {"index": 0, "prompt": "a", "token_ids": [1, 2, 3], "text": "x"},
-                {"index": 1, "prompt": "b", "token_ids": [4, 5], "text": "y"},
+                {
+                    "index": 0,
+                    "prompt": "a",
+                    "token_ids": [1, 2, 3],
+                    "text": "x",
+                    "finish_reason": "stop",
+                },
+                {
+                    "index": 1,
+                    "prompt": "b",
+                    "token_ids": [4, 5],
+                    "text": "y",
+                    "finish_reason": "stop",
+                },
             ],
         }
         ok = compare_captures(capture, capture)
+        self.assertTrue(ok["protocol_ok"])
         self.assertTrue(ok["serve_output_match_ok"])
         self.assertEqual(ok["matched"], 2)
         bad = dict(capture)
@@ -1186,6 +1205,84 @@ class BenchmarkTests(unittest.TestCase):
         fail = compare_captures(capture, bad)
         self.assertFalse(fail["serve_output_match_ok"])
         self.assertEqual(fail["matched"], 1)
+
+    def test_greedy_chat_payload_disables_thinking(self) -> None:
+        payload = greedy_chat_payload(
+            model="Qwen/Qwen3.8-27B",
+            prompt="ping",
+            seed=17,
+            max_tokens=32,
+        )
+        self.assertEqual(payload["temperature"], 0.0)
+        self.assertEqual(payload["seed"], 17)
+        self.assertEqual(
+            payload["chat_template_kwargs"], {"enable_thinking": False}
+        )
+        self.assertTrue(thinking_controls_present(payload))
+
+    def test_greedy_protocol_rejects_thinking_dump_even_if_ids_match(self) -> None:
+        dump = "We need to reply with exactly one word in lowercase: hello. <think>"
+        ids = list(range(32))
+        capture = {
+            "max_tokens": 32,
+            "enable_thinking": True,
+            "prompts": [
+                {
+                    "index": 3,
+                    "prompt": "hello",
+                    "token_ids": ids,
+                    "text": dump,
+                    "finish_reason": "length",
+                }
+            ],
+        }
+        errors = greedy_protocol_errors(capture)
+        self.assertTrue(errors)
+        matched = compare_captures(capture, capture)
+        self.assertTrue(matched["details"][0]["ok"])
+        self.assertFalse(matched["protocol_ok"])
+        self.assertFalse(matched["serve_output_match_ok"])
+
+    def test_harness_locks_thinking_off_not_max_tokens(self) -> None:
+        text = (SCRIPTS / "harness_lib.sh").read_text(encoding="utf-8")
+        start = text.index("capture_serve_output_match()")
+        end = text.index("\nwrite_effective_config()", start)
+        body = text[start:end]
+        self.assertIn("--max-tokens 32", body)
+        src = (SCRIPTS / "serve_output_match.py").read_text(encoding="utf-8")
+        self.assertNotIn("MIN_GREEDY_MAX_TOKENS", src)
+        self.assertIn('"chat_template_kwargs": {"enable_thinking": False}', src)
+        self.assertIn("refusing token-id retry without thinking-off controls", src)
+
+    def test_fold_omits_thinking_on_match_from_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            capture = {
+                "max_tokens": 32,
+                "enable_thinking": True,
+                "prompts": [
+                    {
+                        "index": 0,
+                        "prompt": "a",
+                        "token_ids": [1, 2],
+                        "text": "x <think>",
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+            (run / "output_match_baseline.json").write_text(
+                json.dumps(capture), encoding="utf-8"
+            )
+            (run / "output_match_isiro.json").write_text(
+                json.dumps(capture), encoding="utf-8"
+            )
+            correctness: dict = {
+                "serve_output_match_ok": False,
+                "serve_output_match_matched": 3,
+                "serve_output_match_prompt_count": 4,
+            }
+            fold_serve_output_match(run, correctness)
+            self.assertNotIn("serve_output_match_ok", correctness)
 
     def test_report_dual_graph_companion_details(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1293,9 +1390,23 @@ class BenchmarkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             run = Path(temp)
             capture = {
+                "max_tokens": 32,
+                "enable_thinking": False,
                 "prompts": [
-                    {"prompt": "a", "token_ids": [1, 2]},
-                    {"prompt": "b", "token_ids": [3, 4]},
+                    {
+                        "index": 0,
+                        "prompt": "a",
+                        "token_ids": [1, 2],
+                        "text": "x",
+                        "finish_reason": "stop",
+                    },
+                    {
+                        "index": 1,
+                        "prompt": "b",
+                        "token_ids": [3, 4],
+                        "text": "y",
+                        "finish_reason": "stop",
+                    },
                 ],
             }
             (run / "output_match_baseline.json").write_text(

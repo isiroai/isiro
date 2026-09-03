@@ -769,6 +769,7 @@ equalize_warmup() {
 }
 
 # Greedy serve output capture (before timed vllm bench). compare_ab folds A/B.
+# Thinking off is in serve_output_match.py. Closed-form prompts fit in 32 tokens.
 capture_serve_output_match() {
   variant="$1"
   python3 "${BENCH_ROOT}/scripts/serve_output_match.py" capture \

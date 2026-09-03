@@ -13,7 +13,7 @@ Tooling: **`vllm bench serve`**.
 |--------|----------|-----|
 | On-disk model size | 55.56 GB | **39.57 GB** (**28.78% smaller**) |
 | Integrity | baseline weights | **PASS** (`isiro verify`) |
-| Serve output match | - | FAIL (3/4 prompts matched (temp=0 token IDs)) |
+| Serve output match | - | **PASS** (4/4 prompts, temp=0, token IDs equal) |
 
 ## Graph ON (CUDA graphs)
 
