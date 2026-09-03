@@ -3,7 +3,7 @@
 Matched A/B with `vllm bench serve`: vLLM **baseline** vs ISIRO
 (`isiro serve … --target vllm`).
 
-~29% footprint savings apply across BF16 models, see [model cards](../model-cards/) [Hugging Face](https://huggingface.co/isiroai).
+~29% footprint savings apply across BF16 models, see [model cards](../model-cards/README.md) and [Hugging Face](https://huggingface.co/isiroai).
 
 - Benchmarked:
   - [Qwen2.5-7B-Instruct](qwen2.5-7b-instruct/)
