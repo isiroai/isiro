@@ -10,6 +10,7 @@ footprint savings apply across GPUs ([model cards](../model-cards/);
 - Benchmarked:
   - [Qwen2.5-7B-Instruct](qwen2.5-7b-instruct/)
   - [Gemma 4 12B IT](gemma-4-12B-it/) (multimodal)
+  - [Qwen3.8-27B](qwen3.8-27b/rtx-pro-6000-blackwell-report-20260903T194606Z.md) (RTX PRO 6000 Blackwell)
 - In progress: production GPU benches (Qwen3.5-27B, Qwen3.5-35B-A3B MoE, etc);
 HBM-mature kernels (A100, H100)
 
