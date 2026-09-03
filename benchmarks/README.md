@@ -3,16 +3,12 @@
 Matched A/B with `vllm bench serve`: vLLM **baseline** vs ISIRO
 (`isiro serve … --target vllm`).
 
-Current setup: NVIDIA RTX 5090 (SM120, Blackwell, 32GB VRAM), BF16. ~29%
-footprint savings apply across GPUs ([model cards](../model-cards/);
-[Hugging Face](https://huggingface.co/isiroai)).
+~29% footprint savings apply across BF16 models, see [model cards](../model-cards/) [Hugging Face](https://huggingface.co/isiroai).
 
 - Benchmarked:
   - [Qwen2.5-7B-Instruct](qwen2.5-7b-instruct/)
-  - [Gemma 4 12B IT](gemma-4-12B-it/) (multimodal)
-  - [Qwen3.8-27B](qwen3.8-27b/rtx-pro-6000-blackwell-report-20260903T194606Z.md) (RTX PRO 6000 Blackwell)
-- In progress: production GPU benches (Qwen3.5-27B, Qwen3.5-35B-A3B MoE, etc);
-HBM-mature kernels (A100, H100)
+  - [Gemma 4 12B IT](gemma-4-12B-it/)
+  - [Qwen3.8-27B](qwen3.8-27b/)
 
 ## Prerequisites
 
@@ -62,17 +58,6 @@ benchmarks/run_ab.sh {model} --both-graph-modes
 `SYSTEM_ID` comes from that model's `common.env` (or GPU auto-detect).
 
 Single-request latency: `SERVE_MAX_NUM_SEQS=1` and `BENCH_MAX_CONCURRENCY=1` (or a second `common.env`). Do not change Hub `serve.yaml` defaults for that; overlay locally.
-
-Long prefix (KV-bound ITL vs vendor FA). Use the overlay and profile; keep
-prefix caching off. Report ITL as `e2e_itl_vs_fa`. That serve meter is not
-Part B `bf16/sak` and is not v0.1.0 `v10/v11`.
-
-```bash
-# e.g. 16k prefix on a 32k window (5090 7B). Try 32k, then 64k if it fits.
-benchmarks/run_ab.sh qwen2.5-7b-instruct \
-  --config benchmarks/qwen2.5-7b-instruct/longctx.env \
-  --profiles=generation-16384-256
-```
 
 ## Output
 
