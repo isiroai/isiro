@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "isiro-benchmark-output-match-v1"
+THINK_MARKERS = ("<think>", "</think>", "<|im_start|>think")
 
 # Fixed prompts: short, diverse enough to exercise chat + greedy decode.
 DEFAULT_PROMPTS: tuple[str, ...] = (
@@ -87,6 +88,132 @@ def _extract_text(choice: dict[str, Any]) -> str:
     return text if isinstance(text, str) else ""
 
 
+def _extract_finish_reason(choice: dict[str, Any]) -> str | None:
+    reason = choice.get("finish_reason")
+    return reason if isinstance(reason, str) else None
+
+
+def thinking_controls_present(payload: dict[str, Any]) -> bool:
+    """True when the request disables thinking (kwargs and/or /no_think)."""
+    kwargs = payload.get("chat_template_kwargs")
+    if isinstance(kwargs, dict) and kwargs.get("enable_thinking") is False:
+        return True
+    for message in payload.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and "/no_think" in content:
+            return True
+    return False
+
+
+def _with_no_think_message(payload: dict[str, Any]) -> dict[str, Any]:
+    retry = dict(payload)
+    messages: list[dict[str, Any]] = []
+    for message in retry.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        item = dict(message)
+        content = item.get("content")
+        if (
+            item.get("role") == "user"
+            and isinstance(content, str)
+            and "/no_think" not in content
+        ):
+            item["content"] = content.rstrip() + "\n/no_think"
+        messages.append(item)
+    retry["messages"] = messages
+    return retry
+
+
+def greedy_chat_payload(
+    *,
+    model: str,
+    prompt: str,
+    seed: int,
+    max_tokens: int,
+    request_token_ids: bool = True,
+) -> dict[str, Any]:
+    """temp=0 chat/completions body. Always disable thinking for greedy IDs."""
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stream": False,
+        "logprobs": 1,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    if request_token_ids:
+        payload["return_token_ids"] = True
+        payload["return_tokens_as_token_ids"] = True
+    return payload
+
+
+def _post_greedy(
+    chat_url: str, payload: dict[str, Any], timeout: float
+) -> dict[str, Any]:
+    """Retry 400s without dropping thinking-off. Token-id flags may be stripped."""
+    if not thinking_controls_present(payload):
+        raise RuntimeError("greedy payload is missing thinking-off controls")
+    try:
+        return _post_json(chat_url, payload, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        if exc.code != 400:
+            raise RuntimeError(
+                f"chat/completions failed ({exc.code}): {body[:400]}"
+            ) from exc
+        lowered = body.lower()
+        retry = dict(payload)
+        if "return_token" in lowered:
+            retry.pop("return_token_ids", None)
+            retry.pop("return_tokens_as_token_ids", None)
+            if not thinking_controls_present(retry):
+                raise RuntimeError(
+                    "refusing token-id retry without thinking-off controls"
+                ) from exc
+            try:
+                return _post_json(chat_url, retry, timeout=timeout)
+            except urllib.error.HTTPError as retry_exc:
+                body = retry_exc.read().decode("utf-8", errors="replace")
+                if retry_exc.code != 400:
+                    raise RuntimeError(
+                        f"chat/completions failed ({retry_exc.code}): {body[:400]}"
+                    ) from retry_exc
+                lowered = body.lower()
+                retry = dict(retry)
+        if "chat_template" in lowered or "enable_thinking" in lowered:
+            retry = _with_no_think_message(retry)
+            retry.pop("chat_template_kwargs", None)
+            if not thinking_controls_present(retry):
+                raise RuntimeError(
+                    "refusing chat_template retry without /no_think"
+                ) from exc
+            return _post_json(chat_url, retry, timeout=timeout)
+        raise RuntimeError(
+            f"chat/completions failed ({exc.code}): {body[:400]}"
+        ) from exc
+
+
+def greedy_protocol_errors(capture: dict[str, Any]) -> list[str]:
+    """Thinking must be off. Token-ID compare does not depend on max_tokens."""
+    errors: list[str] = []
+    if capture.get("enable_thinking") is not False:
+        errors.append("enable_thinking must be false on greedy captures")
+    for item in capture.get("prompts") or []:
+        if not isinstance(item, dict):
+            continue
+        text = (item.get("text") or "").lower()
+        if any(marker in text for marker in THINK_MARKERS):
+            errors.append(
+                f"prompt {item.get('index')}: thinking markers in text"
+            )
+    return errors
+
+
 def capture_variant(
     *,
     api_url: str,
@@ -104,38 +231,20 @@ def capture_variant(
         chat_url = f"{base}/chat/completions"
     results: list[dict[str, Any]] = []
     for index, prompt in enumerate(prompts):
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0,
-            "top_p": 1.0,
-            "max_tokens": max_tokens,
-            "seed": seed,
-            "stream": False,
-            # vLLM OpenAI server: prefer native token ids when available.
-            "return_token_ids": True,
-            "logprobs": 1,
-            "return_tokens_as_token_ids": True,
-        }
-        try:
-            response = _post_json(chat_url, payload, timeout=timeout)
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            # Retry without optional return_token_ids if the server rejects them.
-            if exc.code == 400 and "return_token" in body.lower():
-                payload.pop("return_token_ids", None)
-                payload.pop("return_tokens_as_token_ids", None)
-                response = _post_json(chat_url, payload, timeout=timeout)
-            else:
-                raise RuntimeError(
-                    f"chat/completions failed ({exc.code}): {body[:400]}"
-                ) from exc
+        payload = greedy_chat_payload(
+            model=model,
+            prompt=prompt,
+            seed=seed,
+            max_tokens=max_tokens,
+        )
+        response = _post_greedy(chat_url, payload, timeout)
         choices = response.get("choices") or []
         if not choices or not isinstance(choices[0], dict):
             raise RuntimeError(f"empty choices for prompt index {index}")
         choice = choices[0]
         token_ids = _extract_token_ids(choice)
         text = _extract_text(choice)
+        finish_reason = _extract_finish_reason(choice)
         if token_ids is None and not text:
             raise RuntimeError(
                 f"no token_ids or text for prompt index {index}; "
@@ -147,9 +256,10 @@ def capture_variant(
                 "prompt": prompt,
                 "token_ids": token_ids,
                 "text": text,
+                "finish_reason": finish_reason,
             }
         )
-    return {
+    doc = {
         "schema": SCHEMA,
         "kind": "capture",
         "variant": variant,
@@ -158,8 +268,16 @@ def capture_variant(
         "max_tokens": max_tokens,
         "seed": seed,
         "prompt_count": len(results),
+        "enable_thinking": False,
         "prompts": results,
     }
+    protocol = greedy_protocol_errors(doc)
+    if protocol:
+        raise RuntimeError(
+            "greedy capture failed protocol (thinking still on): "
+            + "; ".join(protocol)
+        )
+    return doc
 
 
 def compare_captures(
@@ -195,9 +313,11 @@ def compare_captures(
                 "tic_text": t.get("text"),
             }
         )
-    total = max(len(b_prompts), len(t_prompts), 1)
+    protocol_errors = greedy_protocol_errors(baseline) + greedy_protocol_errors(tic)
+    protocol_ok = not protocol_errors
     all_ok = (
-        len(b_prompts) == len(t_prompts)
+        protocol_ok
+        and len(b_prompts) == len(t_prompts)
         and len(b_prompts) > 0
         and matched == len(b_prompts)
         and all(item["ok"] for item in details)
@@ -208,6 +328,8 @@ def compare_captures(
         "prompt_count": len(b_prompts),
         "matched": matched,
         "serve_output_match_ok": all_ok,
+        "protocol_ok": protocol_ok,
+        "protocol_errors": protocol_errors,
         "details": details,
         "baseline_seed": baseline.get("seed"),
         "tic_seed": tic.get("seed"),

@@ -1,6 +1,6 @@
-# ISIRO Benchmark Report: `gemma-4-12B-it`
+# ISIRO Benchmark Report: `qwen2.5-7b-instruct`
 
-`bf16` | `rtx-5090` | `v0.1.0` | 2026-08-11 06:21 UTC
+`bf16` | `rtx-5090` | compiler `v0.1.0` | runtime `v0.1.0` | 2026-08-11 05:12 UTC
 
 Tooling: **`vllm bench serve`**.
 
@@ -11,13 +11,13 @@ Tooling: **`vllm bench serve`**.
 
 | Metric | Baseline | TIC |
 |--------|----------|-----|
-| On-disk model size | 23.92 GB | **17.05 GB** (**28.70% smaller**) |
+| On-disk model size | 15.23 GB | **10.86 GB** (**28.68% smaller**) |
 | Weight bit-exactness | baseline weights | **PASS** (`isiro verify -r`) |
 | Serve output match | - | **PASS** (4/4 prompts, temp=0, token IDs equal) |
 
 ## Graph ON (CUDA graphs)
 
-CUDA graphs on (product default; `--graph-on`).
+Product default: eager prefill, graph decode.
 
 ## 1A. GPU memory
 
@@ -27,10 +27,10 @@ Norm savings % scales TIC to the Baseline total GPU, then uses `1 - TIC/Baseline
 
 | Metric | Baseline | TIC | Norm savings % |
 |--------|----------|-----|----------------|
-| Loaded model size | 24.51 GB | **18.45 GB** | **25.77%** |
-| Non-KV GPU memory | 25.21 GB | **19.49 GB** | **23.75%** |
-| KV cache | 5.10 GB | **10.81 GB** | **109.13% (2.09x)** |
-| Total GPU memory | 31.04 GB | 31.47 GB | |
+| Loaded model size | 15.34 GB | **11.38 GB** | **27.73%** |
+| Non-KV GPU memory | 16.65 GB | **12.36 GB** | **27.70%** |
+| KV cache | 13.65 GB | **17.94 GB** | **28.09% (1.28x)** |
+| Total GPU memory | 30.33 GB | 31.13 GB | |
 
 ## 1B. Capacity
 
@@ -40,21 +40,21 @@ KV token capacity is vLLM-reported (`GPU KV cache size` in serve logs).
 
 | Metric | Baseline | TIC |
 |--------|----------|-----|
-| `max_num_seqs` | 32 | **45** (**1.41x**) |
-| KV token capacity | 14756 | **31304** (**2.12x**) |
+| `max_num_seqs` | 32 | **41** (**1.28x**) |
+| KV token capacity | 238064 | **312896** (**1.31x**) |
 
 ## 1C. Generation (input 32 / output 256)
 
 | Metric | Baseline | TIC |
 |--------|----------|-----|
-| Output tok/s | 1040.55 | **1434.19** |
-| † tok/s per Non-KV GB | 41.27 | 73.59 |
-| ITL p50 (ms) | 18.96 | 26.91 |
-| ITL p95 (ms) | 20.29 | 28.26 |
-| ITL p99 (ms) | 20.76 | 28.71 |
-| TPOT p50 (ms) | 19.22 | 26.84 |
-| TPOT p95 (ms) | 19.22 | 26.84 |
-| TPOT p99 (ms) | 19.23 | 26.90 |
+| Output tok/s | 1875.56 | **2876.51** |
+| † tok/s per Non-KV GB | 112.62 | 232.75 |
+| ITL p50 (ms) | 10.65 | 13.07 |
+| ITL p95 (ms) | 11.23 | 13.89 |
+| ITL p99 (ms) | 11.74 | 37.67 |
+| TPOT p50 (ms) | 10.74 | 13.17 |
+| TPOT p95 (ms) | 11.04 | 13.19 |
+| TPOT p99 (ms) | 11.10 | 13.64 |
 
 † Derived: output tok/s ÷ Non-KV GPU memory (GB). Physical meaning: output tokens per second per GB of Non-KV GPU memory; a smaller Non-KV slice that still delivers high tok/s scores higher.
 
@@ -64,9 +64,9 @@ TTFT is separated from generation (1C) because it is more sensitive to the highe
 
 | Metric | Baseline | TIC |
 |--------|----------|-----|
-| TTFT p50 (ms) | 207.31 | 292.51 |
-| TTFT p95 (ms) | 208.68 | 294.04 |
-| TTFT p99 (ms) | 218.12 | 294.16 |
+| TTFT p50 (ms) | 158.65 | 181.53 |
+| TTFT p95 (ms) | 160.07 | 218.70 |
+| TTFT p99 (ms) | 160.28 | 218.85 |
 
 ## 1E. Equal batch
 
@@ -75,20 +75,20 @@ Same `max_num_seqs` and concurrency on both sides.
 | Metric | Baseline | TIC |
 |--------|----------|-----|
 | `max_num_seqs` / concurrency | 32 / 32 | 32 / 32 |
-| Output tok/s | 1030.03 | 889.39 |
-| ITL p50 (ms) | 19.08 | 23.28 |
-| ITL p95 (ms) | 20.34 | 24.80 |
-| ITL p99 (ms) | 20.74 | 25.23 |
-| TPOT p50 (ms) | 19.18 | 23.49 |
-| TPOT p95 (ms) | 19.25 | 23.50 |
-| TPOT p99 (ms) | 19.25 | 23.54 |
-| TTFT p50 (ms) | 207.54 | 259.81 |
-| TTFT p95 (ms) | 209.03 | 260.46 |
-| TTFT p99 (ms) | 209.15 | 260.53 |
+| Output tok/s | 1880.11 | 1845.21 |
+| ITL p50 (ms) | 10.61 | 11.04 |
+| ITL p95 (ms) | 11.26 | 11.72 |
+| ITL p99 (ms) | 11.65 | 22.80 |
+| TPOT p50 (ms) | 10.73 | 11.24 |
+| TPOT p95 (ms) | 10.91 | 11.34 |
+| TPOT p99 (ms) | 11.10 | 11.50 |
+| TTFT p50 (ms) | 89.35 | 124.34 |
+| TTFT p95 (ms) | 155.83 | 186.91 |
+| TTFT p99 (ms) | 155.96 | 187.10 |
 
 ## Graph OFF (eager)
 
-CUDA graphs off (`--graph-off`).
+Full eager (`--enforce-eager`).
 
 ## 2A. GPU memory
 
@@ -98,10 +98,10 @@ Norm savings % scales TIC to the Baseline total GPU, then uses `1 - TIC/Baseline
 
 | Metric | Baseline | TIC | Norm savings % |
 |--------|----------|-----|----------------|
-| Loaded model size | 24.51 GB | **18.45 GB** | **25.16%** |
-| Non-KV GPU memory | 25.02 GB | **19.49 GB** | **22.53%** |
-| KV cache | 5.28 GB | **10.81 GB** | **103.55% (2.04x)** |
-| Total GPU memory | 31.05 GB | 31.22 GB | |
+| Loaded model size | 15.34 GB | **11.38 GB** | **25.92%** |
+| Non-KV GPU memory | 15.84 GB | **12.38 GB** | **21.93%** |
+| KV cache | 14.47 GB | **17.93 GB** | **23.73% (1.24x)** |
+| Total GPU memory | 30.96 GB | 31.00 GB | |
 
 ## 2B. Capacity
 
@@ -111,21 +111,21 @@ KV token capacity is vLLM-reported (`GPU KV cache size` in serve logs).
 
 | Metric | Baseline | TIC |
 |--------|----------|-----|
-| `max_num_seqs` | 32 | **45** (**1.41x**) |
-| KV token capacity | 15296 | **31316** (**2.05x**) |
+| `max_num_seqs` | 32 | **40** (**1.25x**) |
+| KV token capacity | 252352 | **312640** (**1.24x**) |
 
 ## 2C. Generation (input 32 / output 256)
 
 | Metric | Baseline | TIC |
 |--------|----------|-----|
-| Output tok/s | 921.94 | **1053.05** |
-| † tok/s per Non-KV GB | 36.85 | 54.03 |
-| ITL p50 (ms) | 21.42 | 33.28 |
-| ITL p95 (ms) | 22.57 | 54.99 |
-| ITL p99 (ms) | 23.00 | 59.36 |
-| TPOT p50 (ms) | 21.61 | 36.93 |
-| TPOT p95 (ms) | 21.61 | 36.93 |
-| TPOT p99 (ms) | 21.68 | 37.01 |
+| Output tok/s | 1761.70 | **2557.72** |
+| † tok/s per Non-KV GB | 111.23 | 206.60 |
+| ITL p50 (ms) | 11.36 | 14.85 |
+| ITL p95 (ms) | 11.97 | 15.80 |
+| ITL p99 (ms) | 12.34 | 30.51 |
+| TPOT p50 (ms) | 11.51 | 15.03 |
+| TPOT p95 (ms) | 11.67 | 15.03 |
+| TPOT p99 (ms) | 11.87 | 15.25 |
 
 † Derived: output tok/s ÷ Non-KV GPU memory (GB). Physical meaning: output tokens per second per GB of Non-KV GPU memory; a smaller Non-KV slice that still delivers high tok/s scores higher.
 
@@ -135,9 +135,9 @@ TTFT is separated from generation (2C) because it is more sensitive to the highe
 
 | Metric | Baseline | TIC |
 |--------|----------|-----|
-| TTFT p50 (ms) | 201.71 | 304.07 |
-| TTFT p95 (ms) | 221.44 | 304.62 |
-| TTFT p99 (ms) | 221.50 | 304.70 |
+| TTFT p50 (ms) | 93.09 | 153.41 |
+| TTFT p95 (ms) | 156.63 | 216.48 |
+| TTFT p99 (ms) | 156.73 | 217.15 |
 
 ## 2E. Equal batch
 
@@ -146,23 +146,25 @@ Same `max_num_seqs` and concurrency on both sides.
 | Metric | Baseline | TIC |
 |--------|----------|-----|
 | `max_num_seqs` / concurrency | 32 / 32 | 32 / 32 |
-| Output tok/s | 924.07 | 533.58 |
-| ITL p50 (ms) | 21.43 | 32.79 |
-| ITL p95 (ms) | 22.56 | 52.29 |
-| ITL p99 (ms) | 23.60 | 55.59 |
-| TPOT p50 (ms) | 21.56 | 39.77 |
-| TPOT p95 (ms) | 21.57 | 39.77 |
-| TPOT p99 (ms) | 21.64 | 39.84 |
-| TTFT p50 (ms) | 210.53 | 276.30 |
-| TTFT p95 (ms) | 211.99 | 277.01 |
-| TTFT p99 (ms) | 212.25 | 277.11 |
+| Output tok/s | 1763.30 | 1399.15 |
+| ITL p50 (ms) | 11.34 | 13.84 |
+| ITL p95 (ms) | 12.21 | 15.14 |
+| ITL p99 (ms) | 12.76 | 39.15 |
+| TPOT p50 (ms) | 11.53 | 13.88 |
+| TPOT p95 (ms) | 11.83 | 13.95 |
+| TPOT p99 (ms) | 11.83 | 14.37 |
+| TTFT p50 (ms) | 81.31 | 170.85 |
+| TTFT p95 (ms) | 146.20 | 171.54 |
+| TTFT p99 (ms) | 146.83 | 171.60 |
 
 ## Config
 
 | Item | Value |
 |------|-------|
 | System | `rtx-5090` |
-| Graph modes | ON (CUDA graphs); OFF (eager) |
+| Graph modes | ON (eager prefill, graph decode); OFF (eager) |
+| Compiler | `v0.1.0` |
+| Runtime | `v0.1.0` |
 | vLLM | 0.26.0 |
 | GPU | NVIDIA GeForce RTX 5090 x 1 |
 | Driver / CUDA | 590.44.01 / 13.1 |

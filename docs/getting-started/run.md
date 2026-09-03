@@ -18,20 +18,20 @@ Port 8000 by default. Model output is unchanged: no quantization, no approximati
 ### Usage
 
 ```sh
-isiro serve <bundle> --target vllm [--host HOST] [--port PORT]
+isiro serve <bundle> --target vllm [--host HOST] [--port PORT] [--max-model-len N]
 ```
 
 `<bundle>`: a compiled `-TIC` folder or path to `model.tic` inside it. Config and tokenizer files sit beside the `.tic`. The same path form works for `isiro verify` and `isiro info`.
 
 `--target`: required; `vllm` in v0.1.0.
 
-`--host` / `--port`: override `serve.yaml` when passed. Prometheus `/metrics` is on the same port.
+`--host` / `--port` / `--max-model-len` override `serve.yaml` when passed. Prometheus `/metrics` is on the same port.
 
 ### Serve settings
 
-The TIC bundle includes `serve.yaml`. You can edit it for defaults such as host, port, `max_model_len`, `gpu_memory_utilization`, and the target image tag under `targets.vllm`. More target options can go there too.
+The TIC bundle includes `serve.yaml`. You can edit it for defaults such as host, port, `max_model_len`, `gpu_memory_utilization`, `max_num_seqs`, prefix cache, and the target image tag under `targets.vllm`.
 
-CLI `--host` and `--port` override the file when you pass them. For tested image tags, run `isiro status --compat`. For flag details, run `isiro serve --help`.
+CLI `--host`, `--port`, and `--max-model-len` override the file when you pass them. For `max_num_seqs`, `gpu_memory_utilization`, and prefix cache, copy `serve.yaml` next to the `.tic` and edit that copy for the GPU. The shipped defaults (8192 context, 0.90 util, 32 seqs, prefix cache off) are a start-safe load, not a long-context or single-request latency tune. Do not republish the Hub bundle just to change those knobs. For tested image tags, run `isiro status --compat`. For flag details, run `isiro serve --help`.
 
 The bundle must already be on the machine.
 

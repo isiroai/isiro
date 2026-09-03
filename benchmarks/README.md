@@ -3,15 +3,12 @@
 Matched A/B with `vllm bench serve`: vLLM **baseline** vs ISIRO
 (`isiro serve … --target vllm`).
 
-Current setup: NVIDIA RTX 5090 (SM120, Blackwell, 32GB VRAM), BF16. ~29%
-footprint savings apply across GPUs ([model cards](../model-cards/);
-[Hugging Face](https://huggingface.co/isiroai)).
+~29% footprint savings apply across BF16 models, see [model cards](../model-cards/README.md) and [Hugging Face](https://huggingface.co/isiroai).
 
 - Benchmarked:
   - [Qwen2.5-7B-Instruct](qwen2.5-7b-instruct/)
-  - [Gemma 4 12B IT](gemma-4-12B-it/) (multimodal)
-- In progress: production GPU benches (Qwen3.5-27B, Qwen3.5-35B-A3B MoE, etc);
-HBM-mature kernels (A100, H100)
+  - [Gemma 4 12B IT](gemma-4-12B-it/)
+  - [Qwen3.8-27B](qwen3.8-27b/)
 
 ## Prerequisites
 
@@ -28,6 +25,9 @@ Get [compiler access](https://isiro.ai/compiler).
 Create a model directory under `benchmarks/`. Copy the example env into a
 local `common.env` in that directory, then set `BASELINE_MODEL_DIR`,
 `TIC_MODEL_DIR`, `MODEL_ID`, and any other parameters in the file.
+Leave `ISIRO_FORMAT` and `ISIRO_RUNTIME` as `auto` (the example default)
+to read compiler from the `.tic` header and runtime from `isiro --help`.
+Set either to a semver only when you want to pin.
 
 ```bash
 cp benchmarks/common.env.example benchmarks/{model}/common.env
@@ -49,19 +49,25 @@ benchmarks/run_ab.sh {model}
 Other modes:
 
 ```bash
-# matches Graph OFF section of the report
-benchmarks/run_ab.sh {model} --graph-off
+# matches the report Graph OFF / full eager section
+benchmarks/run_ab.sh {model} --enforce-eager
 # matches the report (Graph ON & Graph OFF)
 benchmarks/run_ab.sh {model} --both-graph-modes
 ```
 
 `SYSTEM_ID` comes from that model's `common.env` (or GPU auto-detect).
 
+Single-request latency: `SERVE_MAX_NUM_SEQS=1` and `BENCH_MAX_CONCURRENCY=1` (or a second `common.env`). Do not change Hub `serve.yaml` defaults for that; overlay locally.
+
 ## Output
 
 After a launch finishes, open the timestamped report:
 
 `benchmarks/{model}/{system_id}-report-<UTC>.md`
+
+Those filenames stay local (gitignored) so a customer run does not look like
+a published result. The run UTC stays in the report body. To publish, copy
+to `{system_id}-report.md` (no stamp in the filename) and commit that.
 
 Logs and other run artifacts are under gitignored `benchmarks/scratch/`.
 

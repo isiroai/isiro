@@ -88,6 +88,16 @@ def normalized_gpu_savings_pct(
     return (1.0 - tic_scaled / float(baseline)) * 100.0
 
 
+def vllm_visible_budget(non_kv: Any, kv: Any) -> float | None:
+    """vLLM Non-KV + KV. Fair scale for memory %; not nvidia-smi process total."""
+    if not isinstance(non_kv, (int, float)) or not isinstance(kv, (int, float)):
+        return None
+    total = float(non_kv) + float(kv)
+    if total <= 0:
+        return None
+    return total
+
+
 def normalized_gpu_gain_pct(
     baseline: Any,
     tic: Any,
@@ -143,7 +153,7 @@ def _graph_mode(commands: dict[str, Any]) -> str:
     if enforce_eager is None and baseline_command:
         enforce_eager = "--enforce-eager" in baseline_command
     if enforce_eager is None:
-        enforce_eager = True
+        enforce_eager = False
     return "eager" if enforce_eager else "graphs"
 
 
@@ -166,6 +176,21 @@ def _latency_row(
     return f"| {label} | {number(b, digits)} | {number(t, digits)} |"
 
 
+def _compiler_runtime_versions(summary: dict[str, Any]) -> tuple[str, str]:
+    compiler = str(summary.get("isiro_compiler") or summary.get("isiro_format") or "")
+    runtime = str(summary.get("isiro_runtime") or compiler)
+    return compiler, runtime
+
+
+def _report_subtitle(summary: dict[str, Any]) -> str:
+    compiler, runtime = _compiler_runtime_versions(summary)
+    return (
+        f"`{summary['precision']}` | `{summary['system_id']}` | "
+        f"compiler `{compiler}` | runtime `{runtime}` | "
+        f"{_human_recorded_at(summary.get('recorded_at'))}"
+    )
+
+
 def _section_intro(
     summary: dict[str, Any],
     graph_mode: str,
@@ -178,10 +203,7 @@ def _section_intro(
     return [
         f"# ISIRO Benchmark Report: `{model}`",
         "",
-        (
-            f"`{summary['precision']}` | `{summary['system_id']}` | "
-            f"`{summary['isiro_format']}` | {_human_recorded_at(summary.get('recorded_at'))}"
-        ),
+        _report_subtitle(summary),
         "",
         "Tooling: **`vllm bench serve`**.",
         "",
@@ -270,6 +292,8 @@ def _section_b(
     t_kv = kv.get("tic_memory_bytes_measured")
     b_proc = baseline_fp.get("gpu_process_memory_after_load_bytes_measured")
     t_proc = tic_fp.get("gpu_process_memory_after_load_bytes_measured")
+    b_vllm = vllm_visible_budget(b_non, b_kv)
+    t_vllm = vllm_visible_budget(t_non, t_kv)
     non_kv_win = (
         isinstance(b_non, (int, float))
         and isinstance(t_non, (int, float))
@@ -286,13 +310,13 @@ def _section_b(
         and float(t_kv) > float(b_kv)
     )
     load_norm = normalized_gpu_savings_pct(
-        b_load, t_load, baseline_total=b_proc, tic_total=t_proc
+        b_load, t_load, baseline_total=b_vllm, tic_total=t_vllm
     )
     non_norm = normalized_gpu_savings_pct(
-        b_non, t_non, baseline_total=b_proc, tic_total=t_proc
+        b_non, t_non, baseline_total=b_vllm, tic_total=t_vllm
     )
     kv_norm = normalized_gpu_gain_pct(
-        b_kv, t_kv, baseline_total=b_proc, tic_total=t_proc
+        b_kv, t_kv, baseline_total=b_vllm, tic_total=t_vllm
     )
     return [
         f"## {prefix}A. GPU memory",
@@ -303,9 +327,10 @@ def _section_b(
         ),
         "",
         (
-            "Norm savings % scales TIC to the Baseline total GPU, then uses "
-            "`1 - TIC/Baseline` for Loaded model size and Non-KV. For KV it "
-            "uses `TIC/Baseline - 1` as a % gain (and the matching `x` ratio)."
+            "Norm savings % scales TIC to the Baseline vLLM budget "
+            "(Non-KV + KV). Loaded model size and Non-KV use "
+            "`1 - TIC/Baseline`. KV uses `TIC/Baseline - 1` and the "
+            "matching `x` ratio. nvidia-smi total is not part of that scale."
         ),
         "",
         "| Metric | Baseline | TIC | Norm savings % |",
@@ -467,6 +492,11 @@ def _section_d(
                 "Non-KV GPU memory; a smaller Non-KV slice that still "
                 "delivers high tok/s scores higher."
             ),
+            (
+                "Serve ITL vs vendor FA is e2e_itl_vs_fa (this table). "
+                "It is not Part B bf16/sak (kernel K@Q) and is not "
+                "v0.1.0 v10/v11."
+            ),
             "",
         ]
     )
@@ -588,13 +618,16 @@ def _section_g(
 ) -> list[str]:
     reused = commands.get("baseline_reused_from")
     if has_companion_graphs:
-        graph_cell = "ON (CUDA graphs); OFF (eager)"
+        graph_cell = "ON (eager prefill, graph decode); OFF (eager)"
     else:
         graph_cell = (
-            "ON (CUDA graphs)" if graph_mode == "graphs" else "OFF (eager)"
+            "ON (eager prefill, graph decode)"
+            if graph_mode == "graphs"
+            else "OFF (eager)"
         )
     # capacity scaling is explained in the Capacity sections, not Config.
     _ = capacity
+    compiler, runtime = _compiler_runtime_versions(summary)
     lines = [
         "## Config",
         "",
@@ -602,6 +635,8 @@ def _section_g(
         "|------|-------|",
         f"| System | `{summary.get('system_id', '')}` |",
         f"| Graph modes | {graph_cell} |",
+        f"| Compiler | `{compiler}` |",
+        f"| Runtime | `{runtime}` |",
         f"| vLLM | {environment.get('vllm_version', '')} |",
         (
             f"| GPU | {environment.get('gpu_model', '')} x "
@@ -676,7 +711,7 @@ def render(run_dir: Path, companion_run_dir: Path | None = None) -> str:
             [
                 "## Graph ON (CUDA graphs)",
                 "",
-                "CUDA graphs on (product default; `--graph-on`).",
+                "Product default: eager prefill, graph decode.",
                 "",
             ]
         )
@@ -686,7 +721,7 @@ def render(run_dir: Path, companion_run_dir: Path | None = None) -> str:
             [
                 "## Graph OFF (eager)",
                 "",
-                "CUDA graphs off (`--graph-off`).",
+                "Full eager (`--enforce-eager`).",
                 "",
             ]
         )
@@ -697,7 +732,7 @@ def render(run_dir: Path, companion_run_dir: Path | None = None) -> str:
                 [
                     "## Graph OFF (eager)",
                     "",
-                    "CUDA graphs off (`--graph-off`).",
+                    "Full eager (`--enforce-eager`).",
                     "",
                 ]
             )
@@ -706,7 +741,7 @@ def render(run_dir: Path, companion_run_dir: Path | None = None) -> str:
                 [
                     "## Graph ON (CUDA graphs)",
                     "",
-                    "CUDA graphs on (product default; `--graph-on`).",
+                    "Product default: eager prefill, graph decode.",
                     "",
                 ]
             )

@@ -97,10 +97,8 @@ def _build_command(
     command = ["bash", str(run_harness)]
     if dry_run:
         command.append("--dry-run")
-    if graph_on:
-        command.append("--graph-on")
     if graph_off:
-        command.append("--graph-off")
+        command.append("--enforce-eager")
     if mode:
         command.append(f"--mode={mode}")
     if reuse_baseline:
@@ -153,8 +151,8 @@ def _write_model_report(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the public capacity-primary A/B (Graph ON by default). "
-            "Pass --graph-off for Graph OFF, or --both-graph-modes for both."
+            "Run the public capacity-primary A/B (eager prefill, graph decode). "
+            "Pass --enforce-eager for full eager, or --both-graph-modes for both."
         )
     )
     parser.add_argument(
@@ -166,28 +164,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--graph-on",
         action="store_true",
-        help="Outer CUDA graphs ON (product default; explicit matched A/B).",
+        help=argparse.SUPPRESS,  # leftover; default is already Graph ON
+    )
+    parser.add_argument(
+        "--enforce-eager",
+        action="store_true",
+        help="Full eager A/B (same meaning as vLLM --enforce-eager).",
     )
     parser.add_argument(
         "--graph-off",
         action="store_true",
-        help="Matched A/B with outer graphs OFF.",
+        help=argparse.SUPPRESS,  # leftover alias for --enforce-eager
     )
     parser.add_argument(
         "--graphs",
         action="store_true",
-        help=argparse.SUPPRESS,  # alias for --graph-on
+        help=argparse.SUPPRESS,  # leftover alias for default Graph ON
     )
     parser.add_argument(
         "--eager",
         action="store_true",
-        help=argparse.SUPPRESS,  # alias for --graph-off
+        help=argparse.SUPPRESS,  # leftover alias for --enforce-eager
     )
     parser.add_argument(
         "--both-graph-modes",
         action="store_true",
         help=(
-            "Run Graph ON and Graph OFF A/Bs. Report shows Graph ON then Graph OFF."
+            "Run default (graph decode) and --enforce-eager A/Bs."
         ),
     )
     parser.add_argument(
@@ -212,11 +215,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     graph_on = bool(args.graph_on or args.graphs)
-    graph_off = bool(args.graph_off or args.eager)
+    graph_off = bool(args.enforce_eager or args.graph_off or args.eager)
     mode_flags = sum(bool(x) for x in (graph_on, graph_off, args.both_graph_modes))
     if mode_flags > 1:
         raise SystemExit(
-            "pass only one of --graph-on, --graph-off, and --both-graph-modes"
+            "pass only one of --enforce-eager and --both-graph-modes"
         )
     if args.reuse_baseline and args.no_reuse_baseline:
         raise SystemExit("pass only one of --reuse-baseline and --no-reuse-baseline")

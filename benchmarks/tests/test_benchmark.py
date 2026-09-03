@@ -48,11 +48,29 @@ from compare_ab import (  # noqa: E402
     build_equal_batch_block,
     fold_serve_output_match,
 )
-from generate_report import render, sanitize, write_report  # noqa: E402
+from generate_report import (  # noqa: E402
+    _graph_mode,
+    bytes_gb,
+    normalized_gpu_gain_pct,
+    render,
+    sanitize,
+    vllm_visible_budget,
+    write_report,
+)
 from launch_ab import (  # noqa: E402
     resolve_system_id,
 )
-from serve_output_match import compare_captures  # noqa: E402
+from probe_isiro_versions import (  # noqa: E402
+    resolve_versions,
+    runtime_version_from_help,
+    tic_compiler_version,
+)
+from serve_output_match import (  # noqa: E402
+    compare_captures,
+    greedy_chat_payload,
+    greedy_protocol_errors,
+    thinking_controls_present,
+)
 
 
 def _sample_capacity() -> dict:
@@ -90,6 +108,8 @@ def _sample_summary(
         "precision": "bf16",
         "system_id": "rtx-5090",
         "isiro_format": "v0.1.0",
+        "isiro_compiler": "v0.1.0",
+        "isiro_runtime": "v0.1.0",
         "experiment_kind": experiment_kind,
         "publish_quality": False,
         "smoke": True,
@@ -456,6 +476,54 @@ class BenchmarkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             kv_token_capacity_ratio(0, 100)
 
+    def test_probe_isiro_versions_auto_and_pin(self) -> None:
+        import struct
+
+        header = json.dumps(
+            {"__metadata__": {"codec": "v0.1.1", "tic_format": "v0.1.0"}}
+        ).encode()
+        body = b"TIC\x00" + (b"\x00" * 8) + header + struct.pack("<Q", len(header)) + b"THDR"
+        with tempfile.TemporaryDirectory() as temp:
+            tic = Path(temp) / "model.tic"
+            tic.write_bytes(body)
+            self.assertEqual(tic_compiler_version(tic), "v0.1.1")
+            self.assertEqual(
+                runtime_version_from_help("ISIRO Runtime v0.1.1\n\nUsage"),
+                "v0.1.1",
+            )
+            compiler, runtime = resolve_versions(
+                tic_path=tic,
+                format_override="auto",
+                runtime_override="v0.1.0",
+            )
+            self.assertEqual((compiler, runtime), ("v0.1.1", "v0.1.0"))
+            pinned, _ = resolve_versions(
+                tic_path=tic,
+                format_override="v0.1.0",
+                runtime_override="v0.1.0",
+            )
+            self.assertEqual(pinned, "v0.1.0")
+
+    def test_kv_norm_uses_vllm_budget_not_nvidia_smi(self) -> None:
+        # Same vLLM Non-KV+KV on both sides; TIC nvidia-smi process is fatter.
+        # KV % must stay the raw vLLM ratio, not the smi-scaled 21% trap.
+        b_non, t_non = 16.65e9, 12.79e9
+        b_kv, t_kv = 13.65e9, 17.51e9
+        b_smi, t_smi = 30.33e9, 32.05e9
+        budget_b = vllm_visible_budget(b_non, b_kv)
+        budget_t = vllm_visible_budget(t_non, t_kv)
+        kv_vllm = normalized_gpu_gain_pct(
+            b_kv, t_kv, baseline_total=budget_b, tic_total=budget_t
+        )
+        kv_smi = normalized_gpu_gain_pct(
+            b_kv, t_kv, baseline_total=b_smi, tic_total=t_smi
+        )
+        self.assertIsNotNone(kv_vllm)
+        self.assertIsNotNone(kv_smi)
+        self.assertGreater(kv_vllm, 27.0)
+        self.assertLess(kv_smi, 22.0)
+        self.assertAlmostEqual(kv_vllm, (17.51 / 13.65 - 1.0) * 100.0, places=1)
+
     def test_scale_seqs_from_kv_estimate(self) -> None:
         # ~12.71 GiB KV + ~4 GiB freed weights ≈ 1.31x → 32 scales above baseline
         kv_b = int(12.71 * 1024**3)
@@ -560,6 +628,13 @@ class BenchmarkTests(unittest.TestCase):
         lose_errs = validate_capacity_memory_story(lose)
         self.assertTrue(any("§B fail" in e and "KV memory" in e for e in lose_errs), lose_errs)
 
+    def test_qwen_aug15_kv_gb_is_si_not_vllm_gib(self) -> None:
+        """Report 17.94 GB is bytes/1e9 from 312896 tokens, not a GiB log."""
+        bpt = 28 * 4 * 128 * 2 * 2
+        tokens = 312_896
+        self.assertEqual(bytes_gb(tokens * bpt), "17.94 GB")
+        self.assertAlmostEqual(tokens * bpt / 1024**3, 16.71, places=2)
+
     def test_equal_batch_reuse_is_mode_agnostic(self) -> None:
         text = (SCRIPTS / "harness_lib.sh").read_text(encoding="utf-8")
         start = text.index("run_equal_batch_transparency()")
@@ -627,8 +702,18 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("Footprint-adjusted tok/s ratio", report)
             self.assertNotIn("matched A/B", report)
             self.assertNotIn("ISIRO_SERVE_CUDA_GRAPHS", report)
+            self.assertNotIn("ISIRO_SERVE_ENFORCE_EAGER", report)
             self.assertNotIn("Fairness gate", report)
             self.assertIn("Fairness check", report)
+
+    def test_graph_mode_defaults_to_graphs_when_unset(self) -> None:
+        self.assertEqual(_graph_mode({"baseline_serve": ["vllm", "serve"]}), "graphs")
+        self.assertEqual(
+            _graph_mode({"baseline_serve": ["vllm", "serve", "--enforce-eager"]}),
+            "eager",
+        )
+        self.assertEqual(_graph_mode({"enforce_eager": False}), "graphs")
+        self.assertEqual(_graph_mode({"enforce_eager": True}), "eager")
 
     def test_report_publish(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -678,6 +763,11 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("| Loaded model size |", report)
             self.assertIn("Norm savings %", report)
             self.assertIn(
+                "Norm savings % scales TIC to the Baseline vLLM budget",
+                report,
+            )
+            self.assertIn("nvidia-smi total is not part of that scale", report)
+            self.assertNotIn(
                 "Norm savings % scales TIC to the Baseline total GPU",
                 report,
             )
@@ -774,7 +864,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("system_id=rtx-5090", result.stdout)
         self.assertIn("ISIRO_VERIFY_REFERENCE=1", result.stdout)
         self.assertIn("ISIRO_BENCH_EQUAL_BATCH=1", result.stdout)
-        self.assertIn("--graph-on", result.stdout)
+        self.assertNotIn("--graph-on", result.stdout)
 
     def test_launch_both_graph_modes_dry_meta(self) -> None:
         env = {
@@ -800,8 +890,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("eager:", result.stdout)
         self.assertIn("graphs:", result.stdout)
-        self.assertIn("--graph-off", result.stdout)
-        self.assertIn("--graph-on", result.stdout)
+        self.assertIn("--enforce-eager", result.stdout)
+        self.assertNotIn("--graph-on", result.stdout)
 
     def test_launch_rejects_both_with_graphs(self) -> None:
         result = subprocess.run(
@@ -814,6 +904,26 @@ class BenchmarkTests(unittest.TestCase):
                 "rtx-5090",
                 "--both-graph-modes",
                 "--graph-on",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=str(ROOT.parent),
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pass only one of", result.stderr)
+
+    def test_launch_rejects_both_with_enforce_eager(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "launch_ab.py"),
+                "qwen2.5-7b-instruct",
+                "--dry-run",
+                "--system-id",
+                "rtx-5090",
+                "--both-graph-modes",
+                "--enforce-eager",
             ],
             capture_output=True,
             text=True,
@@ -930,6 +1040,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertTrue(dest.is_file())
             names = {p.name for p in dest.parent.iterdir()}
             self.assertEqual(names, {"rtx-5090-report-20260811T120000Z.md"})
+            self.assertNotIn("rtx-5090-report.md", names)
             self.assertFalse((dest.parent / "report.md").exists())
             self.assertFalse((dest.parent / "tic").exists())
             self.assertFalse((dest.parent / "isiro").exists())
@@ -948,11 +1059,12 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("vllm bench serve", text)
         self.assertIn("{model}/{system_id}-report-<UTC>.md", text)
         self.assertIn("benchmarks/{model}/{system_id}-report-<UTC>.md", text)
+        self.assertIn("{system_id}-report.md", text)
         self.assertNotIn("benchmarks/scratch/<run-id>/report.md", text)
         self.assertIn("benchmarks/scratch/", text)
         self.assertNotIn("Rename to `report.md`", text)
         self.assertIn("benchmarks/run_ab.sh {model}\n", text)
-        self.assertIn("benchmarks/run_ab.sh {model} --graph-off", text)
+        self.assertIn("benchmarks/run_ab.sh {model} --enforce-eager", text)
         self.assertIn("benchmarks/run_ab.sh {model} --both-graph-modes", text)
         self.assertNotIn("benchmarks/run_ab.sh {model} --smoke", text)
         self.assertIn("benchmarks/common.env.example", text)
@@ -970,6 +1082,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertNotIn("## Results", text)
         self.assertNotIn("promote_run", text)
         self.assertNotIn("ISIRO_SERVE_CUDA_GRAPHS", text)
+        self.assertNotIn("ISIRO_SERVE_ENFORCE_EAGER", text)
         self.assertNotIn("results/published", text)
         self.assertNotIn("decode-32-256", text)
         self.assertIn("correctness", text.lower())
@@ -978,6 +1091,26 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("throughput", text.lower())
         self.assertIn("generation", text.lower())
         self.assertIn("latency", text.lower())
+
+    def test_gitignore_timestamped_reports_not_official_name(self) -> None:
+        ignore = (ROOT.parent / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("*-report-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T*Z.md", ignore)
+        stamped = (
+            "benchmarks/qwen2.5-7b-instruct/rtx-5090-report-20260815T033111Z.md"
+        )
+        official = "benchmarks/qwen2.5-7b-instruct/rtx-5090-report.md"
+        chk = subprocess.run(
+            ["git", "check-ignore", "-q", stamped],
+            cwd=ROOT.parent,
+            check=False,
+        )
+        self.assertEqual(chk.returncode, 0, "timestamped report must be ignored")
+        chk_off = subprocess.run(
+            ["git", "check-ignore", "-q", official],
+            cwd=ROOT.parent,
+            check=False,
+        )
+        self.assertEqual(chk_off.returncode, 1, "official report name must be commitable")
 
     def test_scripts_omit_invent_layout_jargon(self) -> None:
         private_tree = "isiro" + "-core"
@@ -1042,12 +1175,26 @@ class BenchmarkTests(unittest.TestCase):
             "kind": "capture",
             "seed": 17,
             "max_tokens": 32,
+            "enable_thinking": False,
             "prompts": [
-                {"index": 0, "prompt": "a", "token_ids": [1, 2, 3], "text": "x"},
-                {"index": 1, "prompt": "b", "token_ids": [4, 5], "text": "y"},
+                {
+                    "index": 0,
+                    "prompt": "a",
+                    "token_ids": [1, 2, 3],
+                    "text": "x",
+                    "finish_reason": "stop",
+                },
+                {
+                    "index": 1,
+                    "prompt": "b",
+                    "token_ids": [4, 5],
+                    "text": "y",
+                    "finish_reason": "stop",
+                },
             ],
         }
         ok = compare_captures(capture, capture)
+        self.assertTrue(ok["protocol_ok"])
         self.assertTrue(ok["serve_output_match_ok"])
         self.assertEqual(ok["matched"], 2)
         bad = dict(capture)
@@ -1058,6 +1205,84 @@ class BenchmarkTests(unittest.TestCase):
         fail = compare_captures(capture, bad)
         self.assertFalse(fail["serve_output_match_ok"])
         self.assertEqual(fail["matched"], 1)
+
+    def test_greedy_chat_payload_disables_thinking(self) -> None:
+        payload = greedy_chat_payload(
+            model="Qwen/Qwen3.8-27B",
+            prompt="ping",
+            seed=17,
+            max_tokens=32,
+        )
+        self.assertEqual(payload["temperature"], 0.0)
+        self.assertEqual(payload["seed"], 17)
+        self.assertEqual(
+            payload["chat_template_kwargs"], {"enable_thinking": False}
+        )
+        self.assertTrue(thinking_controls_present(payload))
+
+    def test_greedy_protocol_rejects_thinking_dump_even_if_ids_match(self) -> None:
+        dump = "We need to reply with exactly one word in lowercase: hello. <think>"
+        ids = list(range(32))
+        capture = {
+            "max_tokens": 32,
+            "enable_thinking": True,
+            "prompts": [
+                {
+                    "index": 3,
+                    "prompt": "hello",
+                    "token_ids": ids,
+                    "text": dump,
+                    "finish_reason": "length",
+                }
+            ],
+        }
+        errors = greedy_protocol_errors(capture)
+        self.assertTrue(errors)
+        matched = compare_captures(capture, capture)
+        self.assertTrue(matched["details"][0]["ok"])
+        self.assertFalse(matched["protocol_ok"])
+        self.assertFalse(matched["serve_output_match_ok"])
+
+    def test_harness_locks_thinking_off_not_max_tokens(self) -> None:
+        text = (SCRIPTS / "harness_lib.sh").read_text(encoding="utf-8")
+        start = text.index("capture_serve_output_match()")
+        end = text.index("\nwrite_effective_config()", start)
+        body = text[start:end]
+        self.assertIn("--max-tokens 32", body)
+        src = (SCRIPTS / "serve_output_match.py").read_text(encoding="utf-8")
+        self.assertNotIn("MIN_GREEDY_MAX_TOKENS", src)
+        self.assertIn('"chat_template_kwargs": {"enable_thinking": False}', src)
+        self.assertIn("refusing token-id retry without thinking-off controls", src)
+
+    def test_fold_omits_thinking_on_match_from_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            capture = {
+                "max_tokens": 32,
+                "enable_thinking": True,
+                "prompts": [
+                    {
+                        "index": 0,
+                        "prompt": "a",
+                        "token_ids": [1, 2],
+                        "text": "x <think>",
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+            (run / "output_match_baseline.json").write_text(
+                json.dumps(capture), encoding="utf-8"
+            )
+            (run / "output_match_isiro.json").write_text(
+                json.dumps(capture), encoding="utf-8"
+            )
+            correctness: dict = {
+                "serve_output_match_ok": False,
+                "serve_output_match_matched": 3,
+                "serve_output_match_prompt_count": 4,
+            }
+            fold_serve_output_match(run, correctness)
+            self.assertNotIn("serve_output_match_ok", correctness)
 
     def test_report_dual_graph_companion_details(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1084,16 +1309,23 @@ class BenchmarkTests(unittest.TestCase):
             report = render(eager, companion_run_dir=graphs)
             self.assertIn("Tooling: **`vllm bench serve`**.", report)
             self.assertIn("# ISIRO Benchmark Report: `qwen2.5-7b-instruct`", report)
-            self.assertIn("`bf16` | `rtx-5090` |", report)
+            self.assertIn(
+                "`bf16` | `rtx-5090` | compiler `v0.1.0` | runtime `v0.1.0` |",
+                report,
+            )
             self.assertRegex(report, r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC")
             self.assertIn("## Graph ON (CUDA graphs)", report)
             self.assertIn("## Graph OFF (eager)", report)
             self.assertNotIn("<details>", report)
             self.assertNotIn("<summary>", report)
             self.assertNotIn("ISIRO_SERVE_CUDA_GRAPHS", report)
+            self.assertNotIn("ISIRO_SERVE_ENFORCE_EAGER", report)
             self.assertNotIn("matched A/B", report)
-            self.assertIn("CUDA graphs on (product default; `--graph-on`).", report)
-            self.assertIn("CUDA graphs off (`--graph-off`).", report)
+            self.assertIn(
+                "Product default: eager prefill, graph decode.",
+                report,
+            )
+            self.assertIn("Full eager (`--enforce-eager`).", report)
             # Dual mode uses full 1A-1E / 2A-2E tables (both visible).
             self.assertEqual(
                 report.count("## 1C. Generation (input 32 / output 256)"), 1
@@ -1132,17 +1364,49 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("Weight bit-exactness", report)
             self.assertIn("4/4 prompts, temp=0, token IDs equal", report)
             self.assertIn(
-                "ON (CUDA graphs); OFF (eager)",
+                "ON (eager prefill, graph decode); OFF (eager)",
                 report,
             )
+            self.assertIn("| Compiler | `v0.1.0` |", report)
+            self.assertIn("| Runtime | `v0.1.0` |", report)
+
+    def test_report_compiler_runtime_can_differ(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            summary = _sample_summary()
+            summary["isiro_compiler"] = "v0.1.0"
+            summary["isiro_format"] = "v0.1.0"
+            summary["isiro_runtime"] = "v0.1.1"
+            _write_run(run, summary)
+            report = render(run)
+            self.assertIn(
+                "`bf16` | `rtx-5090` | compiler `v0.1.0` | runtime `v0.1.1` |",
+                report,
+            )
+            self.assertIn("| Compiler | `v0.1.0` |", report)
+            self.assertIn("| Runtime | `v0.1.1` |", report)
 
     def test_fold_serve_output_match_isiro(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             run = Path(temp)
             capture = {
+                "max_tokens": 32,
+                "enable_thinking": False,
                 "prompts": [
-                    {"prompt": "a", "token_ids": [1, 2]},
-                    {"prompt": "b", "token_ids": [3, 4]},
+                    {
+                        "index": 0,
+                        "prompt": "a",
+                        "token_ids": [1, 2],
+                        "text": "x",
+                        "finish_reason": "stop",
+                    },
+                    {
+                        "index": 1,
+                        "prompt": "b",
+                        "token_ids": [3, 4],
+                        "text": "y",
+                        "finish_reason": "stop",
+                    },
                 ],
             }
             (run / "output_match_baseline.json").write_text(
