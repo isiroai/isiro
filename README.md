@@ -4,7 +4,7 @@
   <a href="https://isiro.ai">ISIRO Runtime</a>
 </h1>
 
-<h3 align="center">Lossless inference layer for self-hosted AI</h3>
+<h3 align="center">Lossless inference layer for self-managed AI</h3>
 
 <p align="center">Smaller weights · More KV cache · No quantization</p>
 
