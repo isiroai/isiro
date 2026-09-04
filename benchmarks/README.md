@@ -3,15 +3,12 @@
 Matched A/B with `vllm bench serve`: vLLM **baseline** vs ISIRO
 (`isiro serve … --target vllm`).
 
-Current setup: NVIDIA RTX 5090 (SM120, Blackwell, 32GB VRAM), BF16. ~29%
-footprint savings apply across GPUs ([model cards](../model-cards/);
-[Hugging Face](https://huggingface.co/isiroai)).
+~29% footprint savings apply across BF16 models, see [model cards](../model-cards/README.md) and [Hugging Face](https://huggingface.co/isiroai).
 
 - Benchmarked:
   - [Qwen2.5-7B-Instruct](qwen2.5-7b-instruct/)
-  - [Gemma 4 12B IT](gemma-4-12B-it/) (multimodal)
-- In progress: production GPU benches (Qwen3.5-27B, Qwen3.5-35B-A3B MoE, etc);
-HBM-mature kernels (A100, H100)
+  - [Gemma 4 12B IT](gemma-4-12B-it/)
+  - [Qwen3.8-27B](qwen3.8-27b/)
 
 ## Prerequisites
 
@@ -28,6 +25,9 @@ Get [compiler access](https://isiro.ai/compiler).
 Create a model directory under `benchmarks/`. Copy the example env into a
 local `common.env` in that directory, then set `BASELINE_MODEL_DIR`,
 `TIC_MODEL_DIR`, `MODEL_ID`, and any other parameters in the file.
+Leave `ISIRO_FORMAT` and `ISIRO_RUNTIME` as `auto` (the example default)
+to read compiler from the `.tic` header and runtime from `isiro --help`.
+Set either to a semver only when you want to pin.
 
 ```bash
 cp benchmarks/common.env.example benchmarks/{model}/common.env
@@ -49,11 +49,13 @@ benchmarks/run_ab.sh {model}
 Other modes:
 
 ```bash
-# optional Graph OFF
-benchmarks/run_ab.sh {model} --graph-off
+# Graph OFF / full eager (--graph-off is an alias)
+benchmarks/run_ab.sh {model} --enforce-eager
 ```
 
 `SYSTEM_ID` comes from that model's `common.env` (or GPU auto-detect).
+
+Single-request latency: `SERVE_MAX_NUM_SEQS=1` and `BENCH_MAX_CONCURRENCY=1` (or a second `common.env`). Do not change Hub `serve.yaml` defaults for that; overlay locally.
 
 ## Output
 
@@ -71,6 +73,9 @@ That folder holds `report.md` and the PNGs below. The published snapshot (tracke
 A made-up illustration of that layout is
 `benchmarks/qwen2.5-7b-instruct/rtx-5090-report_mock/`.
 
+To publish, copy the timestamped folder to `{system_id}-report/` (no stamp in
+the directory name) and commit that.
+
 Logs and other run artifacts are under gitignored `benchmarks/scratch/`.
 
 ### Figures this command writes
@@ -84,7 +89,7 @@ Scratch copies live under `benchmarks/scratch/{UTC}-{system_id}/`.
 
 Tok/s, ITL, GPU memory, and equal-batch are markdown tables, not extra PNGs. CUDA graphs ON is the timed serve mode for those tables. Needle probes use eager serve so long-context starts.
 
-`--graph-off` is a second launch: same figures if needle already ran in that scratch dir, plus eager tok/s tables. It does not draw extra PNGs.
+`--enforce-eager` is a second launch: same figures if needle already ran in that scratch dir, plus eager tok/s tables. It does not draw extra PNGs.
 
 ## Methodology
 

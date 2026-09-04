@@ -49,11 +49,30 @@ from compare_ab import (  # noqa: E402
     fold_serve_output_match,
 )
 from attention_ab import parse_serve_attention  # noqa: E402
-from generate_report import pct_of_baseline, render, sanitize, write_report  # noqa: E402
+from generate_report import (  # noqa: E402
+    _graph_mode,
+    bytes_gb,
+    normalized_gpu_gain_pct,
+    pct_of_baseline,
+    render,
+    sanitize,
+    vllm_visible_budget,
+    write_report,
+)
 from launch_ab import (  # noqa: E402
     resolve_system_id,
 )
-from serve_output_match import compare_captures  # noqa: E402
+from probe_isiro_versions import (  # noqa: E402
+    resolve_versions,
+    runtime_version_from_help,
+    tic_compiler_version,
+)
+from serve_output_match import (  # noqa: E402
+    compare_captures,
+    greedy_chat_payload,
+    greedy_protocol_errors,
+    thinking_controls_present,
+)
 
 
 def _sample_capacity() -> dict:
@@ -485,6 +504,63 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(pct_of_baseline(294048 / 238064), "124% of Baseline")
         self.assertEqual(pct_of_baseline(None), "")
 
+    def test_probe_isiro_versions_auto_and_pin(self) -> None:
+        import struct
+
+        header = json.dumps(
+            {"__metadata__": {"codec": "v0.1.1", "tic_format": "v0.1.0"}}
+        ).encode()
+        body = (
+            b"TIC\x00"
+            + (b"\x00" * 8)
+            + header
+            + struct.pack("<Q", len(header))
+            + b"THDR"
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            tic = Path(temp) / "model.tic"
+            tic.write_bytes(body)
+            self.assertEqual(tic_compiler_version(tic), "v0.1.1")
+            self.assertEqual(
+                runtime_version_from_help("ISIRO Runtime v0.1.1\n\nUsage"),
+                "v0.1.1",
+            )
+            compiler, runtime = resolve_versions(
+                tic_path=tic,
+                format_override="auto",
+                runtime_override="v0.1.0",
+            )
+            self.assertEqual((compiler, runtime), ("v0.1.1", "v0.1.0"))
+            pinned, _ = resolve_versions(
+                tic_path=tic,
+                format_override="v0.1.0",
+                runtime_override="v0.1.0",
+            )
+            self.assertEqual(pinned, "v0.1.0")
+
+    def test_kv_norm_uses_vllm_budget_not_nvidia_smi(self) -> None:
+        b_non, t_non = 16.65e9, 12.79e9
+        b_kv, t_kv = 13.65e9, 17.51e9
+        b_smi, t_smi = 30.33e9, 32.05e9
+        budget_b = vllm_visible_budget(b_non, b_kv)
+        budget_t = vllm_visible_budget(t_non, t_kv)
+        kv_vllm = normalized_gpu_gain_pct(
+            b_kv, t_kv, baseline_total=budget_b, tic_total=budget_t
+        )
+        kv_smi = normalized_gpu_gain_pct(
+            b_kv, t_kv, baseline_total=b_smi, tic_total=t_smi
+        )
+        self.assertIsNotNone(kv_vllm)
+        self.assertIsNotNone(kv_smi)
+        self.assertGreater(kv_vllm, 27.0)
+        self.assertLess(kv_smi, 22.0)
+        self.assertAlmostEqual(kv_vllm, (17.51 / 13.65 - 1.0) * 100.0, places=1)
+        self.assertAlmostEqual(bytes_gb(1e9), "1.00 GB")
+
+    def test_graph_mode_from_enforce_eager_flag(self) -> None:
+        self.assertEqual(_graph_mode({"enforce_eager": False}), "graphs")
+        self.assertEqual(_graph_mode({"enforce_eager": True}), "eager")
+
     def test_scale_seqs_from_kv_estimate(self) -> None:
         # ~12.71 GiB KV + ~4 GiB freed weights ≈ 1.31x → 32 scales above baseline
         kv_b = int(12.71 * 1024**3)
@@ -805,6 +881,8 @@ class BenchmarkTests(unittest.TestCase):
                 "--dry-run",
                 "--system-id",
                 "rtx-5090",
+                "--config",
+                str(ROOT / "common.env.example"),
             ],
             capture_output=True,
             text=True,
@@ -820,7 +898,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("system_id=rtx-5090", result.stdout)
         self.assertIn("ISIRO_VERIFY_REFERENCE=1", result.stdout)
         self.assertIn("ISIRO_BENCH_EQUAL_BATCH=1", result.stdout)
-        self.assertIn("--graph-on", result.stdout)
+        self.assertIn("graphs:", result.stdout)
+        self.assertNotIn("--graph-on", result.stdout)
 
     def test_launch_dry_meta_skip_needle_omits_needle_phase(self) -> None:
         env = {
@@ -836,6 +915,8 @@ class BenchmarkTests(unittest.TestCase):
                 "--skip-needle",
                 "--system-id",
                 "rtx-5090",
+                "--config",
+                str(ROOT / "common.env.example"),
             ],
             capture_output=True,
             text=True,
@@ -1036,7 +1117,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertNotIn("Rename to `report.md`", text)
         self.assertIn("benchmarks/run_ab.sh {model}\n", text)
         self.assertIn("# matches the report (Graph ON default)", text)
-        self.assertIn("benchmarks/run_ab.sh {model} --graph-off", text)
+        self.assertIn("benchmarks/run_ab.sh {model} --enforce-eager", text)
+        self.assertIn("--graph-off is an alias", text)
         self.assertNotIn("run_needle_haystack.sh", text)
         self.assertNotIn("benchmarks/run_ab.sh {model} --both-graph-modes", text)
         self.assertNotIn("benchmarks/run_ab.sh {model} --smoke", text)
@@ -1143,9 +1225,22 @@ class BenchmarkTests(unittest.TestCase):
             "kind": "capture",
             "seed": 17,
             "max_tokens": 32,
+            "enable_thinking": False,
             "prompts": [
-                {"index": 0, "prompt": "a", "token_ids": [1, 2, 3], "text": "x"},
-                {"index": 1, "prompt": "b", "token_ids": [4, 5], "text": "y"},
+                {
+                    "index": 0,
+                    "prompt": "a",
+                    "token_ids": [1, 2, 3],
+                    "text": "x",
+                    "finish_reason": "stop",
+                },
+                {
+                    "index": 1,
+                    "prompt": "b",
+                    "token_ids": [4, 5],
+                    "text": "y",
+                    "finish_reason": "stop",
+                },
             ],
         }
         ok = compare_captures(capture, capture)
@@ -1200,13 +1295,80 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("| CUDA graphs | on (eager prefill, graph decode) |", report)
             self.assertIn("| KV cache | product KV cache size |", report)
 
+    def test_greedy_chat_payload_disables_thinking(self) -> None:
+        payload = greedy_chat_payload(
+            model="Qwen/Qwen3.8-27B",
+            prompt="ping",
+            seed=17,
+            max_tokens=32,
+        )
+        self.assertEqual(payload["temperature"], 0.0)
+        self.assertEqual(payload["seed"], 17)
+        self.assertEqual(
+            payload["chat_template_kwargs"], {"enable_thinking": False}
+        )
+        self.assertTrue(thinking_controls_present(payload))
+
+    def test_greedy_protocol_rejects_thinking_dump_even_if_ids_match(self) -> None:
+        dump = "We need to reply with exactly one word in lowercase: hello. <think>"
+        ids = list(range(32))
+        capture = {
+            "max_tokens": 32,
+            "enable_thinking": True,
+            "prompts": [
+                {
+                    "index": 3,
+                    "prompt": "hello",
+                    "token_ids": ids,
+                    "text": dump,
+                    "finish_reason": "length",
+                }
+            ],
+        }
+        errors = greedy_protocol_errors(capture)
+        self.assertTrue(errors)
+        matched = compare_captures(capture, capture)
+        self.assertTrue(matched["details"][0]["ok"])
+        self.assertFalse(matched["protocol_ok"])
+        self.assertFalse(matched["serve_output_match_ok"])
+
+    def test_report_compiler_runtime_can_differ(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            summary = _sample_summary()
+            summary["isiro_compiler"] = "v0.1.0"
+            summary["isiro_format"] = "v0.1.0"
+            summary["isiro_runtime"] = "v0.1.1"
+            _write_run(run, summary)
+            report = render(run)
+            self.assertIn(
+                "`bf16` | `rtx-5090` | compiler `v0.1.0` | runtime `v0.1.1` |",
+                report,
+            )
+            self.assertIn("| Compiler | `v0.1.0` |", report)
+            self.assertIn("| Runtime | `v0.1.1` |", report)
+
     def test_fold_serve_output_match_isiro(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             run = Path(temp)
             capture = {
+                "max_tokens": 32,
+                "enable_thinking": False,
                 "prompts": [
-                    {"prompt": "a", "token_ids": [1, 2]},
-                    {"prompt": "b", "token_ids": [3, 4]},
+                    {
+                        "index": 0,
+                        "prompt": "a",
+                        "token_ids": [1, 2],
+                        "text": "x",
+                        "finish_reason": "stop",
+                    },
+                    {
+                        "index": 1,
+                        "prompt": "b",
+                        "token_ids": [3, 4],
+                        "text": "y",
+                        "finish_reason": "stop",
+                    },
                 ],
             }
             (run / "output_match_baseline.json").write_text(

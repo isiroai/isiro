@@ -126,6 +126,12 @@ def _tic_in_baseline_scale(
     return float(tic) * (b_tot / t_tot)
 
 
+def vllm_visible_budget(non_kv: Any, kv: Any) -> float | None:
+    if not isinstance(non_kv, (int, float)) or not isinstance(kv, (int, float)):
+        return None
+    return float(non_kv) + float(kv)
+
+
 def normalized_gpu_savings_pct(
     baseline: Any,
     tic: Any,
@@ -222,17 +228,31 @@ def _latency_row(
     return f"| {label} | {number(b, digits)} | {number(t, digits)} |"
 
 
+def _compiler_runtime_versions(summary: dict[str, Any]) -> tuple[str, str]:
+    compiler = str(
+        summary.get("isiro_compiler")
+        or summary.get("compiler")
+        or summary.get("isiro_format")
+        or ""
+    )
+    runtime = str(
+        summary.get("isiro_runtime") or summary.get("runtime") or compiler
+    )
+    return compiler, runtime
+
+
 def _section_intro(summary: dict[str, Any]) -> list[str]:
     from needle_haystack import NEEDLE_COUNT
 
     model = str(summary.get("model") or "")
+    compiler, runtime = _compiler_runtime_versions(summary)
     return [
         f"# ISIRO Benchmark Report: `{model}`",
         "",
         (
             f"`{summary['precision']}` | `{summary['system_id']}` | "
-            f"compiler `{summary.get('compiler') or summary.get('isiro_format')}` | "
-            f"runtime `{summary.get('runtime') or summary.get('isiro_format')}` | "
+            f"compiler `{compiler}` | "
+            f"runtime `{runtime}` | "
             f"{_human_recorded_at(summary.get('recorded_at'))}"
         ),
         "",
@@ -631,6 +651,7 @@ def _section_g(
         if graph_mode == "graphs"
         else "off (eager)"
     )
+    compiler, runtime = _compiler_runtime_versions(summary)
     lines = [
         "## Config",
         "",
@@ -639,8 +660,8 @@ def _section_g(
         f"| System | `{summary.get('system_id', '')}` |",
         f"| CUDA graphs | {graph_cell} |",
         f"| KV cache | product KV cache size |",
-        f"| Compiler | `{summary.get('compiler') or summary.get('isiro_format') or ''}` |",
-        f"| Runtime | `{summary.get('runtime') or summary.get('isiro_format') or ''}` |",
+        f"| Compiler | `{compiler}` |",
+        f"| Runtime | `{runtime}` |",
         f"| vLLM | {environment.get('vllm_version', '')} |",
         (
             f"| GPU | {environment.get('gpu_model', '')} x "

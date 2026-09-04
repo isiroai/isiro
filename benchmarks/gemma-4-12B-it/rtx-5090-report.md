@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `gemma-4-12B-it`
 
-`bf16` | `rtx-5090` | `v0.1.0` | 2026-08-11 06:21 UTC
+`bf16` | `rtx-5090` | compiler `v0.1.0` | runtime `v0.1.0` | 2026-08-11 06:21 UTC
 
 Tooling: **`vllm bench serve`**.
 
@@ -17,7 +17,7 @@ Tooling: **`vllm bench serve`**.
 
 ## Graph ON (CUDA graphs)
 
-CUDA graphs on (product default; `--graph-on`).
+Product default: eager prefill, graph decode.
 
 ## 1A. GPU memory
 
@@ -88,7 +88,7 @@ Same `max_num_seqs` and concurrency on both sides.
 
 ## Graph OFF (eager)
 
-CUDA graphs off (`--graph-off`).
+Full eager (`--enforce-eager`).
 
 ## 2A. GPU memory
 
@@ -162,7 +162,9 @@ Same `max_num_seqs` and concurrency on both sides.
 | Item | Value |
 |------|-------|
 | System | `rtx-5090` |
-| Graph modes | ON (CUDA graphs); OFF (eager) |
+| Graph modes | ON (eager prefill, graph decode); OFF (eager) |
+| Compiler | `v0.1.0` |
+| Runtime | `v0.1.0` |
 | vLLM | 0.26.0 |
 | GPU | NVIDIA GeForce RTX 5090 x 1 |
 | Driver / CUDA | 590.44.01 / 13.1 |
