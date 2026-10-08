@@ -126,22 +126,24 @@ esac
 # Opt-in KV alphabet for matched A/B (empty = leave vendor default / ISIRO stamp).
 SERVE_KV_CACHE_DTYPE="${SERVE_KV_CACHE_DTYPE:-}"
 # Opt-in ISIRO KV compress on the TIC arm only (fp8|fp4|bf16). Empty = off.
-ISIRO_BENCH_GDX_KV="${ISIRO_BENCH_GDX_KV:-}"
-case "${ISIRO_BENCH_GDX_KV}" in
+# Prefer ISIRO_BENCH_GDX; legacy ISIRO_BENCH_GDX_KV is an alphabet alias.
+ISIRO_BENCH_GDX="${ISIRO_BENCH_GDX:-${ISIRO_BENCH_GDX_KV:-}}"
+ISIRO_BENCH_GDX_KV="${ISIRO_BENCH_GDX}"
+case "${ISIRO_BENCH_GDX}" in
   ""|fp8|fp4|bf16) ;;
   *)
-    echo "ISIRO_BENCH_GDX_KV must be empty, fp8, fp4, or bf16 (got ${ISIRO_BENCH_GDX_KV})" >&2
+    echo "ISIRO_BENCH_GDX must be empty, fp8, fp4, or bf16 (got ${ISIRO_BENCH_GDX})" >&2
     exit 2
     ;;
 esac
-if [[ -n "${ISIRO_BENCH_GDX_KV}" ]]; then
-  # Path-A KV compress is exclusive of hybrid unique-C; drop a stale parent env.
+if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
+  # Product GDX auto-routes; drop stale unique-C / path-A parent envs.
   if [[ -n "${ISIRO_GDX_C:-}" && "${ISIRO_GDX_C}" != "0" && "${ISIRO_GDX_C}" != "off" && "${ISIRO_GDX_C}" != "false" ]]; then
-    echo "ISIRO_BENCH_GDX_KV=${ISIRO_BENCH_GDX_KV}: unsetting inherited ISIRO_GDX_C=${ISIRO_GDX_C}" >&2
+    echo "ISIRO_BENCH_GDX=${ISIRO_BENCH_GDX}: unsetting inherited ISIRO_GDX_C=${ISIRO_GDX_C}" >&2
     unset ISIRO_GDX_C || true
   fi
   if [[ -z "${SERVE_KV_CACHE_DTYPE}" ]]; then
-    case "${ISIRO_BENCH_GDX_KV}" in
+    case "${ISIRO_BENCH_GDX}" in
       fp8) SERVE_KV_CACHE_DTYPE="fp8" ;;
       fp4) SERVE_KV_CACHE_DTYPE="nvfp4" ;;
       bf16) SERVE_KV_CACHE_DTYPE="bfloat16" ;;
@@ -211,7 +213,7 @@ echo "  MODEL_ID          = ${MODEL_ID}" >&2
 echo "  GRAPH_MODE        = ${GRAPH_MODE} (enforce_eager=${SERVE_ENFORCE_EAGER})" >&2
 echo "  EXPERIMENT_KIND   = ${EXPERIMENT_KIND}" >&2
 echo "  SERVE_KV_CACHE_DTYPE = ${SERVE_KV_CACHE_DTYPE:-unset}" >&2
-echo "  ISIRO_BENCH_GDX_KV   = ${ISIRO_BENCH_GDX_KV:-off}" >&2
+echo "  ISIRO_BENCH_GDX      = ${ISIRO_BENCH_GDX:-off}" >&2
 # PROFILES / BASELINE_REUSE are printed after counts resolve.
 
 # Matched A/B requires these knobs; refuse silent drift.
@@ -393,8 +395,8 @@ build_tic_serve() {
     --host 0.0.0.0 --port "${API_PORT}"
     --max-model-len "${SERVE_MAX_MODEL_LEN}"
   )
-  if [[ -n "${SERVE_KV_CACHE_DTYPE}" && -z "${ISIRO_BENCH_GDX_KV}" ]]; then
-    # When GDX_KV is on, the runtime stamps the matching vendor dtype.
+  if [[ -n "${SERVE_KV_CACHE_DTYPE}" && -z "${ISIRO_BENCH_GDX}" ]]; then
+    # When GDX is on, the runtime stamps the matching vendor dtype.
     TIC_SERVE+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
   fi
 }
@@ -405,11 +407,12 @@ start_tic_serve() {
   local log="$1"
   unset ISIRO_SERVE_CUDA_GRAPHS
   unset ISIRO_GDX_C || true
-  if [[ -n "${ISIRO_BENCH_GDX_KV}" ]]; then
-    export ISIRO_GDX_KV="${ISIRO_BENCH_GDX_KV}"
+  unset ISIRO_GDX_KV || true
+  if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
+    export ISIRO_GDX="${ISIRO_BENCH_GDX}"
     export ISIRO_GDX_COLD_READY=1
   else
-    unset ISIRO_GDX_KV || true
+    unset ISIRO_GDX || true
   fi
   build_tic_serve
   if [[ "${SERVE_ENFORCE_EAGER}" == "true" ]]; then
@@ -507,7 +510,7 @@ doc = {
 }
 if gdx_kv:
     doc["tic_serve_env"] = {
-        "ISIRO_GDX_KV": gdx_kv,
+        "ISIRO_GDX": gdx_kv,
         "ISIRO_GDX_COLD_READY": "1",
     }
 if reused_from:
