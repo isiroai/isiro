@@ -77,11 +77,17 @@ def _roundtrip_bf16(seed: int = 11) -> dict[str, Any]:
     packed = encode_gdx_bf16_o1(vals)
     out = decode_gdx_bf16_o1(packed)
     ok = bool(np.array_equal(out, u16))
+    bpv = float(packed.avg_bpv_meter())
+    # Entropy win vs naive bf16 FA twin (16 bpv).
+    if ok and not (bpv < 16.0):
+        ok = False
     return {
         "alphabet": "bf16",
         "kv_bit_exact_ok": ok,
         "n_values": int(u16.size),
-        "avg_bpv": float(packed.avg_bpv_meter()),
+        "avg_bpv": bpv,
+        "fa_bpv": 16.0,
+        "coding_win": bool(bpv < 16.0),
     }
 
 
@@ -98,11 +104,16 @@ def _roundtrip_fp8(seed: int = 11) -> dict[str, Any]:
     packed = encode_gdx_e4m3_msb_o1(codes)
     out = decode_gdx_e4m3_msb_o1(packed)
     ok = bool(np.array_equal(out, codes))
+    bpv = float(packed.avg_bpv_meter())
+    if ok and not (bpv < 8.0):
+        ok = False
     return {
         "alphabet": "fp8",
         "kv_bit_exact_ok": ok,
         "n_values": int(codes.size),
-        "avg_bpv": float(packed.avg_bpv_meter()),
+        "avg_bpv": bpv,
+        "fa_bpv": 8.0,
+        "coding_win": bool(bpv < 8.0),
     }
 
 
@@ -118,11 +129,16 @@ def _roundtrip_fp4(seed: int = 11) -> dict[str, Any]:
     packed = encode_gdx_e2m1_o1(codes)
     out = decode_gdx_e2m1_o1(packed)
     ok = bool(np.array_equal(out, codes))
+    bpv = float(packed.avg_bpv_meter())
+    if ok and not (bpv < 4.0):
+        ok = False
     return {
         "alphabet": "fp4",
         "kv_bit_exact_ok": ok,
         "n_values": int(codes.size),
-        "avg_bpv": float(packed.avg_bpv_meter()),
+        "avg_bpv": bpv,
+        "fa_bpv": 4.0,
+        "coding_win": bool(bpv < 4.0),
     }
 
 

@@ -636,10 +636,21 @@ else
 fi
 echo "verify: log ${LOG_DIR}/verify.log" >&2
 # Optional compiler checkout for hop1 remat on verify -r (ISIRO_CORE_SRC).
-# Do not leak into isiro serve.
+# Do not leak into isiro serve. Auto-detect invent checkout next to TIC model.
 _VERIFY_REPO_SRC=""
+if [[ -z "${ISIRO_CORE_SRC:-}" ]]; then
+  for _cand in \
+    "$(cd "$(dirname "${TIC_MODEL_DIR}")/../.." 2>/dev/null && pwd)/src" \
+    "${HOME}/repos/isiroai/isiro-core/src"; do
+    if [[ -n "${_cand}" && -d "${_cand}/isiro_encoder" && -d "${_cand}/isiro_format" ]]; then
+      ISIRO_CORE_SRC="${_cand}"
+      break
+    fi
+  done
+fi
 if [[ -n "${ISIRO_CORE_SRC:-}" && -d "${ISIRO_CORE_SRC}/isiro_encoder" ]]; then
   _VERIFY_REPO_SRC="$(cd "${ISIRO_CORE_SRC}" && pwd)"
+  echo "verify: ISIRO_REPO_SRC=${_VERIFY_REPO_SRC}" >&2
 fi
 set +e
 if [[ -n "${_VERIFY_REPO_SRC}" ]]; then
@@ -676,6 +687,12 @@ if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
     --alphabet "${ISIRO_BENCH_GDX}" \
     --out "${RUN_DIR}/gdx_kv_bitexact.json"
   echo "gdx_kv_bitexact: PASS" >&2
+  echo "gdx_kv_bytes_curve: measuring cold vs FA twin (alphabet=${ISIRO_BENCH_GDX})" >&2
+  python3 "${BENCH_ROOT}/scripts/gdx_kv_bytes_curve.py" \
+    --alphabet "${ISIRO_BENCH_GDX}" \
+    --out-json "${RUN_DIR}/gdx_kv_bytes_curve.json" \
+    --out-png "${RUN_DIR}/kv-bytes-vs-context.png"
+  echo "gdx_kv_bytes_curve: PASS" >&2
 fi
 
 cleanup() {
@@ -702,6 +719,9 @@ prepare_tic_bundle() {
       fi
     fi
   done
+  # Match TIC serve Docker tag to VLLM_IMAGE so image-ABI .so (glibc) matches
+  # the Baseline arm (bundle serve.yaml often pins an older tag).
+  local _vllm_tag="${VLLM_IMAGE##*:}"
   python3 - \
     "${TIC_MODEL_DIR}/serve.yaml" \
     "${TIC_BENCH_BUNDLE}/serve.yaml" \
@@ -709,10 +729,20 @@ prepare_tic_bundle() {
     "${SERVE_GPU_MEMORY_UTILIZATION}" \
     "${SERVE_TENSOR_PARALLEL_SIZE}" \
     "${SERVE_MAX_NUM_SEQS}" \
-    "${SERVE_ENFORCE_EAGER}" <<'PY'
+    "${SERVE_ENFORCE_EAGER}" \
+    "${_vllm_tag}" <<'PY'
 import re, sys
 
-source, target, max_model_len, gpu_util, tp, max_seqs, enforce_eager = sys.argv[1:8]
+(
+    source,
+    target,
+    max_model_len,
+    gpu_util,
+    tp,
+    max_seqs,
+    enforce_eager,
+    docker_tag,
+) = sys.argv[1:9]
 text = open(source, encoding="utf-8").read()
 
 def upsert(text: str, key: str, value: str) -> str:
@@ -748,6 +778,9 @@ text = upsert(text, "gpu_memory_utilization", gpu_util)
 text = upsert(text, "tensor_parallel_size", tp)
 text = upsert(text, "max_num_seqs", max_seqs)
 text = upsert(text, "no_enable_prefix_caching", "true")
+if docker_tag:
+    # targets.vllm.docker.tag — keep indent under docker:
+    text = upsert(text, "tag", docker_tag)
 # enforce_eager is a forbidden serve.yaml key (isiro serve controls it).
 # Product default is outer graphs ON; eager A/B sets ISIRO_SERVE_ENFORCE_EAGER=1
 # on the serve process env (see the TIC serve launch), so it is not written here.
@@ -1733,16 +1766,17 @@ run_timed_baseline_arm() {
 scrape_baseline_environment_for_scale() {
   # Boot baseline long enough to scrape KV env for TIC capacity scale, then stop.
   # Used only when ISIRO_FIRST=1 so timed Isiro can still KV-scale.
+  # Log name must be baseline-serve.log: capture_environment reads that path.
   SERVE_MAX_NUM_SEQS="${BASELINE_CAPACITY_SEQS}"
   build_baseline_serve
   require_quiet_gpu
   ensure_api_port_free
   echo "isiro-first: baseline env scrape for KV scale (no timed profiles)" >&2
-  "${BASELINE_SERVE[@]}" >"${LOG_DIR}/baseline-env-scrape.log" 2>&1 &
+  "${BASELINE_SERVE[@]}" >"${LOG_DIR}/baseline-serve.log" 2>&1 &
   BASELINE_PID=$!
-  wait_ready "${LOG_DIR}/baseline-env-scrape.log" || {
-    echo "baseline env scrape failed; see ${LOG_DIR}/baseline-env-scrape.log" >&2
-    tail -n 80 "${LOG_DIR}/baseline-env-scrape.log" >&2 || true
+  wait_ready "${LOG_DIR}/baseline-serve.log" || {
+    echo "baseline env scrape failed; see ${LOG_DIR}/baseline-serve.log" >&2
+    tail -n 80 "${LOG_DIR}/baseline-serve.log" >&2 || true
     kill "${BASELINE_PID}" 2>/dev/null || true
     exit 2
   }

@@ -668,6 +668,32 @@ def _equal_batch_redundant(
     return True
 
 
+def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
+    """Cold GDX vs naive FA twin curve (entropy win figure)."""
+    gdx = summary.get("gdx_kv_bytes")
+    if not isinstance(gdx, dict) or not gdx.get("image"):
+        return []
+    alphabet = gdx.get("alphabet") or "bf16"
+    w = gdx.get("live_window")
+    save = gdx.get("save_at_max_t")
+    save_s = f"{float(save) * 100:.1f}%" if isinstance(save, (int, float)) else "n/a"
+    lines = [
+        "### Cold KV bytes vs context",
+        "",
+        (
+            f"Hot window W={w} stays vendor FA. Cold prefix `[0, T-W)` is GDX o1 "
+            f"(`ISIRO_GDX={alphabet}`). Curve is packed cold + hot FA vs naive FA "
+            f"for the same T. Save at max T: {save_s}."
+        ),
+        "",
+        "Figure. KV bytes vs context tokens (GDX cold compress).",
+        "",
+        f"![KV bytes vs context tokens]({gdx['image']})",
+        "",
+    ]
+    return lines
+
+
 def _mode_sections(summary: dict[str, Any]) -> list[str]:
     footprint = summary.get("footprint") or {}
     kv = summary.get("kv_cache") or {}
@@ -686,6 +712,7 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     lines.extend(_section_gpu_excluding_kv(footprint))
     lines.extend(_section_kv_reservation(kv))
+    lines.extend(_section_gdx_kv_bytes(summary))
     reserved_gib = pool_gib(
         kv.get("tic_memory_bytes_measured"),
         kv.get("tic_tokens_measured"),
@@ -922,6 +949,29 @@ def write_report(run_dir: Path, output: Path) -> Path:
     temp = Path(tempfile.mkdtemp(prefix=".isiro-bench-report-"))
     try:
         _stage_sanitized_tree(run_dir, temp)
+        gdx_curve = run_dir / "gdx_kv_bytes_curve.json"
+        gdx_png_src = run_dir / "kv-bytes-vs-context.png"
+        if gdx_curve.is_file() and gdx_png_src.is_file():
+            import shutil as _shutil
+
+            gdx_doc = load_json(gdx_curve)
+            dest_png = output.parent / "kv-bytes-vs-context.png"
+            _shutil.copy2(gdx_png_src, dest_png)
+            pts = list(gdx_doc.get("points") or [])
+            save_max = None
+            if pts:
+                save_max = pts[-1].get("save_vs_fa")
+            summary_path = temp / "summary.json"
+            if summary_path.is_file():
+                summary = load_json(summary_path)
+                summary["gdx_kv_bytes"] = {
+                    "image": dest_png.name,
+                    "alphabet": gdx_doc.get("alphabet"),
+                    "live_window": gdx_doc.get("live_window"),
+                    "save_at_max_t": save_max,
+                    "ok": bool(gdx_doc.get("ok")),
+                }
+                write_json(summary_path, summary)
         haystack_jsonl = run_dir / "needle_haystack.jsonl"
         if haystack_jsonl.is_file():
             from needle_haystack import load_jsonl, render_heatmap, render_vram_vs_context
