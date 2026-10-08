@@ -241,12 +241,34 @@ def _compiler_runtime_versions(summary: dict[str, Any]) -> tuple[str, str]:
     return compiler, runtime
 
 
-def _section_intro(summary: dict[str, Any]) -> list[str]:
+def _section_intro(
+    summary: dict[str, Any],
+    commands: dict[str, Any] | None = None,
+) -> list[str]:
     from needle_haystack import NEEDLE_COUNT
 
     model = str(summary.get("model") or "")
     compiler, runtime = _compiler_runtime_versions(summary)
-    return [
+    cmds = commands if isinstance(commands, dict) else {}
+    gdx_kv = cmds.get("isiro_gdx_kv")
+    kv_dtype = cmds.get("kv_cache_dtype")
+    compared = [
+        "Compared:",
+        "",
+        (
+            "- **Baseline:** vLLM (`vllm serve` / Docker "
+            "`vllm/vllm-openai`)"
+            + (f" with `--kv-cache-dtype {kv_dtype}`" if kv_dtype else "")
+        ),
+        "- **TIC:** `isiro serve … --target vllm` (same vLLM version)",
+    ]
+    if gdx_kv:
+        compared[-1] = (
+            f"- **TIC + KV compress:** `isiro serve … --target vllm` with "
+            f"`ISIRO_GDX_KV={gdx_kv}` (same vLLM version; cold order-1 "
+            "compress on vendor attention pages)"
+        )
+    lines = [
         f"# ISIRO Benchmark Report: `{model}`",
         "",
         (
@@ -269,15 +291,37 @@ def _section_intro(summary: dict[str, Any]) -> list[str]:
             else []
         ),
         "",
-        "Compared:",
-        "",
-        (
-            "- **Baseline:** vLLM (`vllm serve` / Docker "
-            "`vllm/vllm-openai`)"
-        ),
-        "- **TIC:** `isiro serve … --target vllm` (same vLLM version)",
+        *compared,
         "",
     ]
+    if gdx_kv:
+        lines.extend(
+            [
+                "## KV compress value (estimate vs this scrape)",
+                "",
+                "Estimates below are coding-rate / contract pins. Live GPU KV "
+                "pool savings in section A are measured on this run.",
+                "",
+                "| Flag | Baseline | Compressed stack | Estimate |",
+                "|------|----------|------------------|----------|",
+                (
+                    f"| `ISIRO_GDX_KV={gdx_kv}` (this report) | "
+                    "Vendor FA page bytes at the matched KV dtype | "
+                    "Same pages + order-1 cold compress | "
+                    "bf16 pages: ~29-31% vs naive 16 bpv; "
+                    "fp8 pages: ~19-25% vs naive 8 bpv; "
+                    "live pool from tables below |"
+                ),
+                (
+                    "| `ISIRO_GDX_C=fp8` (Flash models only; not Qwen) | "
+                    "GLM ~8909 B/tok; DeepSeek CSA2 890 B/tok | "
+                    "unique-source C + order-1 | "
+                    "GLM ~1.83x; DeepSeek ~1.35x |"
+                ),
+                "",
+            ]
+        )
+    return lines
 
 
 def _serve_output_match_row(correctness: dict[str, Any]) -> str:
@@ -652,6 +696,16 @@ def _section_g(
         else "off (eager)"
     )
     compiler, runtime = _compiler_runtime_versions(summary)
+    kv_dtype = commands.get("kv_cache_dtype")
+    gdx_kv = commands.get("isiro_gdx_kv")
+    kv_cell = "product KV cache size"
+    if kv_dtype or gdx_kv:
+        parts = []
+        if kv_dtype:
+            parts.append(f"dtype `{kv_dtype}`")
+        if gdx_kv:
+            parts.append(f"`ISIRO_GDX_KV={gdx_kv}` on TIC")
+        kv_cell = "; ".join(parts)
     lines = [
         "## Config",
         "",
@@ -659,7 +713,7 @@ def _section_g(
         "|------|-------|",
         f"| System | `{summary.get('system_id', '')}` |",
         f"| CUDA graphs | {graph_cell} |",
-        f"| KV cache | product KV cache size |",
+        f"| KV cache | {kv_cell} |",
         f"| Compiler | `{compiler}` |",
         f"| Runtime | `{runtime}` |",
         f"| vLLM | {environment.get('vllm_version', '')} |",
@@ -674,6 +728,8 @@ def _section_g(
     ]
     if reused:
         lines.append(f"| Baseline reused from | `{reused}` |")
+    if gdx_kv:
+        lines.append(f"| ISIRO_GDX_KV | `{gdx_kv}` |")
     attn = (
         summary.get("attention")
         if isinstance(summary.get("attention"), dict)
@@ -714,7 +770,7 @@ def render(run_dir: Path) -> str:
     footprint = summary["footprint"]
     correctness = summary["correctness"]
     graph_mode = _graph_mode(commands)
-    lines = _section_intro(summary)
+    lines = _section_intro(summary, commands)
     lines.extend(_section_a(footprint, correctness))
     lines.extend(_mode_sections(summary))
     story_path = run_dir / "stock_vllm_story.json"

@@ -6,7 +6,7 @@ Matched A/B with `vllm bench serve`: vLLM **baseline** vs ISIRO
 ~29% footprint savings apply across BF16 models, see [model cards](../model-cards/README.md) and [Hugging Face](https://huggingface.co/isiroai).
 
 - Benchmarked:
-  - [Qwen2.5-7B-Instruct](qwen2.5-7b-instruct/)
+  - [Qwen2.5-7B-Instruct](qwen2.5-7b-instruct/) ([TIC report](qwen2.5-7b-instruct/rtx-5090-report/))
   - [Gemma 4 12B IT](gemma-4-12B-it/)
   - [Qwen3.8-27B](qwen3.8-27b/)
 
@@ -31,6 +31,9 @@ Set either to a semver only when you want to pin.
 
 ```bash
 cp benchmarks/common.env.example benchmarks/{model}/common.env
+# Optional: bf16 KV compress A/B (ISIRO_GDX_KV=bf16)
+# cp benchmarks/common.env.bf16.gdx-kv.example \
+#   benchmarks/{model}/common.env.bf16.gdx-kv
 ```
 
 

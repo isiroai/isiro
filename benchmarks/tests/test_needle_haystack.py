@@ -692,6 +692,11 @@ class NeedleHaystackTests(unittest.TestCase):
             "GPU KV cache size: 20,480 tokens\n"
         )
         self.assertAlmostEqual(product, 1.09)
+        gdx = parse_kv_cache_gib(
+            "GDX FA live clamp: 449 MiB (vendor FA HBM; admit=8192 live_hbm=off)\n"
+            "GPU KV cache size: 8,208 tokens\n"
+        )
+        self.assertAlmostEqual(gdx, 449 / 1024.0)
         steps = "\n".join(niah_discover_steps())
         self.assertIn("scrape GPU KV cache size", steps)
         self.assertIn("NIAH_MAX_MODEL_LEN", steps)

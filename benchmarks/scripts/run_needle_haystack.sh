@@ -59,6 +59,28 @@ API_PORT="${API_PORT:-8000}"
 API_URL="http://127.0.0.1:${API_PORT}"
 SERVE_GPU_MEMORY_UTILIZATION="${SERVE_GPU_MEMORY_UTILIZATION:-0.90}"
 SERVE_TENSOR_PARALLEL_SIZE="${SERVE_TENSOR_PARALLEL_SIZE:-1}"
+SERVE_KV_CACHE_DTYPE="${SERVE_KV_CACHE_DTYPE:-}"
+ISIRO_BENCH_GDX_KV="${ISIRO_BENCH_GDX_KV:-}"
+case "${ISIRO_BENCH_GDX_KV}" in
+  ""|fp8|fp4|bf16) ;;
+  *)
+    echo "ISIRO_BENCH_GDX_KV must be empty, fp8, fp4, or bf16 (got ${ISIRO_BENCH_GDX_KV})" >&2
+    exit 2
+    ;;
+esac
+if [[ -n "${ISIRO_BENCH_GDX_KV}" ]]; then
+  if [[ -n "${ISIRO_GDX_C:-}" && "${ISIRO_GDX_C}" != "0" && "${ISIRO_GDX_C}" != "off" && "${ISIRO_GDX_C}" != "false" ]]; then
+    echo "ISIRO_BENCH_GDX_KV=${ISIRO_BENCH_GDX_KV}: unsetting inherited ISIRO_GDX_C=${ISIRO_GDX_C}" >&2
+    unset ISIRO_GDX_C || true
+  fi
+  if [[ -z "${SERVE_KV_CACHE_DTYPE}" ]]; then
+    case "${ISIRO_BENCH_GDX_KV}" in
+      fp8) SERVE_KV_CACHE_DTYPE="fp8" ;;
+      fp4) SERVE_KV_CACHE_DTYPE="nvfp4" ;;
+      bf16) SERVE_KV_CACHE_DTYPE="bfloat16" ;;
+    esac
+  fi
+fi
 # Probe traffic is one request. Do not overlay max_num_seqs=1 on TIC.
 BASELINE_PROBE_SEQS=1
 SYSTEM_ID="${SYSTEM_ID:-rtx-5090}"
@@ -287,13 +309,24 @@ start_tic() {
   export ISIRO_SERVE_CUDA_GRAPHS=0
   : "${VLLM_LOGGING_LEVEL:=DEBUG}"
   export VLLM_LOGGING_LEVEL
+  unset ISIRO_GDX_C || true
+  if [[ -n "${ISIRO_BENCH_GDX_KV}" ]]; then
+    export ISIRO_GDX_KV="${ISIRO_BENCH_GDX_KV}"
+    export ISIRO_GDX_COLD_READY=1
+  else
+    unset ISIRO_GDX_KV || true
+  fi
   : >"${log}"
   local args=(
     "${ISIRO_SERVE_BIN}" serve "${TIC_BENCH_BUNDLE}" --target vllm
     --host 0.0.0.0 --port "${API_PORT}"
+    --enforce-eager
   )
   if [[ -n "${NIAH_MAX_MODEL_LEN}" ]]; then
     args+=(--max-model-len "${NIAH_MAX_MODEL_LEN}")
+  fi
+  if [[ -n "${SERVE_KV_CACHE_DTYPE}" && -z "${ISIRO_BENCH_GDX_KV}" ]]; then
+    args+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
   fi
   "${args[@]}" >"${log}" 2>&1 &
   TIC_PID=$!
@@ -327,6 +360,9 @@ start_baseline() {
     --no-enable-flashinfer-autotune
     --enforce-eager
   )
+  if [[ -n "${SERVE_KV_CACHE_DTYPE}" ]]; then
+    args+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
+  fi
   if [[ -n "${lock_bytes}" ]]; then
     args+=(--kv-cache-memory "${lock_bytes}")
   fi
@@ -430,6 +466,12 @@ PY
 }
 
 require_tic_smaller_than_fill() {
+  # ISIRO_GDX_KV compresses cold page bytes; the reserved vendor pool can grow
+  # when TIC weights free HBM. Do not refuse that case.
+  if [[ -n "${ISIRO_BENCH_GDX_KV}" ]]; then
+    echo "KV compress A/B (ISIRO_GDX_KV=${ISIRO_BENCH_GDX_KV}): skip TIC-pool-smaller-than-fill gate (TIC=${1} GiB fill=${2} GiB)" >&2
+    return 0
+  fi
   python3 -c "
 import sys
 sys.path.insert(0, '${HERE}')
