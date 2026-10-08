@@ -309,7 +309,7 @@ def parse_kv_cache_gib(log_text: str) -> float:
     )
     if reserved:
         return float(reserved.group(1))
-    # ISIRO_GDX_KV admit clamp (MiB). Same vendor FA lock the serve printed.
+    # Legacy GDX admit-clamp print (retired; prefer Available / reserved above).
     gdx_mib = re.search(r"GDX FA live clamp:\s*([0-9.]+)\s*MiB", log_text)
     if gdx_mib:
         return float(gdx_mib.group(1)) / 1024.0
