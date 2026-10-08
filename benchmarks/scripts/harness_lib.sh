@@ -688,10 +688,19 @@ if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
     --out "${RUN_DIR}/gdx_kv_bitexact.json"
   echo "gdx_kv_bitexact: PASS" >&2
   echo "gdx_kv_bytes_curve: measuring cold vs FA twin (alphabet=${ISIRO_BENCH_GDX})" >&2
+  _gdx_gpu_model="${ISIRO_BENCH_GPU_MODEL:-}"
+  _gdx_gpu_count="${ISIRO_BENCH_GPU_COUNT:-0}"
+  if [[ -z "${_gdx_gpu_model}" ]] && command -v nvidia-smi >/dev/null 2>&1; then
+    _gdx_gpu_model="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    _gdx_gpu_count="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')"
+  fi
   python3 "${BENCH_ROOT}/scripts/gdx_kv_bytes_curve.py" \
     --alphabet "${ISIRO_BENCH_GDX}" \
     --out-json "${RUN_DIR}/gdx_kv_bytes_curve.json" \
-    --out-png "${RUN_DIR}/kv-bytes-vs-context.png"
+    --out-png "${RUN_DIR}/kv-bytes-vs-context.png" \
+    --model "${MODEL_ID}" \
+    --gpu-model "${_gdx_gpu_model}" \
+    --gpu-count "${_gdx_gpu_count}"
   echo "gdx_kv_bytes_curve: PASS" >&2
 fi
 

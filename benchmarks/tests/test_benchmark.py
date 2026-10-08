@@ -714,7 +714,8 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("## D. Generation (recall-matched KV, input 32 / output 256)", report)
             self.assertNotIn("## D. TTFT", report)
             self.assertNotIn("## E. Prefill TTFT", report)
-            self.assertIn("## E. Equal batch", report)
+            self.assertIn("## C. Equal batch", report)
+            self.assertNotIn("## D. Capacity", report)
             self.assertNotIn("## 1E. Equal-batch", report)
             self.assertNotIn("capacity benefit not active", report)
             self.assertIn("Output tok/s", report)
@@ -773,10 +774,11 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("## Correctness", report)
             self.assertIn("## A. GPU memory", report)
             self.assertIn("### Weights", report)
-            self.assertIn("## C. Capacity", report)
-            self.assertIn("## D. Generation (recall-matched KV, input 32 / output 256)", report)
+            self.assertIn("## C. Equal batch", report)
+            self.assertIn("## D. Capacity", report)
+            self.assertIn("### Generation (recall-matched KV, input 32 / output 256)", report)
             self.assertNotIn("## E. Prefill TTFT", report)
-            self.assertIn("## E. Equal batch", report)
+            self.assertNotIn("## C. Capacity", report)
             self.assertIn("## Config", report)
             self.assertNotIn("## G. Config", report)
             self.assertNotIn("## G. Config / fairness / reproduce", report)
@@ -809,6 +811,15 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("| Compiler |", report)
             self.assertIn("| Runtime |", report)
             self.assertIn("Savings %", report)
+            self.assertIn(
+                "Savings % uses `1 - Isiro/Baseline` for loaded weights "
+                "(x is `Isiro/Baseline`).",
+                report,
+            )
+            self.assertIn(
+                "For KV it uses `Isiro/Baseline - 1` as a % gain",
+                report,
+            )
             self.assertNotIn("Savings % uses `1 - TIC/Baseline`.", report)
             self.assertNotIn("GPU memory excluding KV cache", report)
             self.assertNotIn("nvidia-smi process usage", report)
@@ -1291,9 +1302,10 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("ISIRO_SERVE_CUDA_GRAPHS", report)
             self.assertNotIn("--both-graph-modes", report)
             self.assertEqual(report.count("## A. GPU memory"), 1)
-            self.assertEqual(report.count("## C. Capacity"), 1)
-            self.assertEqual(report.count("## D. Generation"), 1)
-            self.assertEqual(report.count("## E. Equal batch"), 1)
+            self.assertEqual(report.count("## C. Equal batch"), 1)
+            self.assertEqual(report.count("## D. Capacity"), 1)
+            self.assertEqual(report.count("### Generation"), 1)
+            self.assertNotIn("## C. Capacity", report)
             self.assertIn("ITL (ms) p50 / p95 / p99", report)
             self.assertNotIn("† tok/s per Non-KV GB", report)
             self.assertNotIn("Reproduce:", report)
@@ -1369,9 +1381,10 @@ class BenchmarkTests(unittest.TestCase):
             )
             _write_run(run, summary)
             report = render(run)
-            self.assertNotIn("## E. Equal batch", report)
-            self.assertNotIn("Not equal batch (E).", report)
-            self.assertIn("## D. Generation", report)
+            self.assertNotIn("## C. Equal batch", report)
+            self.assertNotIn("Not equal batch (C).", report)
+            self.assertIn("## C. Capacity", report)
+            self.assertIn("### Generation", report)
 
     def test_report_gdx_kv_bitexact_and_lean_intro(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1575,6 +1588,28 @@ class BenchmarkTests(unittest.TestCase):
         ]
         md2 = "\n".join(render_story_markdown(doc))
         self.assertIn("Graph 2", md2)
+
+    def test_gdx_kv_bytes_curve_cold_grows_with_t(self) -> None:
+        from gdx_kv_bytes_curve import measure_curve
+
+        doc = measure_curve(
+            "bf16", tokens=[512, 1024, 2048, 4096, 8192], seed=17
+        )
+        if doc.get("error") and "not importable" in str(doc.get("error")):
+            self.skipTest("isiro_runtime not importable for GDX curve")
+        self.assertTrue(doc.get("ok"), doc.get("error"))
+        cold = [p for p in doc["points"] if int(p["cold_t"]) > 0]
+        self.assertGreaterEqual(len(cold), 2)
+        self.assertGreater(
+            int(cold[-1]["gdx_cold_nbytes"]),
+            2 * int(cold[0]["gdx_cold_nbytes"]),
+        )
+        self.assertGreater(
+            int(cold[-1]["gdx_total_nbytes"]),
+            int(cold[0]["gdx_total_nbytes"]),
+        )
+        self.assertLess(float(cold[-1]["payload_bpv"]), 16.0)
+        self.assertGreater(float(cold[-1]["save_vs_fa"]), 0.0)
 
 
 if __name__ == "__main__":

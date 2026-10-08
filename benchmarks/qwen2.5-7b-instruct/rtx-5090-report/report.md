@@ -24,29 +24,42 @@ GDX cold coding-rate vs naive vendor KV bits (estimate): bf16 ~29-31% vs 16 bpv;
 
 ## A. GPU memory
 
+Savings % uses `1 - Isiro/Baseline` for loaded weights (x is `Isiro/Baseline`). For KV it uses `Isiro/Baseline - 1` as a % gain (and the matching `x` ratio).
+
 ### Weights
 
 | Metric | Baseline | Isiro | Savings % |
 |--------|----------|-------|-----------|
-| GPU memory for loaded weights | 14.29 GiB | **10.25 GiB** | **28.27%** |
+| GPU memory for loaded weights | 14.29 GiB | **10.25 GiB** | **28.27% (0.72x)** |
 
 ### KV cache
 
 | Metric | Baseline default fill | Isiro reserved KV | Savings % |
 |--------|-----------------------|-------------------|-----------|
-| GPU memory reserved for KV | 12.56 GiB (235120 tokens) | 15.85 GiB (296800 tokens)† | -26.19% |
+| GPU memory reserved for KV | 12.56 GiB (235120 tokens) | **15.85 GiB** (296800 tokens)† | **26.19% (1.26x)** |
 
 † Reserved pool on the GPU. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
 
 ### Cold KV bytes vs context
 
-Hot window W=512 stays vendor FA. Cold prefix `[0, T-W)` is GDX o1 (`ISIRO_GDX=bf16`). Curve is packed cold + hot FA vs naive FA for the same T. Save at max T: 93.3%.
+Hot window W=512 stays vendor FA. Cold prefix `[0, T-W)` is GDX o1 (`ISIRO_GDX=bf16`). Curve is packed cold + hot FA vs Baseline FA for the same T. At T=8192: Baseline KV 0.44 GiB, Isiro GDX KV 0.31 GiB; save 0.13 GiB (29.3%).
 
-Figure. KV bytes vs context tokens (GDX cold compress).
+Figure. KV bytes vs context.
 
-![KV bytes vs context tokens](kv-bytes-vs-context.png)
+![KV bytes vs context](kv-bytes-vs-context.png)
 
-## C. Capacity
+## C. Equal batch
+
+Same batch as Baseline. ITL stays near Baseline; capacity-matched generation in D raises concurrency and ITL.
+
+| Metric | Baseline | Isiro |
+|--------|----------|-------|
+| Output tok/s | 1870.46 | 1780.33 |
+| ITL (ms) p50 / p95 / p99 | 10.53 / 11.70 / 12.08 | 10.71 / 12.24 / 21.97 |
+| TPOT (ms) p50 / p95 / p99 | 10.82 / 10.90 / 11.05 | 10.91 / 10.91 / 11.05 |
+| TTFT (ms) p50 / p95 / p99 | 102.45 / 160.52 / 160.53 | 418.83 / 420.10 / 420.11 |
+
+## D. Capacity
 
 Isiro batch = round(Baseline batch × Isiro/Baseline KV token capacity) from a matched vLLM KV measurement.
 
@@ -57,9 +70,9 @@ KV token capacity is reserved pool slots when Isiro printed KV pool, else vLLM G
 | Batch | 32 | **40** (**1.25x**) |
 | KV token capacity | 235120 (12.56 GiB KV) | **296800 (15.85 GiB KV)†** |
 
-## D. Generation (recall-matched KV, input 32 / output 256)
+### Generation (recall-matched KV, input 32 / output 256)
 
-Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. Not equal batch (E). TTFT is in this table because it moves with concurrency.
+Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. Not equal batch (C). TTFT is in this table because it moves with concurrency.
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
@@ -67,17 +80,6 @@ Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. Not equa
 | ITL (ms) p50 / p95 / p99 | 10.53 / 11.70 / 12.08 | 13.97 / 16.09 / 29.06 |
 | TPOT (ms) p50 / p95 / p99 | 10.82 / 10.90 / 11.05 | 14.02 / 14.27 / 15.09 |
 | TTFT (ms) p50 / p95 / p99 | 102.45 / 160.52 / 160.53 | 517.67 / 517.97 / 518.01 |
-
-## E. Equal batch
-
-Same batch as Capacity.
-
-| Metric | Baseline | Isiro |
-|--------|----------|-------|
-| Output tok/s | 1870.46 | 1780.33 |
-| ITL (ms) p50 / p95 / p99 | 10.53 / 11.70 / 12.08 | 10.71 / 12.24 / 21.97 |
-| TPOT (ms) p50 / p95 / p99 | 10.82 / 10.90 / 11.05 | 10.91 / 10.91 / 11.05 |
-| TTFT (ms) p50 / p95 / p99 | 102.45 / 160.52 / 160.53 | 418.83 / 420.10 / 420.11 |
 
 ## Config
 

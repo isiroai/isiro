@@ -388,11 +388,21 @@ def _section_a(
 
 
 def _simple_savings_pct(baseline: Any, tic: Any) -> float | None:
+    """``100 * (1 - tic/baseline)`` (less is better)."""
     if not isinstance(baseline, (int, float)) or not isinstance(tic, (int, float)):
         return None
     if float(baseline) <= 0:
         return None
     return (1.0 - float(tic) / float(baseline)) * 100.0
+
+
+def _simple_gain_pct(baseline: Any, tic: Any) -> float | None:
+    """``100 * (tic/baseline - 1)`` (more is better; KV headroom)."""
+    if not isinstance(baseline, (int, float)) or not isinstance(tic, (int, float)):
+        return None
+    if float(baseline) <= 0:
+        return None
+    return (float(tic) / float(baseline) - 1.0) * 100.0
 
 
 def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
@@ -406,10 +416,25 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
         and float(t_load) < float(b_load)
     )
     load_pct = _simple_savings_pct(b_load, t_load)
-    load_cell = number(load_pct) + "%" if load_pct is not None else "null"
+    if (
+        load_pct is not None
+        and isinstance(b_load, (int, float))
+        and isinstance(t_load, (int, float))
+        and float(b_load) > 0
+    ):
+        load_ratio = float(t_load) / float(b_load)
+        load_cell = f"{number(load_pct)}% ({number(load_ratio)}x)"
+    else:
+        load_cell = "null"
     arm = _arm_col()
     return [
         "## A. GPU memory",
+        "",
+        (
+            f"Savings % uses `1 - {arm}/Baseline` for loaded weights "
+            f"(x is `{arm}/Baseline`). For KV it uses `{arm}/Baseline - 1` "
+            "as a % gain (and the matching `x` ratio)."
+        ),
         "",
         "### Weights",
         "",
@@ -426,7 +451,7 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
 
 
 def _section_kv_reservation(kv: dict[str, Any]) -> list[str]:
-    """Reserved GPU KV vs Baseline default fill. Savings is ``1 - Isiro/Baseline``."""
+    """Reserved GPU KV vs Baseline default fill. Gain is ``Isiro/Baseline - 1``."""
     b_tokens = kv.get("baseline_tokens_measured")
     t_tokens = kv.get("tic_tokens_measured")
     b_bytes = kv.get("baseline_memory_bytes_measured")
@@ -435,9 +460,13 @@ def _section_kv_reservation(kv: dict[str, Any]) -> list[str]:
     t_gib = pool_gib(t_bytes, t_tokens, peer_bytes=b_bytes, peer_tokens=b_tokens)
     if b_gib is None or t_gib is None:
         return []
-    pct = _simple_savings_pct(b_gib, t_gib)
-    win = t_gib < b_gib
-    pct_cell = f"{pct:.2f}%" if pct is not None else "null"
+    pct = _simple_gain_pct(b_gib, t_gib)
+    win = t_gib > b_gib
+    if pct is None:
+        pct_cell = "null"
+    else:
+        ratio = 1.0 + float(pct) / 100.0
+        pct_cell = f"{number(pct)}% ({number(ratio)}x)"
     b_tok = number(b_tokens, 0) if b_tokens is not None else "null"
     t_tok = number(t_tokens, 0) if t_tokens is not None else "null"
     tic_cell = f"{bold_win(f'{t_gib:.2f} GiB', win=win)} ({t_tok} tokens)†"
@@ -523,8 +552,9 @@ def _section_c(
     )
     if str(capacity.get("kv_measured_source") or "") == "timed_asymmetric":
         tokens_tic = f"{tokens_tic}; asymmetric timed seqs"
+    letter = str(prefix) if prefix in ("C", "D") else "D"
     lines = [
-        "## C. Capacity",
+        f"## {letter}. Capacity",
         "",
         scale_blurb,
         "",
@@ -558,20 +588,27 @@ def _compact_latency_rows(
     ]
 
 
-def _section_d(
+def _section_generation(
     capacity: dict[str, Any] | None,
     decode_rows: list[dict[str, Any]],
     *,
+    letter: str = "D",
     mention_equal_batch: bool = True,
+    as_subsection: bool = False,
 ) -> list[str]:
     arm = _arm_col()
     equal_note = (
-        " Not equal batch (E)."
+        " Not equal batch (C)."
         if mention_equal_batch
         else ""
     )
+    heading = (
+        "### Generation (recall-matched KV, input 32 / output 256)"
+        if as_subsection
+        else f"## {letter}. Generation (recall-matched KV, input 32 / output 256)"
+    )
     lines = [
-        "## D. Generation (recall-matched KV, input 32 / output 256)",
+        heading,
         "",
         "Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity."
         f"{equal_note} TTFT is in this table because it moves with concurrency.",
@@ -611,16 +648,19 @@ def _section_d(
     return lines
 
 
-def _section_f(equal_batch: dict[str, Any]) -> list[str]:
+def _section_equal_batch(equal_batch: dict[str, Any]) -> list[str]:
     arm = _arm_col()
     tps = equal_batch.get("decode_output_tokens_per_sec") or {}
     latency = equal_batch.get("latency_ms") or {}
     b_lat = latency.get("baseline") or {}
     t_lat = latency.get("tic") or {}
     lines = [
-        "## E. Equal batch",
+        "## C. Equal batch",
         "",
-        "Same batch as Capacity.",
+        (
+            "Same batch as Baseline. ITL stays near Baseline; "
+            "capacity-matched generation in D raises concurrency and ITL."
+        ),
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
@@ -669,26 +709,48 @@ def _equal_batch_redundant(
 
 
 def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
-    """Cold GDX vs naive FA twin curve (entropy win figure)."""
+    """Cold GDX vs Baseline FA twin curve (entropy win figure)."""
     gdx = summary.get("gdx_kv_bytes")
     if not isinstance(gdx, dict) or not gdx.get("image"):
         return []
     alphabet = gdx.get("alphabet") or "bf16"
     w = gdx.get("live_window")
+    max_t = gdx.get("max_t")
+    b_gib = gdx.get("baseline_kv_gib_at_max_t")
+    t_gib = gdx.get("isiro_kv_gib_at_max_t")
+    save_gib = gdx.get("save_gib_at_max_t")
     save = gdx.get("save_at_max_t")
-    save_s = f"{float(save) * 100:.1f}%" if isinstance(save, (int, float)) else "n/a"
+    if (
+        isinstance(max_t, (int, float))
+        and isinstance(b_gib, (int, float))
+        and isinstance(t_gib, (int, float))
+        and isinstance(save_gib, (int, float))
+        and isinstance(save, (int, float))
+    ):
+        save_line = (
+            f"At T={number(max_t, 0)}: Baseline KV {number(b_gib)} GiB, "
+            f"Isiro GDX KV {number(t_gib)} GiB; save {number(save_gib)} GiB "
+            f"({float(save) * 100:.1f}%)."
+        )
+    else:
+        save_s = (
+            f"{float(save) * 100:.1f}%"
+            if isinstance(save, (int, float))
+            else "n/a"
+        )
+        save_line = f"Save at max T: {save_s}."
     lines = [
         "### Cold KV bytes vs context",
         "",
         (
             f"Hot window W={w} stays vendor FA. Cold prefix `[0, T-W)` is GDX o1 "
-            f"(`ISIRO_GDX={alphabet}`). Curve is packed cold + hot FA vs naive FA "
-            f"for the same T. Save at max T: {save_s}."
+            f"(`ISIRO_GDX={alphabet}`). Curve is packed cold + hot FA vs Baseline "
+            f"FA for the same T. {save_line}"
         ),
         "",
-        "Figure. KV bytes vs context tokens (GDX cold compress).",
+        "Figure. KV bytes vs context.",
         "",
-        f"![KV bytes vs context tokens]({gdx['image']})",
+        f"![KV bytes vs context]({gdx['image']})",
         "",
     ]
     return lines
@@ -745,32 +807,37 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
     skip_equal = equal_batch is not None and _equal_batch_redundant(
         capacity, equal_batch, decode_rows
     )
+    show_equal = equal_batch is not None and not skip_equal
+    if show_equal:
+        lines.extend(_section_equal_batch(equal_batch))
+    cap_letter = "D" if show_equal else "C"
     if capacity is not None and experiment_kind == "capacity":
         lines.extend(
             _section_c(
                 capacity,
                 kv,
-                prefix="1",
+                prefix=cap_letter,
                 overflow_note=False,
             )
         )
         lines.extend(
-            _section_d(
+            _section_generation(
                 capacity,
                 decode_rows,
-                mention_equal_batch=not skip_equal and equal_batch is not None,
+                mention_equal_batch=show_equal,
+                as_subsection=True,
             )
         )
     else:
         lines.extend(
-            _section_d(
+            _section_generation(
                 None,
                 decode_rows,
-                mention_equal_batch=not skip_equal and equal_batch is not None,
+                letter=cap_letter,
+                mention_equal_batch=show_equal,
+                as_subsection=False,
             )
         )
-    if equal_batch is not None and not skip_equal:
-        lines.extend(_section_f(equal_batch))
     return lines
 
 
@@ -959,8 +1026,22 @@ def write_report(run_dir: Path, output: Path) -> Path:
             _shutil.copy2(gdx_png_src, dest_png)
             pts = list(gdx_doc.get("points") or [])
             save_max = None
+            max_t = None
+            b_gib = None
+            t_gib = None
+            save_gib = None
             if pts:
-                save_max = pts[-1].get("save_vs_fa")
+                last = pts[-1]
+                save_max = last.get("save_vs_fa")
+                max_t = last.get("T")
+                fa_b = last.get("fa_twin_nbytes")
+                gdx_b = last.get("gdx_total_nbytes")
+                if isinstance(fa_b, (int, float)):
+                    b_gib = float(fa_b) / float(1024**3)
+                if isinstance(gdx_b, (int, float)):
+                    t_gib = float(gdx_b) / float(1024**3)
+                if b_gib is not None and t_gib is not None:
+                    save_gib = float(b_gib) - float(t_gib)
             summary_path = temp / "summary.json"
             if summary_path.is_file():
                 summary = load_json(summary_path)
@@ -968,6 +1049,10 @@ def write_report(run_dir: Path, output: Path) -> Path:
                     "image": dest_png.name,
                     "alphabet": gdx_doc.get("alphabet"),
                     "live_window": gdx_doc.get("live_window"),
+                    "max_t": max_t,
+                    "baseline_kv_gib_at_max_t": b_gib,
+                    "isiro_kv_gib_at_max_t": t_gib,
+                    "save_gib_at_max_t": save_gib,
                     "save_at_max_t": save_max,
                     "ok": bool(gdx_doc.get("ok")),
                 }

@@ -26,6 +26,8 @@ This directory is a mock: tables and figures use invented numbers so you can see
 
 ## A. GPU memory
 
+Savings % uses `1 - TIC/Baseline` for loaded weights. For KV it uses `TIC/Baseline - 1` as a % gain (and the matching `x` ratio).
+
 ### Weights
 
 
@@ -39,7 +41,7 @@ This directory is a mock: tables and figures use invented numbers so you can see
 
 | Metric                     | Baseline default fill     | TIC reserved KV              | Savings %  |
 | -------------------------- | ------------------------- | ---------------------------- | ---------- |
-| GPU memory reserved for KV | 12.71 GiB (238064 tokens) | **1.09 GiB** (20480 tokens)† | **91.42%** |
+| GPU memory reserved for KV | 12.71 GiB (238064 tokens) | **1.09 GiB** (20480 tokens)† | **-91.42% (0.09x)** |
 
 
 † Reserved pool on the GPU. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
@@ -60,7 +62,20 @@ Solid line is in-use: non-KV (weights) plus live vendor KV (usage_perc times poo
 
 ![VRAM usage vs context tokens](vram-vs-context.png)
 
-## C. Capacity
+## C. Equal batch
+
+Same batch as Baseline. ITL stays near Baseline; capacity-matched generation in D raises concurrency and ITL.
+
+
+| Metric                    | Baseline                | TIC                      |
+| ------------------------- | ----------------------- | ------------------------ |
+| Output tok/s              | 1876.21                 | 1860.33                  |
+| ITL (ms) p50 / p95 / p99  | 10.65 / 11.35 / 11.89   | 10.97 / 11.57 / 32.48    |
+| TPOT (ms) p50 / p95 / p99 | 10.83 / 10.90 / 11.11   | 11.10 / 11.42 / 11.51    |
+| TTFT (ms) p50 / p95 / p99 | 94.70 / 152.51 / 152.60 | 124.30 / 201.38 / 201.68 |
+
+
+## D. Capacity
 
 Batch is 32 on both sides. Not scaled from KV token capacity.
 
@@ -73,22 +88,9 @@ KV token capacity is vLLM-reported full-attn tokens in this serve's reserved GPU
 | KV token capacity | 238064 (12.71 GiB KV) | 20480 (1.09 GiB KV)† |
 
 
-## D. Generation (recall-matched KV, input 32 / output 256)
+### Generation (recall-matched KV, input 32 / output 256)
 
-Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. Not equal batch (E). TTFT is in this table because it moves with concurrency.
-
-
-| Metric                    | Baseline                | TIC                      |
-| ------------------------- | ----------------------- | ------------------------ |
-| Output tok/s              | 1876.21                 | 1860.33                  |
-| ITL (ms) p50 / p95 / p99  | 10.65 / 11.35 / 11.89   | 10.97 / 11.57 / 32.48    |
-| TPOT (ms) p50 / p95 / p99 | 10.83 / 10.90 / 11.11   | 11.10 / 11.42 / 11.51    |
-| TTFT (ms) p50 / p95 / p99 | 94.70 / 152.51 / 152.60 | 124.30 / 201.38 / 201.68 |
-
-
-## E. Equal batch
-
-Same batch as Capacity.
+Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. Not equal batch (C). TTFT is in this table because it moves with concurrency.
 
 
 | Metric                    | Baseline                | TIC                      |
