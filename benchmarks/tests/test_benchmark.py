@@ -792,7 +792,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("### KV cache", report)
             self.assertIn("| GPU memory reserved for KV |", report)
             self.assertIn("Baseline default fill", report)
-            self.assertIn("TIC reserved KV", report)
+            self.assertIn("TIC reserved FA lock", report)
             self.assertNotIn("weight-estimate KV-scaled timed point", report)
             self.assertNotIn("TIC concurrency scale", report)
             self.assertNotIn("SKU / `system_id`", report)

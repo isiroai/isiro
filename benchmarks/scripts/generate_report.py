@@ -299,8 +299,11 @@ def _section_intro(
             [
                 "## KV compress value (estimate vs this scrape)",
                 "",
-                "Estimates below are coding-rate / contract pins. Live GPU KV "
-                "pool savings in section A are measured on this run.",
+                "Estimates below are **coding-rate** / contract pins for cold "
+                "order-1 bytes. Section A GPU memory is the **reserved FA "
+                "lock** (vendor util / `--kv-cache-memory`), not coded cold "
+                "bytes. Live in-use pool savings apply only when this scrape "
+                "reports `n_live_persist` / `save_vs_all_fa` (live_hbm path).",
                 "",
                 "| Flag | Baseline | Compressed stack | Estimate |",
                 "|------|----------|------------------|----------|",
@@ -308,9 +311,9 @@ def _section_intro(
                     f"| `ISIRO_GDX_KV={gdx_kv}` (this report) | "
                     "Vendor FA page bytes at the matched KV dtype | "
                     "Same pages + order-1 cold compress | "
-                    "bf16 pages: ~29-31% vs naive 16 bpv; "
-                    "fp8 pages: ~19-25% vs naive 8 bpv; "
-                    "live pool from tables below |"
+                    "bf16 coding-rate: ~29-31% vs naive 16 bpv; "
+                    "fp8 coding-rate: ~19-25% vs naive 8 bpv; "
+                    "reserved FA lock is not a coding KPI |"
                 ),
                 (
                     "| `ISIRO_GDX_C=fp8` (Flash models only; not Qwen) | "
@@ -440,8 +443,8 @@ def _section_kv_reservation(kv: dict[str, Any]) -> list[str]:
     return [
         "### KV cache",
         "",
-        "| Metric | Baseline default fill | TIC reserved KV | Savings % |",
-        "|--------|-----------------------|-----------------|-----------|",
+        "| Metric | Baseline default fill | TIC reserved FA lock | Savings % |",
+        "|--------|-----------------------|----------------------|-----------|",
         (
             "| GPU memory reserved for KV | "
             f"{b_gib:.2f} GiB ({b_tok} tokens) | "
