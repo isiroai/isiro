@@ -46,8 +46,10 @@ from capacity_plan import (  # noqa: E402
 from compare_ab import (  # noqa: E402
     artifact_digest,
     build_equal_batch_block,
+    fold_gdx_kv_bitexact,
     fold_serve_output_match,
 )
+from gdx_kv_bitexact import run_meter as gdx_kv_run_meter  # noqa: E402
 from attention_ab import parse_serve_attention  # noqa: E402
 from generate_report import (  # noqa: E402
     _graph_mode,
@@ -729,6 +731,8 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("Serve output match", report)
             self.assertNotIn("greedy vLLM", report)
             self.assertIn("`isiro serve … --target vllm`", report)
+            self.assertIn("| Metric | Baseline | Isiro |", report)
+            self.assertIn("**Isiro:**", report)
             self.assertIn("Baseline", report)
             self.assertNotIn("E2E latency", report)
             self.assertNotIn("Footprint-adjusted tok/s ratio", report)
@@ -747,7 +751,7 @@ class BenchmarkTests(unittest.TestCase):
             }
             _write_run(run, summary)
             report = render(run)
-            self.assertIn("| TIC attention | `CUSTOM` (`ISIRO_ATTN` unset) |", report)
+            self.assertIn("| Isiro attention | `CUSTOM` (`ISIRO_ATTN` unset) |", report)
             self.assertIn("| Baseline attention | `FLASH_ATTN` |", report)
             self.assertNotIn("## F. Same TIC", report)
 
@@ -778,11 +782,11 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("## G. Config / fairness / reproduce", report)
             self.assertIn("| Batch |", report)
             self.assertIn(
-                "TIC batch = round(Baseline batch × estimated KV ratio)",
+                "Isiro batch = round(Baseline batch × estimated KV ratio)",
                 report,
             )
             self.assertIn(
-                "KV token capacity is dest lock slots",
+                "KV token capacity is reserved pool slots",
                 report,
             )
             self.assertIn("reserved GPU pool", report)
@@ -792,7 +796,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("### KV cache", report)
             self.assertIn("| GPU memory reserved for KV |", report)
             self.assertIn("Baseline default fill", report)
-            self.assertIn("TIC reserved FA lock", report)
+            self.assertIn("Isiro reserved KV", report)
             self.assertNotIn("weight-estimate KV-scaled timed point", report)
             self.assertNotIn("TIC concurrency scale", report)
             self.assertNotIn("SKU / `system_id`", report)
@@ -873,6 +877,9 @@ class BenchmarkTests(unittest.TestCase):
             **dict(**{k: v for k, v in __import__("os").environ.items()}),
             "ISIRO_BENCH_LAUNCH_DRY_META": "1",
         }
+        env.pop("ISIRO_VERIFY_REFERENCE", None)
+        env.pop("ISIRO_BENCH_EQUAL_BATCH", None)
+        env.pop("ISIRO_BENCH_SKIP_NEEDLE", None)
         result = subprocess.run(
             [
                 sys.executable,
@@ -1347,6 +1354,86 @@ class BenchmarkTests(unittest.TestCase):
             )
             self.assertIn("| Compiler | `v0.1.0` |", report)
             self.assertIn("| Runtime | `v0.1.1` |", report)
+
+    def test_report_skips_equal_batch_when_redundant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            summary = _sample_summary(ttft_tic_slower=True, experiment_kind="capacity")
+            summary["equal_batch"] = build_equal_batch_block(
+                max_num_seqs=32,
+                max_concurrency=32,
+                baseline_tps=1000.0,
+                tic_tps=1400.0,
+                baseline_latency_ms=profile("baseline", "x", 32, 256)["latency_ms"],
+                tic_latency_ms=profile("isiro", "x", 32, 256)["latency_ms"],
+            )
+            _write_run(run, summary)
+            report = render(run)
+            self.assertNotIn("## E. Equal batch", report)
+            self.assertNotIn("Not equal batch (E).", report)
+            self.assertIn("## D. Generation", report)
+
+    def test_report_gdx_kv_bitexact_and_lean_intro(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            summary = _sample_summary(ttft_tic_slower=True)
+            summary["correctness"]["kv_bit_exact_ok"] = True
+            summary["correctness"]["kv_bit_exact_alphabet"] = "bf16"
+            _write_run(run, summary)
+            (run / "commands.json").write_text(
+                json.dumps(
+                    {
+                        "baseline_serve": ["vllm", "serve"],
+                        "tic_serve": ["isiro", "serve"],
+                        "isiro_gdx_kv": "bf16",
+                        "kv_cache_dtype": "bfloat16",
+                        "enforce_eager": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = render(run)
+            self.assertIn("**Isiro:**", report)
+            self.assertIn("`ISIRO_GDX=bf16`", report)
+            self.assertIn("KV bit-exactness", report)
+            self.assertIn("GDX `bf16` cold roundtrip", report)
+            self.assertIn("coding-rate", report)
+            self.assertNotIn("ISIRO_GDX_C=fp8", report)
+            self.assertNotIn("TIC + KV compress", report)
+            self.assertNotIn("| Metric | Baseline | TIC |", report)
+
+    def test_fold_gdx_kv_bitexact_required(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            correctness: dict = {}
+            missing = fold_gdx_kv_bitexact(run, correctness, required=True)
+            self.assertTrue(missing)
+            (run / "gdx_kv_bitexact.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "isiro-benchmark-gdx-kv-bitexact-v1",
+                        "alphabet": "bf16",
+                        "kv_bit_exact_ok": True,
+                        "n_values": 64,
+                        "error": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            correctness = {}
+            self.assertEqual(
+                fold_gdx_kv_bitexact(run, correctness, required=True), []
+            )
+            self.assertTrue(correctness["kv_bit_exact_ok"])
+            self.assertEqual(correctness["kv_bit_exact_alphabet"], "bf16")
+
+    def test_gdx_kv_bitexact_meter_bf16_when_overlay_present(self) -> None:
+        site = Path.home() / ".isiro" / "serve-site" / "isiro_runtime"
+        if not site.is_dir():
+            self.skipTest("product serve-site overlay not installed")
+        doc = gdx_kv_run_meter("bf16", seed=11)
+        self.assertTrue(doc.get("kv_bit_exact_ok"), msg=doc.get("error"))
+        self.assertEqual(doc.get("alphabet"), "bf16")
 
     def test_fold_serve_output_match_isiro(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

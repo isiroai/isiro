@@ -1252,7 +1252,7 @@ def story_recalls(
 def _panel_label(panel: str) -> str:
     name = str(panel or "").lower()
     if name in ("tic", "isiro"):
-        return "TIC"
+        return "Isiro"
     if name in ("vanilla", "baseline"):
         return "Baseline"
     return str(panel)
@@ -1661,7 +1661,7 @@ def render_vram_vs_context(
         spine.set_linewidth(0.9)
         spine.set_color("#222222")
     legend_items = [
-        Line2D([0], [0], color=_VRAM_COLORS["tic"], lw=2, marker="o", ms=5, label="TIC"),
+        Line2D([0], [0], color=_VRAM_COLORS["tic"], lw=2, marker="o", ms=5, label="Isiro"),
         Line2D(
             [0],
             [0],
@@ -1677,7 +1677,7 @@ def render_vram_vs_context(
             color=_VRAM_COLORS["tic"],
             lw=1.25,
             ls="--",
-            label="TIC reserved",
+            label="Isiro reserved",
         ),
         Line2D(
             [0],

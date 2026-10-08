@@ -214,6 +214,16 @@ echo "  GRAPH_MODE        = ${GRAPH_MODE} (enforce_eager=${SERVE_ENFORCE_EAGER})
 echo "  EXPERIMENT_KIND   = ${EXPERIMENT_KIND}" >&2
 echo "  SERVE_KV_CACHE_DTYPE = ${SERVE_KV_CACHE_DTYPE:-unset}" >&2
 echo "  ISIRO_BENCH_GDX      = ${ISIRO_BENCH_GDX:-off}" >&2
+# Isiro-first: timed Isiro arm before cold baseline (GDX publish default on).
+ISIRO_FIRST=0
+_ISIRO_FIRST_RAW="${ISIRO_BENCH_ISIRO_FIRST-}"
+if [[ -z "${_ISIRO_FIRST_RAW}" && -n "${ISIRO_BENCH_GDX}" ]]; then
+  _ISIRO_FIRST_RAW=1
+fi
+case "${_ISIRO_FIRST_RAW}" in
+  1|true|yes|on) ISIRO_FIRST=1 ;;
+esac
+echo "  ISIRO_FIRST         = ${ISIRO_FIRST}" >&2
 # PROFILES / BASELINE_REUSE are printed after counts resolve.
 
 # Matched A/B requires these knobs; refuse silent drift.
@@ -659,6 +669,14 @@ json.dump(doc, open(sys.argv[1], "w", encoding="utf-8"), indent=2, sort_keys=Tru
 PY
 [[ "${VERIFY_EXIT}" -eq 0 ]] || { echo "isiro verify failed; see ${LOG_DIR}/verify.log" >&2; exit 2; }
 echo "verify: PASS" >&2
+
+if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
+  echo "gdx_kv_bitexact: measuring cold roundtrip (alphabet=${ISIRO_BENCH_GDX})" >&2
+  python3 "${BENCH_ROOT}/scripts/gdx_kv_bitexact.py" \
+    --alphabet "${ISIRO_BENCH_GDX}" \
+    --out "${RUN_DIR}/gdx_kv_bitexact.json"
+  echo "gdx_kv_bitexact: PASS" >&2
+fi
 
 cleanup() {
   if [[ -n "${TIC_PID}" ]] && kill -0 "${TIC_PID}" 2>/dev/null; then
@@ -1674,85 +1692,99 @@ if [[ "${EXPERIMENT_KIND}" == "capacity" ]]; then
   fi
 fi
 
-# Timed baseline at resolved max_num_seqs (capacity) or env value (equal-batch).
-SERVE_MAX_NUM_SEQS="${BASELINE_CAPACITY_SEQS}"
-BENCH_MAX_CONCURRENCY="${BASELINE_CONC:-${BENCH_MAX_CONCURRENCY_CAP}}"
-if [[ "${EXPERIMENT_KIND}" == "equal-batch" ]]; then
-  BENCH_MAX_CONCURRENCY="${BENCH_MAX_CONCURRENCY_CAP}"
-fi
-build_baseline_serve
-prepare_tic_bundle
+# Timed arms. Default: baseline then Isiro. ISIRO_FIRST=1: Isiro then cold baseline.
+# Capacity KV-scale still needs baseline_environment.json first (env scrape only).
+run_timed_baseline_arm() {
+  SERVE_MAX_NUM_SEQS="${BASELINE_CAPACITY_SEQS}"
+  BENCH_MAX_CONCURRENCY="${BASELINE_CONC:-${BENCH_MAX_CONCURRENCY_CAP}}"
+  if [[ "${EXPERIMENT_KIND}" == "equal-batch" ]]; then
+    BENCH_MAX_CONCURRENCY="${BENCH_MAX_CONCURRENCY_CAP}"
+  fi
+  build_baseline_serve
+  prepare_tic_bundle
 
-BASELINE_SKIPPED=0
-# Reuse when requested for equal-batch or capacity (explicit).
-if [[ "${REUSE_BASELINE}" -eq 1 ]] && try_reuse_baseline; then
-  BASELINE_SKIPPED=1
-  prune_unselected_baseline_profiles
-else
-  write_baseline_fingerprint >/dev/null
+  BASELINE_SKIPPED=0
+  if [[ "${REUSE_BASELINE}" -eq 1 ]] && try_reuse_baseline; then
+    BASELINE_SKIPPED=1
+    prune_unselected_baseline_profiles
+  else
+    write_baseline_fingerprint >/dev/null
+    require_quiet_gpu
+    ensure_api_port_free
+    "${BASELINE_SERVE[@]}" >"${LOG_DIR}/baseline-serve.log" 2>&1 &
+    BASELINE_PID=$!
+    wait_ready "${LOG_DIR}/baseline-serve.log" || {
+      echo "baseline serve failed; see ${LOG_DIR}/baseline-serve.log" >&2
+      tail -n 80 "${LOG_DIR}/baseline-serve.log" >&2 || true
+      kill "${BASELINE_PID}" 2>/dev/null || true
+      exit 2
+    }
+    write_effective_config baseline
+    equalize_warmup baseline
+    capture_serve_output_match baseline
+    capture_environment baseline docker
+    BENCH_MAX_CONCURRENCY="${BASELINE_CONC:-${BENCH_MAX_CONCURRENCY}}"
+    run_profiles baseline
+    stop_baseline_container
+    write_baseline_fingerprint >/dev/null
+  fi
+}
+
+scrape_baseline_environment_for_scale() {
+  # Boot baseline long enough to scrape KV env for TIC capacity scale, then stop.
+  # Used only when ISIRO_FIRST=1 so timed Isiro can still KV-scale.
+  SERVE_MAX_NUM_SEQS="${BASELINE_CAPACITY_SEQS}"
+  build_baseline_serve
   require_quiet_gpu
   ensure_api_port_free
-  "${BASELINE_SERVE[@]}" >"${LOG_DIR}/baseline-serve.log" 2>&1 &
+  echo "isiro-first: baseline env scrape for KV scale (no timed profiles)" >&2
+  "${BASELINE_SERVE[@]}" >"${LOG_DIR}/baseline-env-scrape.log" 2>&1 &
   BASELINE_PID=$!
-  wait_ready "${LOG_DIR}/baseline-serve.log" || {
-    echo "baseline serve failed; see ${LOG_DIR}/baseline-serve.log" >&2
-    tail -n 80 "${LOG_DIR}/baseline-serve.log" >&2 || true
+  wait_ready "${LOG_DIR}/baseline-env-scrape.log" || {
+    echo "baseline env scrape failed; see ${LOG_DIR}/baseline-env-scrape.log" >&2
+    tail -n 80 "${LOG_DIR}/baseline-env-scrape.log" >&2 || true
     kill "${BASELINE_PID}" 2>/dev/null || true
     exit 2
   }
-  write_effective_config baseline
-  equalize_warmup baseline
-  capture_serve_output_match baseline
   capture_environment baseline docker
-  BENCH_MAX_CONCURRENCY="${BASELINE_CONC:-${BENCH_MAX_CONCURRENCY}}"
-  run_profiles baseline
   stop_baseline_container
-  write_baseline_fingerprint >/dev/null
-fi
+  fuser -k "${API_PORT}/tcp" >/dev/null 2>&1 || true
+  sleep 2
+}
 
-if [[ "${EXPERIMENT_KIND}" == "capacity" && "${CAPACITY_KV_SCALE}" -eq 1 ]]; then
-  if [[ "${CAPACITY_KV_MEASURED}" -eq 1 ]]; then
-    scale_tic_seqs_from_measured_kv
+run_timed_isiro_arm() {
+  SERVE_MAX_NUM_SEQS="${TIC_CAPACITY_SEQS}"
+  if [[ "${EXPERIMENT_KIND}" == "capacity" ]]; then
+    BENCH_MAX_CONCURRENCY="${TIC_CONC}"
   else
-    scale_tic_seqs_from_baseline_kv
+    BENCH_MAX_CONCURRENCY="${BENCH_MAX_CONCURRENCY_CAP}"
   fi
-fi
+  prepare_tic_bundle
 
-write_commands_json
-
-# Timed TIC at its capacity max (or matched equal-batch seqs).
-SERVE_MAX_NUM_SEQS="${TIC_CAPACITY_SEQS}"
-if [[ "${EXPERIMENT_KIND}" == "capacity" ]]; then
-  BENCH_MAX_CONCURRENCY="${TIC_CONC}"
-else
-  BENCH_MAX_CONCURRENCY="${BENCH_MAX_CONCURRENCY_CAP}"
-fi
-prepare_tic_bundle
-
-# Select the TIC CUDA-graph mode to match the baseline A/B.
-# Product serve defaults to outer graphs ON; --enforce-eager sets ISIRO_SERVE_ENFORCE_EAGER=1.
-if [[ "${SERVE_ENFORCE_EAGER}" == "false" ]]; then
-  export ISIRO_SERVE_ENFORCE_EAGER=0
-else
-  export ISIRO_SERVE_ENFORCE_EAGER=1
-fi
-# Drop inherited fused-kernel override env from parent shells so serve A/B stays clean.
-while IFS= read -r _knob; do
-  unset "${_knob}" 2>/dev/null || true
-done < <(compgen -v | grep -E '^ISIRO_PF_' || true)
-# DEBUG: scrape vLLM non_kv_cache_memory into environment.json (§B).
-: "${VLLM_LOGGING_LEVEL:=DEBUG}"
-export VLLM_LOGGING_LEVEL
-# Eng HBM meters (account/probe/reclaim) are opt-in; needed for torch scrape.
-: "${ISIRO_HBM_TRACE:=1}"
-export ISIRO_HBM_TRACE
-# Docker-proxy / prior engine can linger after baseline; settle then start once.
-fuser -k "${API_PORT}/tcp" >/dev/null 2>&1 || true
-sleep 8
-ensure_api_port_free
-# Bind probe: ss can report free while docker-proxy still owns the port briefly.
-for _ in $(seq 1 40); do
-  if python3 - "${API_PORT}" <<'PY'
+  # Select the TIC CUDA-graph mode to match the baseline A/B.
+  # Product serve defaults to outer graphs ON; --enforce-eager sets ISIRO_SERVE_ENFORCE_EAGER=1.
+  if [[ "${SERVE_ENFORCE_EAGER}" == "false" ]]; then
+    export ISIRO_SERVE_ENFORCE_EAGER=0
+  else
+    export ISIRO_SERVE_ENFORCE_EAGER=1
+  fi
+  # Drop inherited fused-kernel override env from parent shells so serve A/B stays clean.
+  while IFS= read -r _knob; do
+    unset "${_knob}" 2>/dev/null || true
+  done < <(compgen -v | grep -E '^ISIRO_PF_' || true)
+  # DEBUG: scrape vLLM non_kv_cache_memory into environment.json (§B).
+  : "${VLLM_LOGGING_LEVEL:=DEBUG}"
+  export VLLM_LOGGING_LEVEL
+  # Eng HBM meters (account/probe/reclaim) are opt-in; needed for torch scrape.
+  : "${ISIRO_HBM_TRACE:=1}"
+  export ISIRO_HBM_TRACE
+  # Docker-proxy / prior engine can linger after baseline; settle then start once.
+  fuser -k "${API_PORT}/tcp" >/dev/null 2>&1 || true
+  sleep 8
+  ensure_api_port_free
+  # Bind probe: ss can report free while docker-proxy still owns the port briefly.
+  for _ in $(seq 1 40); do
+    if python3 - "${API_PORT}" <<'PY'
 import errno, socket, sys
 port = int(sys.argv[1])
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1764,58 +1796,92 @@ finally:
     s.close()
 sys.exit(0)
 PY
-  then
-    break
-  fi
-  fuser -k "${API_PORT}/tcp" >/dev/null 2>&1 || true
-  if command -v docker >/dev/null 2>&1; then
-    docker ps -aq --filter "name=isiro-bench-" | xargs -r docker rm -f >/dev/null 2>&1 || true
-    docker ps -aq --filter "publish=${API_PORT}" | xargs -r docker rm -f >/dev/null 2>&1 || true
-  fi
-  sleep 0.5
-done
-# Path for post-equalize HBM reclaim (touched after equalize).
-ISIRO_HBM_RECLAIM_FLAG="${LOG_DIR}/isiro-hbm-reclaim.flag"
-rm -f "${ISIRO_HBM_RECLAIM_FLAG}"
-export ISIRO_HBM_RECLAIM_FLAG
-: >"${LOG_DIR}/isiro-serve.log"
-start_tic_serve "${LOG_DIR}/isiro-serve.log"
-# SERV-0101 often means a still-dying prior holder; one delayed retry only.
-if ! wait_ready "${LOG_DIR}/isiro-serve.log" "${TIC_PID}"; then
-  echo "TIC serve not ready; delayed retry after port cleanup" >&2
-  kill "${TIC_PID}" 2>/dev/null || true
-  wait "${TIC_PID}" 2>/dev/null || true
-  fuser -k "${API_PORT}/tcp" >/dev/null 2>&1 || true
-  sleep 8
-  ensure_api_port_free
+    then
+      break
+    fi
+    fuser -k "${API_PORT}/tcp" >/dev/null 2>&1 || true
+    if command -v docker >/dev/null 2>&1; then
+      docker ps -aq --filter "name=isiro-bench-" | xargs -r docker rm -f >/dev/null 2>&1 || true
+      docker ps -aq --filter "publish=${API_PORT}" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    fi
+    sleep 0.5
+  done
+  # Path for post-equalize HBM reclaim (touched after equalize).
+  ISIRO_HBM_RECLAIM_FLAG="${LOG_DIR}/isiro-hbm-reclaim.flag"
+  rm -f "${ISIRO_HBM_RECLAIM_FLAG}"
+  export ISIRO_HBM_RECLAIM_FLAG
   : >"${LOG_DIR}/isiro-serve.log"
   start_tic_serve "${LOG_DIR}/isiro-serve.log"
-  wait_ready "${LOG_DIR}/isiro-serve.log" "${TIC_PID}" || {
-    echo "TIC serve failed; see ${LOG_DIR}/isiro-serve.log" >&2
-    if [[ "${CAPACITY_KV_SCALE}" -eq 1 ]]; then
-      echo "KV-scaled max_num_seqs=${TIC_CAPACITY_SEQS} did not fit. Lower SERVE_MAX_NUM_SEQS or CAPACITY_SCALE_HI (fail closed; no matched fallback)." >&2
+  # SERV-0101 often means a still-dying prior holder; one delayed retry only.
+  if ! wait_ready "${LOG_DIR}/isiro-serve.log" "${TIC_PID}"; then
+    echo "TIC serve not ready; delayed retry after port cleanup" >&2
+    kill "${TIC_PID}" 2>/dev/null || true
+    wait "${TIC_PID}" 2>/dev/null || true
+    fuser -k "${API_PORT}/tcp" >/dev/null 2>&1 || true
+    sleep 8
+    ensure_api_port_free
+    : >"${LOG_DIR}/isiro-serve.log"
+    start_tic_serve "${LOG_DIR}/isiro-serve.log"
+    wait_ready "${LOG_DIR}/isiro-serve.log" "${TIC_PID}" || {
+      echo "TIC serve failed; see ${LOG_DIR}/isiro-serve.log" >&2
+      if [[ "${CAPACITY_KV_SCALE}" -eq 1 ]]; then
+        echo "KV-scaled max_num_seqs=${TIC_CAPACITY_SEQS} did not fit. Lower SERVE_MAX_NUM_SEQS or CAPACITY_SCALE_HI (fail closed; no matched fallback)." >&2
+      fi
+      tail -n 80 "${LOG_DIR}/isiro-serve.log" >&2 || true
+      exit 2
+    }
+  fi
+  # Same-instant audit: process RSS at ready (before equalize growth).
+  # Serve now reclaims warm scratch before READY; this should track TIC load.
+  GPU_PROCESS_BYTES_AFTER_READY="$(gpu_process_bytes)"
+  export GPU_PROCESS_BYTES_AFTER_READY
+  write_effective_config isiro "${TIC_BENCH_BUNDLE}/serve.yaml"
+  equalize_warmup isiro
+  # Arm CUDA-thread post-equalize reclaim on the next TIC forward.
+  : >"${ISIRO_HBM_RECLAIM_FLAG}"
+  capture_serve_output_match isiro
+  # §B non-KV uses vLLM non_kv_cache_memory (scraped/derived in capture).
+  # process-at-ready stays as audit; post-traffic process is also audit-only.
+  capture_environment isiro host_isiro
+  BENCH_MAX_CONCURRENCY="${TIC_CONC:-${BENCH_MAX_CONCURRENCY}}"
+  run_profiles isiro
+  kill "${TIC_PID}" 2>/dev/null || true
+  wait "${TIC_PID}" 2>/dev/null || true
+  TIC_PID=""
+}
+
+apply_capacity_kv_scale() {
+  if [[ "${EXPERIMENT_KIND}" == "capacity" && "${CAPACITY_KV_SCALE}" -eq 1 ]]; then
+    if [[ "${CAPACITY_KV_MEASURED}" -eq 1 ]]; then
+      scale_tic_seqs_from_measured_kv
+    else
+      scale_tic_seqs_from_baseline_kv
     fi
-    tail -n 80 "${LOG_DIR}/isiro-serve.log" >&2 || true
-    exit 2
-  }
+  fi
+}
+
+build_baseline_serve
+prepare_tic_bundle
+BASELINE_SKIPPED=0
+
+if [[ "${ISIRO_FIRST}" -eq 1 ]]; then
+  echo "timed arm order: Isiro then cold baseline (ISIRO_FIRST=1)" >&2
+  if [[ "${EXPERIMENT_KIND}" == "capacity" && "${CAPACITY_KV_SCALE}" -eq 1 ]]; then
+    scrape_baseline_environment_for_scale
+    apply_capacity_kv_scale
+  fi
+  write_commands_json
+  run_timed_isiro_arm
+  # Cold baseline on the product stack (no reuse after Isiro).
+  REUSE_BASELINE=0
+  run_timed_baseline_arm
+else
+  echo "timed arm order: baseline then Isiro" >&2
+  run_timed_baseline_arm
+  apply_capacity_kv_scale
+  write_commands_json
+  run_timed_isiro_arm
 fi
-# Same-instant audit: process RSS at ready (before equalize growth).
-# Serve now reclaims warm scratch before READY; this should track TIC load.
-GPU_PROCESS_BYTES_AFTER_READY="$(gpu_process_bytes)"
-export GPU_PROCESS_BYTES_AFTER_READY
-write_effective_config isiro "${TIC_BENCH_BUNDLE}/serve.yaml"
-equalize_warmup isiro
-# Arm CUDA-thread post-equalize reclaim on the next TIC forward.
-: >"${ISIRO_HBM_RECLAIM_FLAG}"
-capture_serve_output_match isiro
-# §B non-KV uses vLLM non_kv_cache_memory (scraped/derived in capture).
-# process-at-ready stays as audit; post-traffic process is also audit-only.
-capture_environment isiro host_isiro
-BENCH_MAX_CONCURRENCY="${TIC_CONC:-${BENCH_MAX_CONCURRENCY}}"
-run_profiles isiro
-kill "${TIC_PID}" 2>/dev/null || true
-wait "${TIC_PID}" 2>/dev/null || true
-TIC_PID=""
 
 # Capacity publish: matched equal-batch decode (transparency; capacity benefit not active).
 # Same order for every graph mode. Reuse capacity timed profiles when seqs+concurrency

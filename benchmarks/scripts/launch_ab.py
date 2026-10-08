@@ -80,8 +80,25 @@ def peek_config_system_id(config: Path | None) -> str | None:
     for raw in config.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if line.startswith("SYSTEM_ID="):
-            return line.split("=", 1)[1].strip() or None
+            return line.split("=", 1)[1].strip().strip("\"'") or None
     return None
+
+
+def peek_config_truthy(config: Path | None, key: str) -> bool:
+    """True when KEY=1/true/yes/on appears in the env-style config file."""
+    if config is None or not config.is_file():
+        return False
+    prefix = f"{key}="
+    for raw in config.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line.startswith("#") or not line.startswith(prefix):
+            continue
+        value = line.split("=", 1)[1].strip().strip("\"'").lower()
+        # Expand trivial ${VAR:-default} forms used in local common.env copies.
+        if value.startswith("${") and ":-" in value and value.endswith("}"):
+            value = value[2:-1].split(":-", 1)[1].strip().lower()
+        return value in ("1", "true", "yes", "on")
+    return False
 
 
 def _build_command(
@@ -262,6 +279,13 @@ def main(argv: list[str] | None = None) -> int:
             f"missing {config}; copy benchmarks/common.env.example to "
             f"{model_dir / 'common.env'} and set model paths"
         )
+    skip_needle = bool(args.skip_needle)
+    if not skip_needle and not args.needle_only:
+        env_skip = os.environ.get("ISIRO_BENCH_SKIP_NEEDLE", "").strip().lower()
+        if env_skip in ("1", "true", "yes", "on") or peek_config_truthy(
+            config, "ISIRO_BENCH_SKIP_NEEDLE"
+        ):
+            skip_needle = True
     system_id = resolve_system_id(args.system_id, peek_config_system_id(config))
 
     child_env = os.environ.copy()
@@ -304,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
             f"ISIRO_VERIFY_REFERENCE={child_env.get('ISIRO_VERIFY_REFERENCE')} "
             f"ISIRO_BENCH_EQUAL_BATCH={child_env.get('ISIRO_BENCH_EQUAL_BATCH')}"
         )
-        if not args.skip_needle:
+        if not skip_needle:
             print(f"needle: {' '.join(needle_cmd)}")
         if not args.needle_only:
             for label, on, off in runs:
@@ -321,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{label}: {' '.join(cmd)}")
         return 0
 
-    if not args.skip_needle:
+    if not skip_needle:
         print(
             f"launch needle model={model} system_id={system_id} "
             f"command={' '.join(needle_cmd)}",

@@ -79,10 +79,15 @@ def pool_gib(
 
 
 def pct_of_baseline(ratio: Any) -> str:
-    """TIC / Baseline as a percent of Baseline (not an Nx multiplier)."""
+    """Isiro / Baseline as a percent of Baseline (not an Nx multiplier)."""
     if not isinstance(ratio, (int, float)):
         return ""
     return f"{round(float(ratio) * 100):.0f}% of Baseline"
+
+
+def _arm_col() -> str:
+    """Customer product arm column label (TIC weights + optional GDX)."""
+    return "Isiro"
 
 
 def tokens_with_pool(
@@ -260,13 +265,13 @@ def _section_intro(
             "`vllm/vllm-openai`)"
             + (f" with `--kv-cache-dtype {kv_dtype}`" if kv_dtype else "")
         ),
-        "- **TIC:** `isiro serve … --target vllm` (same vLLM version)",
+        "- **Isiro:** `isiro serve … --target vllm` (TIC weights; same vLLM version)",
     ]
     if gdx_kv:
         compared[-1] = (
-            f"- **TIC + KV compress:** `isiro serve … --target vllm` with "
-            f"`ISIRO_GDX_KV={gdx_kv}` (same vLLM version; cold order-1 "
-            "compress on vendor attention pages)"
+            f"- **Isiro:** `isiro serve … --target vllm` with TIC weights and "
+            f"`ISIRO_GDX={gdx_kv}` (same vLLM version; cold KV compress on "
+            "vendor attention pages)"
         )
     lines = [
         f"# ISIRO Benchmark Report: `{model}`",
@@ -297,30 +302,10 @@ def _section_intro(
     if gdx_kv:
         lines.extend(
             [
-                "## KV compress value (estimate vs this scrape)",
-                "",
-                "Estimates below are **coding-rate** / contract pins for cold "
-                "order-1 bytes. Section A GPU memory is the **reserved FA "
-                "lock** (vendor util / `--kv-cache-memory`), not coded cold "
-                "bytes. Live in-use pool savings apply only when this scrape "
-                "reports `n_live_persist` / `save_vs_all_fa` (live_hbm path).",
-                "",
-                "| Flag | Baseline | Compressed stack | Estimate |",
-                "|------|----------|------------------|----------|",
-                (
-                    f"| `ISIRO_GDX_KV={gdx_kv}` (this report) | "
-                    "Vendor FA page bytes at the matched KV dtype | "
-                    "Same pages + order-1 cold compress | "
-                    "bf16 coding-rate: ~29-31% vs naive 16 bpv; "
-                    "fp8 coding-rate: ~19-25% vs naive 8 bpv; "
-                    "reserved FA lock is not a coding KPI |"
-                ),
-                (
-                    "| `ISIRO_GDX_C=fp8` (Flash models only; not Qwen) | "
-                    "GLM ~8909 B/tok; DeepSeek CSA2 890 B/tok | "
-                    "unique-source C + order-1 | "
-                    "GLM ~1.83x; DeepSeek ~1.35x |"
-                ),
+                "GDX cold coding-rate vs naive vendor KV bits (estimate): "
+                "bf16 ~29-31% vs 16 bpv; fp8 ~19-25% vs 8 bpv. "
+                "Section A GPU memory is the reserved vendor KV pool, not "
+                "coded cold bytes.",
                 "",
             ]
         )
@@ -342,6 +327,19 @@ def _serve_output_match_row(correctness: dict[str, Any]) -> str:
             detail = f"{matched}/{total} prompts matched (temp=0 token IDs)"
         status_cell = f"{status_cell} ({detail})"
     return f"| Serve output match | - | {status_cell} |"
+
+
+def _kv_bit_exact_row(correctness: dict[str, Any]) -> str | None:
+    ok = correctness.get("kv_bit_exact_ok")
+    if ok is None:
+        return None
+    status = _bit_exact_cell(ok)
+    status_cell = bold_win(status, win=status == "PASS")
+    alphabet = correctness.get("kv_bit_exact_alphabet")
+    detail = "GDX cold roundtrip"
+    if alphabet:
+        detail = f"GDX `{alphabet}` cold roundtrip"
+    return f"| KV bit-exactness | vendor KV pages | {status_cell} ({detail}) |"
 
 
 def _section_a(
@@ -369,20 +367,24 @@ def _section_a(
             f"({bold_win(f'{number(savings)}% smaller', win=True)})"
         )
     status_cell = bold_win(verify_status, win=verify_status == "PASS")
-    return [
+    arm = _arm_col()
+    rows = [
         "## Correctness",
         "",
-        "| Metric | Baseline | TIC |",
-        "|--------|----------|-----|",
+        f"| Metric | Baseline | {arm} |",
+        "|--------|----------|-------|",
         (
             "| On-disk model size | "
             f"{bytes_gb(baseline_fp.get('on_disk_bytes_measured'))} | "
             f"{footprint_tic} |"
         ),
         f"| {verify_label} | baseline weights | {status_cell} ({verify_cmd}) |",
-        _serve_output_match_row(correctness),
-        "",
     ]
+    kv_row = _kv_bit_exact_row(correctness)
+    if kv_row is not None:
+        rows.append(kv_row)
+    rows.extend([_serve_output_match_row(correctness), ""])
+    return rows
 
 
 def _simple_savings_pct(baseline: Any, tic: Any) -> float | None:
@@ -405,13 +407,14 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
     )
     load_pct = _simple_savings_pct(b_load, t_load)
     load_cell = number(load_pct) + "%" if load_pct is not None else "null"
+    arm = _arm_col()
     return [
         "## A. GPU memory",
         "",
         "### Weights",
         "",
-        "| Metric | Baseline | TIC | Savings % |",
-        "|--------|----------|-----|-----------|",
+        f"| Metric | Baseline | {arm} | Savings % |",
+        "|--------|----------|-------|-----------|",
         (
             "| GPU memory for loaded weights | "
             f"{bytes_gib(b_load)} | "
@@ -423,7 +426,7 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
 
 
 def _section_kv_reservation(kv: dict[str, Any]) -> list[str]:
-    """Reserved GPU KV vs Baseline default fill. Savings is ``1 - TIC/Baseline``."""
+    """Reserved GPU KV vs Baseline default fill. Savings is ``1 - Isiro/Baseline``."""
     b_tokens = kv.get("baseline_tokens_measured")
     t_tokens = kv.get("tic_tokens_measured")
     b_bytes = kv.get("baseline_memory_bytes_measured")
@@ -440,11 +443,12 @@ def _section_kv_reservation(kv: dict[str, Any]) -> list[str]:
     tic_cell = f"{bold_win(f'{t_gib:.2f} GiB', win=win)} ({t_tok} tokens)†"
     from needle_haystack import kv_overflow_footnote_lines
 
+    arm = _arm_col()
     return [
         "### KV cache",
         "",
-        "| Metric | Baseline default fill | TIC reserved FA lock | Savings % |",
-        "|--------|-----------------------|----------------------|-----------|",
+        f"| Metric | Baseline default fill | {arm} reserved KV | Savings % |",
+        "|--------|-----------------------|-------------------|-----------|",
         (
             "| GPU memory reserved for KV | "
             f"{b_gib:.2f} GiB ({b_tok} tokens) | "
@@ -471,6 +475,7 @@ def _section_c(
         and isinstance(t_seqs, (int, float))
         and int(b_seqs) == int(t_seqs)
     )
+    arm = _arm_col()
     if seqs_matched:
         scale_blurb = (
             f"Batch is {number(b_seqs, 0)} on both sides. "
@@ -478,16 +483,16 @@ def _section_c(
         )
     elif scale_mode == "kv_measured":
         scale_blurb = (
-            "TIC batch = round(Baseline batch × TIC/Baseline KV token "
+            f"{arm} batch = round(Baseline batch × {arm}/Baseline KV token "
             "capacity) from a matched vLLM KV measurement."
         )
     elif scale_mode == "kv_estimate":
         scale_blurb = (
-            "TIC batch = round(Baseline batch × estimated KV ratio), "
+            f"{arm} batch = round(Baseline batch × estimated KV ratio), "
             "where estimated KV adds on-disk weight savings to Baseline KV."
         )
     else:
-        scale_blurb = "TIC batch matches the configured Baseline batch."
+        scale_blurb = f"{arm} batch matches the configured Baseline batch."
     batch_ratio = f"{number(capacity.get('batch_ratio_derived'))}x"
     kv_token_ratio_val = capacity.get("kv_token_capacity_ratio_measured")
     kv_token_win = (
@@ -523,11 +528,11 @@ def _section_c(
         "",
         scale_blurb,
         "",
-        "KV token capacity is dest lock slots when TIC printed KV pool, "
+        "KV token capacity is reserved pool slots when Isiro printed KV pool, "
         "else vLLM GPU tokens in this serve's reserved GPU pool.",
         "",
-        "| Metric | Baseline | TIC |",
-        "|--------|----------|-----|",
+        f"| Metric | Baseline | {arm} |",
+        "|--------|----------|-------|",
         f"| Batch | {number(b_seqs, 0)} | {seqs_tic} |",
         f"| KV token capacity | {tokens_base} | {tokens_tic} |",
         "",
@@ -556,15 +561,23 @@ def _compact_latency_rows(
 def _section_d(
     capacity: dict[str, Any] | None,
     decode_rows: list[dict[str, Any]],
+    *,
+    mention_equal_batch: bool = True,
 ) -> list[str]:
+    arm = _arm_col()
+    equal_note = (
+        " Not equal batch (E)."
+        if mention_equal_batch
+        else ""
+    )
     lines = [
         "## D. Generation (recall-matched KV, input 32 / output 256)",
         "",
-        "Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. "
-        "Not equal batch (E). TTFT is in this table because it moves with concurrency.",
+        "Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity."
+        f"{equal_note} TTFT is in this table because it moves with concurrency.",
         "",
-        "| Metric | Baseline | TIC |",
-        "|--------|----------|-----|",
+        f"| Metric | Baseline | {arm} |",
+        "|--------|----------|-------|",
     ]
     tps = (capacity or {}).get("decode_output_tokens_per_sec") or {}
     if capacity is not None and tps:
@@ -599,6 +612,7 @@ def _section_d(
 
 
 def _section_f(equal_batch: dict[str, Any]) -> list[str]:
+    arm = _arm_col()
     tps = equal_batch.get("decode_output_tokens_per_sec") or {}
     latency = equal_batch.get("latency_ms") or {}
     b_lat = latency.get("baseline") or {}
@@ -608,8 +622,8 @@ def _section_f(equal_batch: dict[str, Any]) -> list[str]:
         "",
         "Same batch as Capacity.",
         "",
-        "| Metric | Baseline | TIC |",
-        "|--------|----------|-----|",
+        f"| Metric | Baseline | {arm} |",
+        "|--------|----------|-------|",
         (
             "| Output tok/s | "
             f"{number(tps.get('baseline'))} | "
@@ -620,6 +634,38 @@ def _section_f(equal_batch: dict[str, Any]) -> list[str]:
         lines.extend(_compact_latency_rows(b_lat, t_lat))
     lines.append("")
     return lines
+
+
+def _equal_batch_redundant(
+    capacity: dict[str, Any] | None,
+    equal_batch: dict[str, Any],
+    decode_rows: list[dict[str, Any]],
+) -> bool:
+    """True when Equal batch repeats Generation numbers (matched batch)."""
+    eq_tps = equal_batch.get("decode_output_tokens_per_sec") or {}
+    cap_tps = (capacity or {}).get("decode_output_tokens_per_sec") or {}
+    if not eq_tps:
+        return False
+    if cap_tps:
+        for side in ("baseline", "tic"):
+            a = cap_tps.get(side)
+            b = eq_tps.get(side)
+            if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+                return False
+            if abs(float(a) - float(b)) > 1e-6:
+                return False
+        return True
+    if not decode_rows:
+        return False
+    row = decode_rows[0]
+    for side in ("baseline", "tic"):
+        a = row[side]["throughput"]["output_tokens_per_sec"]
+        b = eq_tps.get(side)
+        if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+            return False
+        if abs(float(a) - float(b)) > 1e-6:
+            return False
+    return True
 
 
 def _mode_sections(summary: dict[str, Any]) -> list[str]:
@@ -669,6 +715,9 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
         from needle_haystack import vram_report_lines
 
         lines.extend(vram_report_lines(str(haystack["vram_image"])))
+    skip_equal = equal_batch is not None and _equal_batch_redundant(
+        capacity, equal_batch, decode_rows
+    )
     if capacity is not None and experiment_kind == "capacity":
         lines.extend(
             _section_c(
@@ -678,10 +727,22 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
                 overflow_note=False,
             )
         )
-        lines.extend(_section_d(capacity, decode_rows))
+        lines.extend(
+            _section_d(
+                capacity,
+                decode_rows,
+                mention_equal_batch=not skip_equal and equal_batch is not None,
+            )
+        )
     else:
-        lines.extend(_section_d(None, decode_rows))
-    if equal_batch is not None:
+        lines.extend(
+            _section_d(
+                None,
+                decode_rows,
+                mention_equal_batch=not skip_equal and equal_batch is not None,
+            )
+        )
+    if equal_batch is not None and not skip_equal:
         lines.extend(_section_f(equal_batch))
     return lines
 
@@ -707,7 +768,7 @@ def _section_g(
         if kv_dtype:
             parts.append(f"dtype `{kv_dtype}`")
         if gdx_kv:
-            parts.append(f"`ISIRO_GDX_KV={gdx_kv}` on TIC")
+            parts.append(f"`ISIRO_GDX={gdx_kv}` on Isiro")
         kv_cell = "; ".join(parts)
     lines = [
         "## Config",
@@ -732,7 +793,7 @@ def _section_g(
     if reused:
         lines.append(f"| Baseline reused from | `{reused}` |")
     if gdx_kv:
-        lines.append(f"| ISIRO_GDX_KV | `{gdx_kv}` |")
+        lines.append(f"| ISIRO_GDX | `{gdx_kv}` |")
     attn = (
         summary.get("attention")
         if isinstance(summary.get("attention"), dict)
@@ -744,7 +805,7 @@ def _section_g(
     )
     if tic_attn.get("attention_backend") or tic_attn.get("isiro_attn"):
         lines.append(
-            "| TIC attention | `"
+            "| Isiro attention | `"
             f"{tic_attn.get('attention_backend')}` "
             f"(`ISIRO_ATTN` {tic_attn.get('isiro_attn')}) |"
         )

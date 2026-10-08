@@ -59,6 +59,31 @@ def fold_serve_output_match(
         _apply_serve_output_match(correctness, load_json(legacy))
 
 
+def fold_gdx_kv_bitexact(
+    run_dir: Path,
+    correctness: dict[str, Any],
+    *,
+    required: bool = False,
+) -> list[str]:
+    """Fold GDX KV cold roundtrip meter into correctness. Fail-closed when required."""
+    errors: list[str] = []
+    path = run_dir / "gdx_kv_bitexact.json"
+    if not path.is_file():
+        if required:
+            errors.append("gdx_kv_bitexact.json missing while ISIRO_GDX is set")
+        return errors
+    doc = load_json(path)
+    ok = bool(doc.get("kv_bit_exact_ok"))
+    correctness["kv_bit_exact_ok"] = ok
+    alphabet = doc.get("alphabet")
+    if alphabet:
+        correctness["kv_bit_exact_alphabet"] = str(alphabet)
+    if required and not ok:
+        detail = doc.get("error") or "roundtrip mismatch"
+        errors.append(f"kv_bit_exact_ok must be true ({detail})")
+    return errors
+
+
 def artifact_digest(path: Path) -> str:
     if path.is_file():
         digest = hashlib.sha256()
@@ -547,6 +572,21 @@ def main() -> int:
 
     # Optional greedy serve output match (token IDs), captured while servers are up.
     fold_serve_output_match(args.run_dir, summary["correctness"])
+
+    commands_doc: dict[str, Any] = {}
+    commands_path = args.run_dir / "commands.json"
+    if commands_path.is_file():
+        loaded_cmds = load_json(commands_path)
+        if isinstance(loaded_cmds, dict):
+            commands_doc = loaded_cmds
+    gdx_required = bool(commands_doc.get("isiro_gdx_kv"))
+    errors.extend(
+        fold_gdx_kv_bitexact(
+            args.run_dir,
+            summary["correctness"],
+            required=gdx_required,
+        )
+    )
 
     attention: dict[str, Any] = {}
     for label, mapping in (("baseline", baseline_profiles), ("tic", tic_profiles)):
