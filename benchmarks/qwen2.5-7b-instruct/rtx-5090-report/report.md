@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen2.5-7b-instruct`
 
-`bf16` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-09 03:39 UTC
+`bf16` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-09 05:03 UTC
 
 Tooling:
 
@@ -18,9 +18,9 @@ GDX cold coding-rate vs naive vendor KV bits (estimate): bf16 ~29-31% vs 16 bpv;
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
 | On-disk model size | 15.23 GB | **10.78 GB** (**29.22% smaller**) |
-| Weight bit-exactness | baseline weights | **PASS** (`isiro verify -r`) |
+| Integrity | baseline weights | **PASS** (`isiro verify`) |
 | KV bit-exactness | vendor KV pages | **PASS** (GDX `bf16` cold roundtrip) |
-| Serve output match | - | **PASS** (4/4 prompts, temp=0, token IDs equal) |
+| Serve output match | - | not run |
 
 ## A. GPU memory
 
@@ -36,7 +36,7 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights. For KV it uses `Isiro/Ba
 
 | Metric | Baseline default fill | Isiro reserved KV | Savings % |
 |--------|-----------------------|-------------------|-----------|
-| GPU memory reserved for KV | 12.56 GiB (235120 tokens) | **15.25 GiB** (285488 tokens)† | **21.42% (1.21x)** |
+| GPU memory reserved for KV | 12.56 GiB (235120 tokens) | **15.19 GiB** (284464 tokens)† | **20.94% (1.21x)** |
 
 † Reserved pool on the GPU at vendor KV bytes/token. Token counts are pool admission slots (same bpv as the vendor dtype), not GDX-coded cold capacity. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
 
@@ -50,14 +50,14 @@ Figure. Weights and KV vs 1-user context.
 
 ## C. Generation (equal batch, input 32 / output 256)
 
-Tok/s and latency at matched batch (`max_concurrency=32` / `max_num_seqs=32`). TTFT is in this table because it moves with concurrency. Baseline reused from the prior conc=32 arm; Isiro remetered after path_a seq fail-closed (packed key T is not seq_tok).
+Tok/s and latency at matched batch (`max_concurrency=32` / `max_num_seqs=32`). TTFT is in this table because it moves with concurrency. Baseline reused from the prior conc=32 arm; Isiro remetered after hybrid hot/cold policy (tall cold densify, mid-M empty-slot seed only).
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 1871.72 | 1794.42 |
-| ITL (ms) p50 / p95 / p99 | 10.55 / 11.72 / 11.94 | 10.55 / 12.85 / 22.91 |
-| TPOT (ms) p50 / p95 / p99 | 10.76 / 11.06 / 11.06 | 10.89 / 11.13 / 11.74 |
-| TTFT (ms) p50 / p95 / p99 | 159.40 / 160.27 / 160.49 | 351.95 / 420.10 / 420.24 |
+| Output tok/s | 1871.72 | 1791.62 |
+| ITL (ms) p50 / p95 / p99 | 10.55 / 11.72 / 11.94 | 10.40 / 13.23 / 22.77 |
+| TPOT (ms) p50 / p95 / p99 | 10.76 / 11.06 / 11.06 | 10.89 / 11.07 / 11.44 |
+| TTFT (ms) p50 / p95 / p99 | 159.40 / 160.27 / 160.49 | 347.94 / 410.46 / 410.55 |
 
 ## Config
 
