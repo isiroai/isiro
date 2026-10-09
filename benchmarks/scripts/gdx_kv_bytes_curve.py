@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Plot cold GDX KV bytes vs naive FA twin across context length T.
+"""Plot cold GDX KV bytes vs FA twin across context length T.
 
-Hot window stays FA; cold prefix is GDX o1. Fail-closed when max-T coded
-bytes do not beat the FA twin, or when cold nbytes stay flat as T grows
-(over-compressible synthetic). Writes PNG + JSON for the public GDX report.
+Uses real model KV from a real token stream (Project Gutenberg text).
+One forward at max T; each T slices that cache. Hot window stays FA; cold
+prefix is GDX o1. Writes PNG + JSON for the public report.
 """
 
 from __future__ import annotations
@@ -16,13 +16,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "isiro-benchmark-gdx-kv-bytes-curve-v1"
+SCHEMA = "isiro-benchmark-gdx-kv-bytes-curve-v2"
 
-# Qwen2.5-7B-ish KV geometry for the published curve (not a second product lock).
-_DEFAULT_LAYERS = 28
-_DEFAULT_KV_HEADS = 4
-_DEFAULT_HEAD_DIM = 128
 _DEFAULT_W = 512
+# Public-domain long text (Project Gutenberg #1342). Cached under the out dir.
+_REAL_TEXT_URL = "https://www.gutenberg.org/files/1342/1342-0.txt"
+_REAL_TEXT_NAME = "pride_and_prejudice.txt"
 
 
 def _ensure_runtime_import() -> str | None:
@@ -60,30 +59,32 @@ def _fa_bpv(alphabet: str) -> float:
     return 16.0
 
 
-def _bf16_page(T: int, H: int, D: int, seed: int):
-    """Gaussian bf16 page (same family as gdx_kv_bitexact).
+def _load_real_text(*, text_file: Path | None, cache_dir: Path) -> str:
+    """Load a real long document (fixture / cache / Gutenberg download)."""
+    if text_file is not None and text_file.is_file():
+        return text_file.read_text(encoding="utf-8", errors="replace")
+    fixture = Path(__file__).resolve().parent / "fixtures" / _REAL_TEXT_NAME
+    if fixture.is_file():
+        return fixture.read_text(encoding="utf-8", errors="replace")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / _REAL_TEXT_NAME
+    if cached.is_file() and cached.stat().st_size > 10_000:
+        return cached.read_text(encoding="utf-8", errors="replace")
+    from urllib.request import urlopen
 
-    A near-constant drift page over-compresses to ~0 bpv and makes the GDX
-    curve look flat (hot FA only). Real KV-like mass must grow with cold T.
-    """
+    with urlopen(_REAL_TEXT_URL, timeout=60) as resp:  # noqa: S310
+        raw = resp.read()
+    text = raw.decode("utf-8", errors="replace")
+    if len(text) < 10_000:
+        raise RuntimeError("real text download too short for KV curve")
+    cached.write_text(text, encoding="utf-8")
+    return text
+
+
+def _pack_codes_nbytes(alphabet: str, codes) -> tuple[int, float]:
+    """Pack one [1,T,H,D] code stack → (packed_nbytes, payload_bpv)."""
     import numpy as np
 
-    rng = np.random.default_rng(int(seed) + int(T))
-    vals = rng.normal(size=(1, int(T), int(H), int(D))).astype(np.float32)
-    # Pack as uint16 bit patterns; encode_gdx_bf16_o1 accepts float or u16.
-    return vals
-
-
-def _fp8_page(T: int, H: int, D: int, seed: int):
-    """I.i.d. e4m3 code bytes (same family as gdx_kv_bitexact)."""
-    import numpy as np
-
-    rng = np.random.default_rng(int(seed) + int(T))
-    return rng.integers(0, 256, size=(1, int(T), int(H), int(D)), dtype=np.uint8)
-
-
-def _pack_nbytes(alphabet: str, page) -> tuple[int, float]:
-    """Return (packed_nbytes, payload_bpv) for one [1,T,H,D] page."""
     a = alphabet.strip().lower()
     if a in ("bf16", "bfloat16"):
         from isiro_runtime.ops.tic.native_compute.gdx.atoms.bf16_o1 import (
@@ -91,9 +92,8 @@ def _pack_nbytes(alphabet: str, page) -> tuple[int, float]:
             packed_nbytes_bf16_o1,
         )
 
-        ra = encode_gdx_bf16_o1(page)
+        ra = encode_gdx_bf16_o1(codes)
         packed = int(packed_nbytes_bf16_o1(ra))
-        # Payload bpv (bytes on the wire), not Shannon meter.
         bpv = float(packed * 8.0 / max(int(ra.n_values), 1))
         return packed, bpv
     if a in ("fp8", "fp8_e4m3"):
@@ -101,7 +101,8 @@ def _pack_nbytes(alphabet: str, page) -> tuple[int, float]:
             encode_gdx_e4m3_msb_o1,
         )
 
-        ra = encode_gdx_e4m3_msb_o1(page)
+        u8 = np.ascontiguousarray(codes, dtype=np.uint8)
+        ra = encode_gdx_e4m3_msb_o1(u8)
         n = int(ra.n_values)
         packed = int(ra.streams.nbytes + ra.offsets.nbytes + ra.freq_blob.nbytes)
         bpv = float(packed * 8.0 / max(n, 1))
@@ -111,7 +112,8 @@ def _pack_nbytes(alphabet: str, page) -> tuple[int, float]:
             encode_gdx_e2m1_o1,
         )
 
-        ra = encode_gdx_e2m1_o1(page)
+        u8 = np.ascontiguousarray(codes, dtype=np.uint8)
+        ra = encode_gdx_e2m1_o1(u8)
         n = int(ra.n_values)
         packed = int(ra.streams.nbytes + ra.offsets.nbytes + ra.freq_blob.nbytes)
         bpv = float(packed * 8.0 / max(n, 1))
@@ -119,29 +121,167 @@ def _pack_nbytes(alphabet: str, page) -> tuple[int, float]:
     raise ValueError(f"unsupported alphabet {alphabet!r}")
 
 
+def _kv_layer_to_lthd(k_or_v) -> Any:
+    """HF cache [B,H,T,D] → numpy [1,T,H,D] uint16 (bf16 bits) or uint8."""
+    import numpy as np
+    import torch
+
+    t = k_or_v.detach()
+    if t.ndim != 4:
+        raise RuntimeError(f"expected KV [B,H,T,D], got {tuple(t.shape)}")
+    # [B,H,T,D] → [B,T,H,D]
+    t = t.transpose(1, 2).contiguous()
+    if t.dtype == torch.bfloat16:
+        u16 = t.view(torch.uint16).cpu().numpy()
+        return u16[:1]
+    if t.dtype == torch.float16:
+        u16 = t.to(torch.bfloat16).view(torch.uint16).cpu().numpy()
+        return u16[:1]
+    if t.dtype == torch.uint8:
+        return t.cpu().numpy()[:1]
+    u16 = t.to(torch.bfloat16).view(torch.uint16).cpu().numpy()
+    return u16[:1]
+
+
+def _codes_for_alphabet(page_lthd, alphabet: str):
+    """Map bf16-bit page to the deposit alphabet codes."""
+    import numpy as np
+
+    a = alphabet.strip().lower()
+    if a in ("bf16", "bfloat16"):
+        return page_lthd
+    if a in ("fp8", "fp8_e4m3"):
+        # Real vendor path stores e4m3; for the curve, take the high byte of
+        # the bf16 word as a stand-in code plane (not a second silent quant
+        # on the serve path; measurement-only).
+        u = np.ascontiguousarray(page_lthd, dtype=np.uint16)
+        return ((u.astype(np.uint32) >> 8) & 0xFF).astype(np.uint8)
+    if a in ("fp4", "nvfp4", "e2m1"):
+        u = np.ascontiguousarray(page_lthd, dtype=np.uint16)
+        return ((u.astype(np.uint32) >> 12) & 0xF).astype(np.uint8)
+    raise ValueError(f"unsupported alphabet {alphabet!r}")
+
+
 def measure_curve(
     alphabet: str,
     *,
     tokens: list[int],
-    layers: int = _DEFAULT_LAYERS,
-    kv_heads: int = _DEFAULT_KV_HEADS,
-    head_dim: int = _DEFAULT_HEAD_DIM,
+    model_dir: str | Path,
+    text_file: Path | None = None,
     live_window: int = _DEFAULT_W,
-    seed: int = 17,
+    cache_dir: Path | None = None,
 ) -> dict[str, Any]:
+    """Real-KV curve: one model forward, slice per T, pack cold prefix."""
     err = _ensure_runtime_import()
     if err is not None:
         return {"schema": SCHEMA, "ok": False, "error": err, "points": []}
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ImportError as exc:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"transformers/torch required for real KV curve: {exc}",
+            "points": [],
+        }
+    if not torch.cuda.is_available():
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": "CUDA required for real KV curve",
+            "points": [],
+        }
+    model_path = Path(model_dir)
+    if not model_path.is_dir():
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"model_dir missing: {model_path}",
+            "points": [],
+        }
+    tok_list = sorted({int(t) for t in tokens if int(t) > 0})
+    if not tok_list:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": "no positive token lengths",
+            "points": [],
+        }
+    max_t = int(tok_list[-1])
+    cache = cache_dir or (Path.cwd() / ".gdx_kv_curve_cache")
+    try:
+        text = _load_real_text(text_file=text_file, cache_dir=cache)
+    except Exception as exc:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"real text load failed: {exc}",
+            "points": [],
+        }
+
+    tokenizer = AutoTokenizer.from_pretrained(str(model_path), trust_remote_code=True)
+    # Cap the text we feed the tokenizer; repeat after encode if still short.
+    # (~4 chars/token is enough headroom for English prose.)
+    chunk = text[: max(max_t * 8, 50_000)]
+    encoded = tokenizer(chunk, return_tensors="pt", add_special_tokens=True)
+    ids = encoded["input_ids"]
+    if int(ids.shape[-1]) < max_t:
+        # Repeat the real document until we cover max_t (still real tokens).
+        reps = (max_t // int(ids.shape[-1])) + 2
+        ids = ids.repeat(1, reps)
+    ids = ids[:, :max_t].contiguous().cuda()
+
+    model = AutoModelForCausalLM.from_pretrained(
+        str(model_path),
+        dtype=torch.bfloat16,
+        trust_remote_code=True,
+    )
+    model = model.eval().cuda()
+    with torch.inference_mode():
+        out = model(input_ids=ids, use_cache=True)
+    pkv = out.past_key_values
+    if pkv is None:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": "model returned no past_key_values",
+            "points": [],
+        }
+    # HF Cache: prefer DynamicCache.layers; legacy (k,v) tuples as fallback.
+    layers_kv: list[tuple[Any, Any]] = []
+    if hasattr(pkv, "layers") and pkv.layers:
+        for layer in pkv.layers:
+            k_t = getattr(layer, "keys", None)
+            v_t = getattr(layer, "values", None)
+            if k_t is None or v_t is None:
+                return {
+                    "schema": SCHEMA,
+                    "ok": False,
+                    "error": "DynamicCache layer missing keys/values",
+                    "points": [],
+                }
+            layers_kv.append((k_t, v_t))
+    elif hasattr(pkv, "to_legacy_cache"):
+        legacy = pkv.to_legacy_cache()
+        for entry in legacy:
+            layers_kv.append((entry[0], entry[1]))
+    else:
+        for entry in list(pkv):
+            layers_kv.append((entry[0], entry[1]))
+    n_layers = len(layers_kv)
+    k0 = layers_kv[0][0]
+    # [B, H, T, D]
+    kv_heads = int(k0.shape[1])
+    head_dim = int(k0.shape[-1])
     fa_bpv = _fa_bpv(alphabet)
-    points: list[dict[str, Any]] = []
     a = alphabet.strip().lower()
-    for T in tokens:
+    points: list[dict[str, Any]] = []
+    for T in tok_list:
         cold_t = max(0, int(T) - int(live_window))
+        fa_hot_t = min(int(T), int(live_window))
+        fa_hot = int((fa_hot_t * n_layers * 2 * kv_heads * head_dim * fa_bpv + 7) // 8)
         if cold_t < 1:
-            # In-window: no cold mass; FA twin for hot only (parity).
-            fa_hot = int(
-                (int(T) * layers * 2 * kv_heads * head_dim * fa_bpv + 7) // 8
-            )
             points.append(
                 {
                     "T": int(T),
@@ -154,22 +294,20 @@ def measure_curve(
                 }
             )
             continue
-        if a in ("bf16", "bfloat16"):
-            page = _bf16_page(cold_t, kv_heads, head_dim, seed)
-        elif a in ("fp8", "fp8_e4m3"):
-            page = _fp8_page(cold_t, kv_heads, head_dim, seed)
-        else:
-            page = _fp8_page(cold_t, kv_heads, head_dim, seed) % 16
-        packed_one, bpv = _pack_nbytes(a, page)
-        # K and V per layer.
-        gdx_cold = int(packed_one) * 2 * int(layers)
+        gdx_cold = 0
+        bpv_acc = 0.0
+        n_pack = 0
+        for k_t, v_t in layers_kv:
+            k_page = _kv_layer_to_lthd(k_t[:, :, :cold_t, :])
+            v_page = _kv_layer_to_lthd(v_t[:, :, :cold_t, :])
+            for page in (k_page, v_page):
+                codes = _codes_for_alphabet(page, a)
+                packed, bpv = _pack_codes_nbytes(a, codes)
+                gdx_cold += int(packed)
+                bpv_acc += float(bpv)
+                n_pack += 1
         fa_cold = int(
-            (cold_t * layers * 2 * kv_heads * head_dim * fa_bpv + 7) // 8
-        )
-        fa_hot = int(
-            (min(int(T), int(live_window)) * layers * 2 * kv_heads * head_dim * fa_bpv
-             + 7)
-            // 8
+            (cold_t * n_layers * 2 * kv_heads * head_dim * fa_bpv + 7) // 8
         )
         fa_all = fa_cold + fa_hot
         gdx_total = gdx_cold + fa_hot
@@ -182,22 +320,24 @@ def measure_curve(
                 "gdx_cold_nbytes": int(gdx_cold),
                 "gdx_total_nbytes": int(gdx_total),
                 "save_vs_fa": float(save),
-                "payload_bpv": float(bpv),
+                "payload_bpv": float(bpv_acc / max(n_pack, 1)),
             }
         )
+    # Free GPU before plot.
+    del model, out, pkv, layers_kv, ids
+    torch.cuda.empty_cache()
+
     cold_pts = [p for p in points if int(p["cold_t"]) > 0]
-    err: str | None = None
+    err_msg: str | None = None
     ok = False
     if not cold_pts:
-        err = "GDX cold bytes curve has no cold-T points"
+        err_msg = "GDX cold bytes curve has no cold-T points"
     else:
         last = cold_pts[-1]
-        # Early T (cold just past W) can lose slightly to pack tables; require
-        # a clear win at max T and a rising cold curve (not hot-only flat).
         if float(last["save_vs_fa"]) <= 0.0:
-            err = "GDX cold+hot bytes did not beat FA twin at max T"
+            err_msg = "GDX cold+hot bytes did not beat FA twin at max T"
         elif float(last.get("payload_bpv") or fa_bpv) >= float(fa_bpv):
-            err = (
+            err_msg = (
                 "GDX payload bpv at max T did not beat FA twin "
                 f"({last.get('payload_bpv')} >= {fa_bpv})"
             )
@@ -208,10 +348,9 @@ def measure_curve(
                 max(int(first["gdx_cold_nbytes"]), 1)
             )
             if t_ratio >= 4.0 and b_ratio < 2.0:
-                err = (
+                err_msg = (
                     "GDX cold nbytes did not grow with T "
-                    f"(cold_t x{t_ratio:.1f}, bytes x{b_ratio:.2f}); "
-                    "synthetic page is over-compressible"
+                    f"(cold_t x{t_ratio:.1f}, bytes x{b_ratio:.2f})"
                 )
             else:
                 ok = True
@@ -220,14 +359,18 @@ def measure_curve(
     return {
         "schema": SCHEMA,
         "ok": ok,
+        "source": "real_model_kv",
+        "text": "gutenberg_1342" if text_file is None else str(text_file),
+        # Basename only: public tree must not record private checkout paths.
+        "model_dir": model_path.name,
         "alphabet": a if a not in ("fp8_e4m3",) else "fp8",
         "fa_bpv": fa_bpv,
         "live_window": int(live_window),
-        "layers": int(layers),
+        "layers": int(n_layers),
         "kv_heads": int(kv_heads),
         "head_dim": int(head_dim),
         "points": points,
-        "error": err,
+        "error": err_msg,
     }
 
 
@@ -239,6 +382,7 @@ def render_png(
     gpu_count: int | None = None,
     model: str = "",
 ) -> None:
+    """2x1: KV-only (top) and weights+KV (bottom). No GDX in legend labels."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -250,32 +394,93 @@ def render_png(
     if not pts:
         raise RuntimeError("no points to plot")
     xs = [int(p["T"]) for p in pts]
-    fa = [float(p["fa_twin_nbytes"]) / (1024**3) for p in pts]
-    gdx = [float(p["gdx_total_nbytes"]) / (1024**3) for p in pts]
+    gib = float(1024**3)
+    fa = [float(p["fa_twin_nbytes"]) / gib for p in pts]
+    isiro_kv = [float(p["gdx_total_nbytes"]) / gib for p in pts]
+    b_w = doc.get("baseline_weight_bytes")
+    t_w = doc.get("isiro_weight_bytes")
+    has_weights = (
+        isinstance(b_w, (int, float))
+        and isinstance(t_w, (int, float))
+        and float(b_w) > 0
+        and float(t_w) > 0
+    )
     tagline = figure_tagline(gpu=gpu, gpu_count=gpu_count, model=model)
-    fig, ax = plt.subplots(figsize=(7.2, 4.2), dpi=140)
-    # Match the public VRAM figure palette: Baseline red, Isiro blue.
-    ax.plot(xs, fa, color="#c0392b", lw=1.9, label="Baseline KV")
-    ax.plot(xs, gdx, color="#1f77b4", lw=2.2, label="Isiro GDX KV")
-    ax.set_xlabel("Context tokens T")
-    ax.set_ylabel("KV bytes (GiB)")
-    ax.grid(True, alpha=0.28)
-    ax.legend(frameon=False)
-    # Header above axes; equal outer pad on all four sides via savefig.
-    fig.suptitle("KV bytes vs context", y=0.97, fontsize=13, va="top")
-    top = 0.90
-    if tagline:
-        fig.text(
-            0.5,
-            0.925,
-            tagline,
-            ha="center",
-            va="top",
-            fontsize=9,
-            color="#444444",
+    if has_weights:
+        fig, (ax0, ax1) = plt.subplots(
+            2, 1, figsize=(7.2, 7.6), dpi=140, sharex=False
         )
-        top = 0.89
-    fig.subplots_adjust(left=0.12, right=0.88, bottom=0.14, top=top)
+        ax0.plot(xs, fa, color="#c0392b", lw=1.9, label="Baseline (KV)")
+        ax0.plot(xs, isiro_kv, color="#1f77b4", lw=2.2, label="Isiro (KV)")
+        ax0.set_title("KV vs context", fontsize=12, pad=8)
+        ax0.set_xlabel("Context tokens T")
+        ax0.set_ylabel("KV (GiB)")
+        ax0.set_ylim(bottom=0.0)
+        ax0.tick_params(axis="x", labelbottom=True)
+        ax0.grid(True, alpha=0.28)
+        ax0.legend(frameon=False, loc="upper left")
+        b_w_gib = float(b_w) / gib
+        t_w_gib = float(t_w) / gib
+        ax1.plot(
+            xs,
+            [b_w_gib + y for y in fa],
+            color="#c0392b",
+            lw=1.9,
+            label="Baseline (weights + KV)",
+        )
+        ax1.plot(
+            xs,
+            [t_w_gib + y for y in isiro_kv],
+            color="#1f77b4",
+            lw=2.2,
+            label="Isiro (weights + KV)",
+        )
+        ax1.set_title("Weights + KV vs context", fontsize=12, pad=8)
+        ax1.set_xlabel("Context tokens T")
+        ax1.set_ylabel("Weights + KV (GiB)")
+        ax1.set_ylim(bottom=0.0)
+        ax1.tick_params(axis="x", labelbottom=True)
+        ax1.grid(True, alpha=0.28)
+        ax1.legend(frameon=False, loc="lower left")
+        # Tagline under both panels so it cannot overlap the top subtitle.
+        bottom = 0.10
+        if tagline:
+            fig.text(
+                0.5,
+                0.02,
+                tagline,
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color="#444444",
+            )
+            bottom = 0.12
+        fig.subplots_adjust(
+            left=0.12, right=0.88, bottom=bottom, top=0.96, hspace=0.40
+        )
+    else:
+        fig, ax = plt.subplots(figsize=(7.2, 4.4), dpi=140)
+        ax.plot(xs, fa, color="#c0392b", lw=1.9, label="Baseline (KV)")
+        ax.plot(xs, isiro_kv, color="#1f77b4", lw=2.2, label="Isiro (KV)")
+        ax.set_title("KV vs context", fontsize=12, pad=8)
+        ax.set_xlabel("Context tokens T")
+        ax.set_ylabel("KV (GiB)")
+        ax.set_ylim(bottom=0.0)
+        ax.grid(True, alpha=0.28)
+        ax.legend(frameon=False)
+        bottom = 0.14
+        if tagline:
+            fig.text(
+                0.5,
+                0.02,
+                tagline,
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color="#444444",
+            )
+            bottom = 0.18
+        fig.subplots_adjust(left=0.12, right=0.88, bottom=bottom, top=0.90)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, bbox_inches="tight", pad_inches=0.35)
     plt.close(fig)
@@ -297,7 +502,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Comma-separated context lengths",
     )
     parser.add_argument("--live-window", type=int, default=_DEFAULT_W)
-    parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument(
+        "--model-dir",
+        type=Path,
+        default=Path(
+            os.environ.get("BASELINE_MODEL_DIR")
+            or os.environ.get("ISIRO_BENCH_MODEL_DIR")
+            or ""
+        ),
+        help="HF model dir for real KV capture (required)",
+    )
+    parser.add_argument(
+        "--text-file",
+        type=Path,
+        default=None,
+        help="Optional real long text file (default: Gutenberg #1342 cache)",
+    )
     parser.add_argument(
         "--model",
         default=os.environ.get("MODEL_ID")
@@ -316,14 +536,57 @@ def main(argv: list[str] | None = None) -> int:
         default=int(os.environ.get("ISIRO_BENCH_GPU_COUNT") or "0"),
         help="GPU count for the figure tagline (e.g. 1 for 'x 1')",
     )
+    parser.add_argument(
+        "--baseline-weight-bytes",
+        type=int,
+        default=int(os.environ.get("ISIRO_BENCH_BASELINE_WEIGHT_BYTES") or "0"),
+        help="Loaded-weight GPU bytes for Baseline (weights+KV panel)",
+    )
+    parser.add_argument(
+        "--isiro-weight-bytes",
+        type=int,
+        default=int(os.environ.get("ISIRO_BENCH_ISIRO_WEIGHT_BYTES") or "0"),
+        help="Loaded-weight GPU bytes for Isiro (weights+KV panel)",
+    )
+    parser.add_argument(
+        "--summary-json",
+        type=Path,
+        default=None,
+        help="Optional summary.json; reads footprint model_loading_bytes_reported",
+    )
     args = parser.parse_args(argv)
     tokens = [int(x) for x in str(args.tokens).split(",") if x.strip()]
+    if not args.model_dir or not Path(args.model_dir).is_dir():
+        print(
+            "gdx_kv_bytes_curve: FAIL error=--model-dir required (real KV)",
+            file=sys.stderr,
+        )
+        return 2
     doc = measure_curve(
         str(args.alphabet),
         tokens=tokens,
+        model_dir=Path(args.model_dir),
+        text_file=args.text_file,
         live_window=int(args.live_window),
-        seed=int(args.seed),
+        cache_dir=args.out_json.parent / ".gdx_kv_curve_cache",
     )
+    b_w = int(args.baseline_weight_bytes or 0)
+    t_w = int(args.isiro_weight_bytes or 0)
+    if args.summary_json is not None and args.summary_json.is_file():
+        try:
+            summary = json.loads(args.summary_json.read_text(encoding="utf-8"))
+            fp = summary.get("footprint") or {}
+            b_fp = (fp.get("baseline") or {}).get("model_loading_bytes_reported")
+            t_fp = (fp.get("tic") or {}).get("model_loading_bytes_reported")
+            if isinstance(b_fp, (int, float)) and int(b_fp) > 0:
+                b_w = int(b_fp)
+            if isinstance(t_fp, (int, float)) and int(t_fp) > 0:
+                t_w = int(t_fp)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    if b_w > 0 and t_w > 0:
+        doc["baseline_weight_bytes"] = b_w
+        doc["isiro_weight_bytes"] = t_w
     args.out_json.parent.mkdir(parents=True, exist_ok=True)
     args.out_json.write_text(
         json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -338,7 +601,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             f"gdx_kv_bytes_curve: PASS alphabet={doc.get('alphabet')} "
-            f"points={len(doc.get('points') or [])} png={args.out_png}",
+            f"source={doc.get('source')} points={len(doc.get('points') or [])} "
+            f"png={args.out_png}",
             file=sys.stderr,
         )
         return 0

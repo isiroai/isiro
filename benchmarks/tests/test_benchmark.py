@@ -1590,14 +1590,32 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("Graph 2", md2)
 
     def test_gdx_kv_bytes_curve_cold_grows_with_t(self) -> None:
+        import os
+        from pathlib import Path
+
+        import torch
+
         from gdx_kv_bytes_curve import measure_curve
 
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA required for real KV curve")
+        model_dir = Path(
+            os.environ.get("BASELINE_MODEL_DIR")
+            or os.environ.get("ISIRO_BENCH_MODEL_DIR")
+            or ""
+        )
+        if not model_dir.is_dir():
+            self.skipTest("BASELINE_MODEL_DIR / ISIRO_BENCH_MODEL_DIR required")
         doc = measure_curve(
-            "bf16", tokens=[512, 1024, 2048, 4096, 8192], seed=17
+            "bf16",
+            tokens=[512, 1024, 2048],
+            model_dir=model_dir,
+            live_window=512,
         )
         if doc.get("error") and "not importable" in str(doc.get("error")):
             self.skipTest("isiro_runtime not importable for GDX curve")
         self.assertTrue(doc.get("ok"), doc.get("error"))
+        self.assertEqual(doc.get("source"), "real_model_kv")
         cold = [p for p in doc["points"] if int(p["cold_t"]) > 0]
         self.assertGreaterEqual(len(cold), 2)
         self.assertGreater(
@@ -1610,6 +1628,26 @@ class BenchmarkTests(unittest.TestCase):
         )
         self.assertLess(float(cold[-1]["payload_bpv"]), 16.0)
         self.assertGreater(float(cold[-1]["save_vs_fa"]), 0.0)
+
+    def test_gdx_kv_bytes_curve_legend_has_no_gdx_and_weights_panel(self) -> None:
+        from pathlib import Path
+
+        src = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "gdx_kv_bytes_curve.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("Isiro GDX", src)
+        self.assertNotIn("gaussian", src.lower())
+        self.assertNotIn("_bf16_page", src)
+        self.assertIn("real_model_kv", src)
+        self.assertIn("Baseline (weights + KV)", src)
+        self.assertIn("Isiro (weights + KV)", src)
+        self.assertIn("Baseline (KV)", src)
+        self.assertIn("Isiro (KV)", src)
+        self.assertIn('loc="lower left"', src)
+        self.assertIn("KV (GiB)", src)
+        self.assertIn("2, 1", src)  # 2x1 subplot layout
 
 
 if __name__ == "__main__":

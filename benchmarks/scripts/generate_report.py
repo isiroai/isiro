@@ -709,7 +709,7 @@ def _equal_batch_redundant(
 
 
 def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
-    """Cold GDX vs Baseline FA twin curve (entropy win figure)."""
+    """Cold KV vs Baseline FA twin curve (plus weights+KV panel when available)."""
     gdx = summary.get("gdx_kv_bytes")
     if not isinstance(gdx, dict) or not gdx.get("image"):
         return []
@@ -720,6 +720,8 @@ def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
     t_gib = gdx.get("isiro_kv_gib_at_max_t")
     save_gib = gdx.get("save_gib_at_max_t")
     save = gdx.get("save_at_max_t")
+    b_w = gdx.get("baseline_weight_gib")
+    t_w = gdx.get("isiro_weight_gib")
     if (
         isinstance(max_t, (int, float))
         and isinstance(b_gib, (int, float))
@@ -729,7 +731,7 @@ def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
     ):
         save_line = (
             f"At T={number(max_t, 0)}: Baseline KV {number(b_gib)} GiB, "
-            f"Isiro GDX KV {number(t_gib)} GiB; save {number(save_gib)} GiB "
+            f"Isiro KV {number(t_gib)} GiB; save {number(save_gib)} GiB "
             f"({float(save) * 100:.1f}%)."
         )
     else:
@@ -739,18 +741,35 @@ def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
             else "n/a"
         )
         save_line = f"Save at max T: {save_s}."
+    weight_line = ""
+    if (
+        isinstance(b_w, (int, float))
+        and isinstance(t_w, (int, float))
+        and isinstance(b_gib, (int, float))
+        and isinstance(t_gib, (int, float))
+        and isinstance(max_t, (int, float))
+    ):
+        b_tot = float(b_w) + float(b_gib)
+        t_tot = float(t_w) + float(t_gib)
+        weight_line = (
+            f" Bottom panel adds loaded weights (Baseline {number(b_w)} GiB, "
+            f"Isiro {number(t_w)} GiB): at T={number(max_t, 0)}, "
+            f"Baseline {number(b_tot)} GiB vs Isiro {number(t_tot)} GiB "
+            f"(weights + KV)."
+        )
     lines = [
         "### Cold KV bytes vs context",
         "",
         (
-            f"Hot window W={w} stays vendor FA. Cold prefix `[0, T-W)` is GDX o1 "
-            f"(`ISIRO_GDX={alphabet}`). Curve is packed cold + hot FA vs Baseline "
-            f"FA for the same T. {save_line}"
+            f"Hot window W={w} stays vendor FA. Cold prefix `[0, T-W)` is "
+            f"compressed o1 (`ISIRO_GDX={alphabet}`). Curve uses real model KV "
+            f"from a real token stream (one forward, sliced per T), packed cold "
+            f"+ hot FA vs Baseline FA twin. {save_line}{weight_line}"
         ),
         "",
-        "Figure. KV bytes vs context.",
+        "Figure. KV vs context (top) and weights + KV (bottom).",
         "",
-        f"![KV bytes vs context]({gdx['image']})",
+        f"![KV and weights + KV vs context]({gdx['image']})",
         "",
     ]
     return lines
@@ -1023,13 +1042,65 @@ def write_report(run_dir: Path, output: Path) -> Path:
 
             gdx_doc = load_json(gdx_curve)
             dest_png = output.parent / "kv-bytes-vs-context.png"
-            _shutil.copy2(gdx_png_src, dest_png)
+            # Re-render when summary has weight bytes so the 2x1 panel stays current.
+            try:
+                from gdx_kv_bytes_curve import render_png as _render_gdx_png
+
+                fp = None
+                summary_probe = run_dir / "summary.json"
+                if summary_probe.is_file():
+                    fp = (load_json(summary_probe).get("footprint") or {})
+                b_w = gdx_doc.get("baseline_weight_bytes")
+                t_w = gdx_doc.get("isiro_weight_bytes")
+                if fp:
+                    b_fp = (fp.get("baseline") or {}).get(
+                        "model_loading_bytes_reported"
+                    )
+                    t_fp = (fp.get("tic") or {}).get("model_loading_bytes_reported")
+                    if isinstance(b_fp, (int, float)) and int(b_fp) > 0:
+                        b_w = int(b_fp)
+                    if isinstance(t_fp, (int, float)) and int(t_fp) > 0:
+                        t_w = int(t_fp)
+                if isinstance(b_w, (int, float)) and isinstance(t_w, (int, float)):
+                    gdx_doc["baseline_weight_bytes"] = int(b_w)
+                    gdx_doc["isiro_weight_bytes"] = int(t_w)
+                env = load_json(run_dir / "environment.json") if (
+                    run_dir / "environment.json"
+                ).is_file() else {}
+                model_tag = (
+                    str(env.get("model_id") or "")
+                    or str(env.get("model") or "")
+                    or str(
+                        (load_json(run_dir / "summary.json").get("model_id") or "")
+                        if (run_dir / "summary.json").is_file()
+                        else ""
+                    )
+                )
+                if not model_tag and (run_dir / "commands.json").is_file():
+                    cmds = load_json(run_dir / "commands.json")
+                    # Prefer served-model-name from baseline argv when present.
+                    argv = list(cmds.get("baseline_serve") or [])
+                    if "--served-model-name" in argv:
+                        i = argv.index("--served-model-name")
+                        if i + 1 < len(argv):
+                            model_tag = str(argv[i + 1])
+                _render_gdx_png(
+                    gdx_doc,
+                    dest_png,
+                    gpu=str(env.get("gpu_model") or ""),
+                    gpu_count=env.get("gpu_count"),
+                    model=model_tag,
+                )
+            except Exception:
+                _shutil.copy2(gdx_png_src, dest_png)
             pts = list(gdx_doc.get("points") or [])
             save_max = None
             max_t = None
             b_gib = None
             t_gib = None
             save_gib = None
+            b_w_gib = None
+            t_w_gib = None
             if pts:
                 last = pts[-1]
                 save_max = last.get("save_vs_fa")
@@ -1042,6 +1113,12 @@ def write_report(run_dir: Path, output: Path) -> Path:
                     t_gib = float(gdx_b) / float(1024**3)
                 if b_gib is not None and t_gib is not None:
                     save_gib = float(b_gib) - float(t_gib)
+            bw = gdx_doc.get("baseline_weight_bytes")
+            tw = gdx_doc.get("isiro_weight_bytes")
+            if isinstance(bw, (int, float)):
+                b_w_gib = float(bw) / float(1024**3)
+            if isinstance(tw, (int, float)):
+                t_w_gib = float(tw) / float(1024**3)
             summary_path = temp / "summary.json"
             if summary_path.is_file():
                 summary = load_json(summary_path)
@@ -1054,6 +1131,8 @@ def write_report(run_dir: Path, output: Path) -> Path:
                     "isiro_kv_gib_at_max_t": t_gib,
                     "save_gib_at_max_t": save_gib,
                     "save_at_max_t": save_max,
+                    "baseline_weight_gib": b_w_gib,
+                    "isiro_weight_gib": t_w_gib,
                     "ok": bool(gdx_doc.get("ok")),
                 }
                 write_json(summary_path, summary)

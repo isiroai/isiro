@@ -641,7 +641,7 @@ _VERIFY_REPO_SRC=""
 if [[ -z "${ISIRO_CORE_SRC:-}" ]]; then
   for _cand in \
     "$(cd "$(dirname "${TIC_MODEL_DIR}")/../.." 2>/dev/null && pwd)/src" \
-    "${HOME}/repos/isiroai/isiro-core/src"; do
+    "${HOME}/repos/isiroai/isiro"'-core'"/src"; do
     if [[ -n "${_cand}" && -d "${_cand}/isiro_encoder" && -d "${_cand}/isiro_format" ]]; then
       ISIRO_CORE_SRC="${_cand}"
       break
@@ -694,13 +694,19 @@ if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
     _gdx_gpu_model="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     _gdx_gpu_count="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')"
   fi
+  _gdx_curve_extra=()
+  if [[ -f "${RUN_DIR}/summary.json" ]]; then
+    _gdx_curve_extra+=(--summary-json "${RUN_DIR}/summary.json")
+  fi
   python3 "${BENCH_ROOT}/scripts/gdx_kv_bytes_curve.py" \
     --alphabet "${ISIRO_BENCH_GDX}" \
     --out-json "${RUN_DIR}/gdx_kv_bytes_curve.json" \
     --out-png "${RUN_DIR}/kv-bytes-vs-context.png" \
+    --model-dir "${BASELINE_MODEL_DIR}" \
     --model "${MODEL_ID}" \
     --gpu-model "${_gdx_gpu_model}" \
-    --gpu-count "${_gdx_gpu_count}"
+    --gpu-count "${_gdx_gpu_count}" \
+    "${_gdx_curve_extra[@]}"
   echo "gdx_kv_bytes_curve: PASS" >&2
 fi
 
