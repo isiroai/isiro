@@ -38,7 +38,7 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights. For KV it uses `Isiro/Ba
 |--------|-----------------------|-------------------|-----------|
 | GPU memory reserved for KV | 12.56 GiB (235120 tokens) | **15.25 GiB** (285488 tokens)† | **21.42% (1.21x)** |
 
-† Reserved pool on the GPU. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
+† Reserved pool on the GPU at vendor KV bytes/token. Token counts are pool admission slots (same bpv as the vendor dtype), not GDX-coded cold capacity. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
 
 ### KV vs context
 

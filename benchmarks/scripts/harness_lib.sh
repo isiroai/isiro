@@ -682,12 +682,32 @@ PY
 echo "verify: PASS" >&2
 
 if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
+  # Cold GDX meters need torch (curve forward). Serve stays on product isiro;
+  # this python is host-only. Prefer ISIRO_BENCH_PYTHON, else checkout .venv
+  # next to ISIRO_CORE_SRC / ISIRO_REPO_SRC, else python3.
+  _gdx_host_python="python3"
+  if [[ -n "${ISIRO_BENCH_PYTHON:-}" && -x "${ISIRO_BENCH_PYTHON}" ]]; then
+    _gdx_host_python="${ISIRO_BENCH_PYTHON}"
+  else
+    for _gdx_hint in "${ISIRO_CORE_SRC:-}" "${ISIRO_REPO_SRC:-}"; do
+      [[ -n "${_gdx_hint}" ]] || continue
+      if [[ -d "${_gdx_hint}/isiro_runtime" || -d "${_gdx_hint}/isiro_encoder" ]]; then
+        _gdx_cand="$(cd "${_gdx_hint}/.." && pwd)/.venv/bin/python"
+      else
+        _gdx_cand="$(cd "${_gdx_hint}" && pwd)/.venv/bin/python"
+      fi
+      if [[ -x "${_gdx_cand}" ]]; then
+        _gdx_host_python="${_gdx_cand}"
+        break
+      fi
+    done
+  fi
   echo "gdx_kv_bitexact: measuring cold roundtrip (alphabet=${ISIRO_BENCH_GDX})" >&2
-  python3 "${BENCH_ROOT}/scripts/gdx_kv_bitexact.py" \
+  "${_gdx_host_python}" "${BENCH_ROOT}/scripts/gdx_kv_bitexact.py" \
     --alphabet "${ISIRO_BENCH_GDX}" \
     --out "${RUN_DIR}/gdx_kv_bitexact.json"
   echo "gdx_kv_bitexact: PASS" >&2
-  echo "gdx_kv_bytes_curve: measuring cold vs FA twin (alphabet=${ISIRO_BENCH_GDX})" >&2
+  echo "gdx_kv_bytes_curve: measuring cold vs FA twin (alphabet=${ISIRO_BENCH_GDX}; python=${_gdx_host_python})" >&2
   _gdx_gpu_model="${ISIRO_BENCH_GPU_MODEL:-}"
   _gdx_gpu_count="${ISIRO_BENCH_GPU_COUNT:-0}"
   if [[ -z "${_gdx_gpu_model}" ]] && command -v nvidia-smi >/dev/null 2>&1; then
@@ -698,7 +718,7 @@ if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
   if [[ -f "${RUN_DIR}/summary.json" ]]; then
     _gdx_curve_extra+=(--summary-json "${RUN_DIR}/summary.json")
   fi
-  python3 "${BENCH_ROOT}/scripts/gdx_kv_bytes_curve.py" \
+  "${_gdx_host_python}" "${BENCH_ROOT}/scripts/gdx_kv_bytes_curve.py" \
     --alphabet "${ISIRO_BENCH_GDX}" \
     --out-json "${RUN_DIR}/gdx_kv_bytes_curve.json" \
     --out-png "${RUN_DIR}/kv-bytes-vs-context.png" \

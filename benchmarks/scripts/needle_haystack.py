@@ -1829,9 +1829,11 @@ def kv_sweep_table_lines(
 def kv_overflow_footnote_lines() -> list[str]:
     return [
         (
-            "† Reserved pool on the GPU. Longer context uses persist after "
-            "vendor reclaim of prefix blocks (TokenIDs plus archived K,V). "
-            "Not a second vendor KV cache on the host."
+            "† Reserved pool on the GPU at vendor KV bytes/token. "
+            "Token counts are pool admission slots (same bpv as the vendor "
+            "dtype), not GDX-coded cold capacity. Longer context uses persist "
+            "after vendor reclaim of prefix blocks (TokenIDs plus archived "
+            "K,V). Not a second vendor KV cache on the host."
         ),
         "",
     ]
