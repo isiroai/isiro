@@ -416,14 +416,8 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
         and float(t_load) < float(b_load)
     )
     load_pct = _simple_savings_pct(b_load, t_load)
-    if (
-        load_pct is not None
-        and isinstance(b_load, (int, float))
-        and isinstance(t_load, (int, float))
-        and float(b_load) > 0
-    ):
-        load_ratio = float(t_load) / float(b_load)
-        load_cell = f"{number(load_pct)}% ({number(load_ratio)}x)"
+    if load_pct is not None:
+        load_cell = f"{number(load_pct)}%"
     else:
         load_cell = "null"
     arm = _arm_col()
@@ -431,9 +425,9 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
         "## A. GPU memory",
         "",
         (
-            f"Savings % uses `1 - {arm}/Baseline` for loaded weights "
-            f"(x is `{arm}/Baseline`). For KV it uses `{arm}/Baseline - 1` "
-            "as a % gain (and the matching `x` ratio)."
+            f"Savings % uses `1 - {arm}/Baseline` for loaded weights. "
+            f"For KV it uses `{arm}/Baseline - 1` as a % gain "
+            "(and the matching `x` ratio)."
         ),
         "",
         "### Weights",
@@ -709,12 +703,11 @@ def _equal_batch_redundant(
 
 
 def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
-    """Cold KV vs Baseline FA twin curve (plus weights+KV panel when available)."""
+    """KV vs Baseline FA twin curve (plus weights+KV panel when available)."""
     gdx = summary.get("gdx_kv_bytes")
     if not isinstance(gdx, dict) or not gdx.get("image"):
         return []
     alphabet = gdx.get("alphabet") or "bf16"
-    w = gdx.get("live_window")
     max_t = gdx.get("max_t")
     b_gib = gdx.get("baseline_kv_gib_at_max_t")
     t_gib = gdx.get("isiro_kv_gib_at_max_t")
@@ -758,18 +751,16 @@ def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
             f"(weights + KV)."
         )
     lines = [
-        "### Cold KV bytes vs context",
+        "### KV vs context",
         "",
         (
-            f"Hot window W={w} stays vendor FA. Cold prefix `[0, T-W)` is "
-            f"compressed o1 (`ISIRO_GDX={alphabet}`). Curve uses real model KV "
-            f"from a real token stream (one forward, sliced per T), packed cold "
-            f"+ hot FA vs Baseline FA twin. {save_line}{weight_line}"
+            f"`ISIRO_GDX={alphabet}` on KV from a Project Gutenberg text "
+            f"forward. {save_line}{weight_line}"
         ),
         "",
-        "Figure. KV vs context (top) and weights + KV (bottom).",
+        "Figure. Weights and KV vs 1-user context.",
         "",
-        f"![KV and weights + KV vs context]({gdx['image']})",
+        f"![Weights and KV vs 1-user context]({gdx['image']})",
         "",
     ]
     return lines

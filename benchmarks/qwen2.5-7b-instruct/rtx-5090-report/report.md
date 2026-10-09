@@ -24,13 +24,13 @@ GDX cold coding-rate vs naive vendor KV bits (estimate): bf16 ~29-31% vs 16 bpv;
 
 ## A. GPU memory
 
-Savings % uses `1 - Isiro/Baseline` for loaded weights (x is `Isiro/Baseline`). For KV it uses `Isiro/Baseline - 1` as a % gain (and the matching `x` ratio).
+Savings % uses `1 - Isiro/Baseline` for loaded weights. For KV it uses `Isiro/Baseline - 1` as a % gain (and the matching `x` ratio).
 
 ### Weights
 
 | Metric | Baseline | Isiro | Savings % |
 |--------|----------|-------|-----------|
-| GPU memory for loaded weights | 14.29 GiB | **10.25 GiB** | **28.27% (0.72x)** |
+| GPU memory for loaded weights | 14.29 GiB | **10.25 GiB** | **28.27%** |
 
 ### KV cache
 
@@ -40,13 +40,13 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights (x is `Isiro/Baseline`). 
 
 † Reserved pool on the GPU. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
 
-### Cold KV bytes vs context
+### KV vs context
 
-Hot window W=512 stays vendor FA. Cold prefix `[0, T-W)` is compressed o1 (`ISIRO_GDX=bf16`). Curve uses real model KV from a real token stream (one forward, sliced per T), packed cold + hot FA vs Baseline FA twin. At T=8192: Baseline KV 0.44 GiB, Isiro KV 0.30 GiB; save 0.13 GiB (30.5%). Bottom panel adds loaded weights (Baseline 14.29 GiB, Isiro 10.25 GiB): at T=8192, Baseline 14.73 GiB vs Isiro 10.55 GiB (weights + KV).
+`ISIRO_GDX=bf16` on KV from a Project Gutenberg text forward. At T=8192: Baseline KV 0.44 GiB, Isiro KV 0.30 GiB; save 0.13 GiB (30.5%). Bottom panel adds loaded weights (Baseline 14.29 GiB, Isiro 10.25 GiB): at T=8192, Baseline 14.73 GiB vs Isiro 10.55 GiB (weights + KV).
 
-Figure. KV vs context (top) and weights + KV (bottom).
+Figure. Weights and KV vs 1-user context.
 
-![KV and weights + KV vs context](kv-bytes-vs-context.png)
+![Weights and KV vs 1-user context](kv-bytes-vs-context.png)
 
 ## C. Generation (recall-matched KV, input 32 / output 256)
 

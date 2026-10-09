@@ -812,8 +812,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("| Runtime |", report)
             self.assertIn("Savings %", report)
             self.assertIn(
-                "Savings % uses `1 - Isiro/Baseline` for loaded weights "
-                "(x is `Isiro/Baseline`).",
+                "Savings % uses `1 - Isiro/Baseline` for loaded weights.",
                 report,
             )
             self.assertIn(
