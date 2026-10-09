@@ -45,6 +45,24 @@ def default_scale_hi(
     return max(baseline_seqs, int(round(baseline_seqs * headroom)))
 
 
+# vLLM default capture grid after 4: multiples of 8. Off-stride capacity
+# (e.g. 39) truncates FULL decode graphs to 32 and taxes ITL/tok/s.
+_CUDAGRAPH_CAPTURE_STRIDE = 8
+
+
+def align_seqs_to_cudagraph_stride(seqs: int, scale_hi: int) -> int:
+    """Round ``seqs`` up onto the vLLM capture stride when it still fits ``hi``."""
+    if seqs < 1:
+        raise ValueError("seqs must be >= 1")
+    if scale_hi < seqs:
+        raise ValueError("scale_hi must be >= seqs")
+    stride = int(_CUDAGRAPH_CAPTURE_STRIDE)
+    aligned = ((int(seqs) + stride - 1) // stride) * stride
+    if aligned > scale_hi:
+        return int(seqs)
+    return aligned
+
+
 def scale_seqs_from_kv_estimate(
     baseline_seqs: int,
     kv_baseline_bytes: int | float,
@@ -55,7 +73,8 @@ def scale_seqs_from_kv_estimate(
     """Scale TIC max_num_seqs from baseline KV plus freed on-disk weight bytes.
 
     ``kv_tic_est = kv_baseline + max(0, W_baseline - W_tic)``;
-    ``seqs = clamp(round(baseline_seqs * kv_tic_est / kv_baseline), baseline, hi)``.
+    ``seqs = clamp(round(baseline_seqs * kv_tic_est / kv_baseline), baseline, hi)``,
+    then round up onto the vLLM CUDA-graph capture stride when it still fits.
     """
     if baseline_seqs < 1:
         raise ValueError("baseline_seqs must be >= 1")
@@ -71,7 +90,8 @@ def scale_seqs_from_kv_estimate(
     freed = max(0.0, w_b - w_t)
     ratio = (kv_b + freed) / kv_b
     scaled = int(round(baseline_seqs * ratio))
-    return max(baseline_seqs, min(scale_hi, scaled))
+    clamped = max(baseline_seqs, min(scale_hi, scaled))
+    return align_seqs_to_cudagraph_stride(clamped, scale_hi)
 
 
 def kv_scale_ratio_estimated(
@@ -99,7 +119,9 @@ def scale_seqs_from_kv_measured(
 ) -> int:
     """Scale TIC max_num_seqs from a measured vLLM KV token ratio.
 
-    ``seqs = clamp(round(baseline_seqs * kv_tic / kv_baseline), baseline, hi)``.
+    ``seqs = clamp(round(baseline_seqs * kv_tic / kv_baseline), baseline, hi)``,
+    then round up onto the vLLM CUDA-graph capture stride when it still fits
+    (39→40) so FULL decode graphs cover capacity concurrency.
     """
     if baseline_seqs < 1:
         raise ValueError("baseline_seqs must be >= 1")
@@ -112,7 +134,8 @@ def scale_seqs_from_kv_measured(
     if kv_t < 0:
         raise ValueError("kv_tic_tokens must be non-negative")
     scaled = int(round(baseline_seqs * (kv_t / kv_b)))
-    return max(baseline_seqs, min(scale_hi, scaled))
+    clamped = max(baseline_seqs, min(scale_hi, scaled))
+    return align_seqs_to_cudagraph_stride(clamped, scale_hi)
 
 
 def kv_scale_ratio_measured(

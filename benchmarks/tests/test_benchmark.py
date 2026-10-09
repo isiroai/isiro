@@ -36,6 +36,7 @@ from benchmark_lib import (  # noqa: E402
     weights_and_non_kv_bytes,
 )
 from capacity_plan import (  # noqa: E402
+    align_seqs_to_cudagraph_stride,
     build_capacity_doc,
     concurrency_for_seqs,
     default_scale_hi,
@@ -572,7 +573,9 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(hi, round(32 * 14 / 10))
         scaled = scale_seqs_from_kv_estimate(32, kv_b, w_b, w_t, hi)
         freed = w_b - w_t
-        expected = max(32, min(hi, round(32 * (kv_b + freed) / kv_b)))
+        expected = align_seqs_to_cudagraph_stride(
+            max(32, min(hi, round(32 * (kv_b + freed) / kv_b))), hi
+        )
         self.assertEqual(scaled, expected)
         self.assertGreater(scaled, 32)
         self.assertEqual(
@@ -580,9 +583,9 @@ class BenchmarkTests(unittest.TestCase):
         )
 
     def test_scale_seqs_from_kv_measured(self) -> None:
-        # Remeter sample: 238064 → 265872 tokens ≈ 1.12x → 36
+        # Remeter sample: 238064 → 265872 ≈ 1.12x → 36, align up to stride-8 (40)
         self.assertEqual(
-            scale_seqs_from_kv_measured(32, 238064, 265872, 45), 36
+            scale_seqs_from_kv_measured(32, 238064, 265872, 45), 40
         )
         self.assertEqual(
             scale_seqs_from_kv_measured(32, 238064, 265872, 32), 32
@@ -590,6 +593,15 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(
             scale_seqs_from_kv_measured(32, 100, 50, 45), 32
         )
+        # 5090 GDX remeter: 235120 → 285056 ≈ 1.21x → 39, align to 40
+        self.assertEqual(
+            scale_seqs_from_kv_measured(32, 235120, 285056, 45), 40
+        )
+        self.assertEqual(align_seqs_to_cudagraph_stride(39, 45), 40)
+        self.assertEqual(align_seqs_to_cudagraph_stride(36, 45), 40)
+        self.assertEqual(align_seqs_to_cudagraph_stride(40, 45), 40)
+        # Cannot grow past scale_hi: leave off-stride (product serve also aligns).
+        self.assertEqual(align_seqs_to_cudagraph_stride(39, 39), 39)
 
     def test_equal_batch_block_has_raw_ratio_only(self) -> None:
         self.assertAlmostEqual(effective_bpv(1000, 600), 9.6)

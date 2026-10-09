@@ -69,22 +69,22 @@ Same batch as Baseline. ITL stays near Baseline; capacity-matched generation in 
 
 | Metric                    | Baseline                | Isiro                    |
 | ------------------------- | ----------------------- | ------------------------ |
-| Output tok/s              | 1876.21                 | 1860.33                  |
-| ITL (ms) p50 / p95 / p99  | 10.65 / 11.35 / 11.89   | 10.97 / 11.57 / 32.48    |
-| TPOT (ms) p50 / p95 / p99 | 10.83 / 10.90 / 11.11   | 11.10 / 11.42 / 11.51    |
-| TTFT (ms) p50 / p95 / p99 | 94.70 / 152.51 / 152.60 | 124.30 / 201.38 / 201.68 |
+| Output tok/s              | 1876.21                 | 1888.40                  |
+| ITL (ms) p50 / p95 / p99  | 10.65 / 11.35 / 11.89   | 10.70 / 12.10 / 22.40    |
+| TPOT (ms) p50 / p95 / p99 | 10.83 / 10.90 / 11.11   | 10.90 / 11.20 / 11.30    |
+| TTFT (ms) p50 / p95 / p99 | 159.40 / 160.30 / 160.50 | 96.80 / 189.20 / 189.30 |
 
 
 ## D. Capacity
 
-Isiro batch = round(Baseline batch × Isiro/Baseline KV token capacity) from a matched vLLM KV measurement.
+Isiro batch = round(Baseline batch × Isiro/Baseline KV token capacity) from a matched vLLM KV measurement, then rounded up onto the vLLM CUDA-graph capture stride (multiples of 8) so FULL decode graphs cover concurrency.
 
 KV token capacity is reserved pool slots when Isiro printed KV pool, else vLLM GPU tokens in this serve's reserved GPU pool.
 
 
 | Metric            | Baseline              | Isiro                        |
 | ----------------- | --------------------- | ---------------------------- |
-| Batch             | 32                    | **39** (**1.21x**)           |
+| Batch             | 32                    | **40** (**1.25x**)           |
 | KV token capacity | 238064 (12.71 GiB KV) | **288064** (15.19 GiB KV)† |
 
 
@@ -95,10 +95,10 @@ Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. Not equa
 
 | Metric                    | Baseline                | Isiro                    |
 | ------------------------- | ----------------------- | ------------------------ |
-| Output tok/s              | 1876.21                 | 1860.33                  |
-| ITL (ms) p50 / p95 / p99  | 10.65 / 11.35 / 11.89   | 10.97 / 11.57 / 32.48    |
-| TPOT (ms) p50 / p95 / p99 | 10.83 / 10.90 / 11.11   | 11.10 / 11.42 / 11.51    |
-| TTFT (ms) p50 / p95 / p99 | 94.70 / 152.51 / 152.60 | 124.30 / 201.38 / 201.68 |
+| Output tok/s              | 1876.21                 | **2910.00**              |
+| ITL (ms) p50 / p95 / p99  | 10.65 / 11.35 / 11.89   | 12.70 / 14.50 / 26.70    |
+| TPOT (ms) p50 / p95 / p99 | 10.83 / 10.90 / 11.11   | 12.90 / 13.20 / 13.30    |
+| TTFT (ms) p50 / p95 / p99 | 100.60 / 158.10 / 158.20 | 229.30 / 230.50 / 231.00 |
 
 
 ## Config

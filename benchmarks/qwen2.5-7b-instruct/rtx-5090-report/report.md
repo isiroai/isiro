@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen2.5-7b-instruct`
 
-`bf16` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-09 16:04 UTC
+`bf16` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-09 16:38 UTC
 
 Tooling:
 
@@ -20,7 +20,7 @@ GDX cold coding-rate vs naive vendor KV bits (estimate): bf16 ~29-31% vs 16 bpv;
 | On-disk model size | 15.23 GB | **10.78 GB** (**29.22% smaller**) |
 | Integrity | baseline weights | **PASS** (`isiro verify`) |
 | KV bit-exactness | vendor KV pages | **PASS** (GDX `bf16` cold roundtrip) |
-| Serve output match | - | **PASS** (4/4 prompts, temp=0, token IDs equal) |
+| Serve output match | - | not run |
 
 ## A. GPU memory
 
@@ -36,7 +36,7 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights. For KV it uses `Isiro/Ba
 
 | Metric | Baseline default fill | Isiro reserved KV | Savings % |
 |--------|-----------------------|-------------------|-----------|
-| GPU memory reserved for KV | 12.56 GiB (235120 tokens) | **15.22 GiB** (285056 tokens)† | **21.18% (1.21x)** |
+| GPU memory reserved for KV | 12.56 GiB (235120 tokens) | **15.22 GiB** (284976 tokens)† | **21.18% (1.21x)** |
 
 † Reserved pool on the GPU at vendor KV bytes/token. Token counts are pool admission slots (same bpv as the vendor dtype), not GDX-coded cold capacity. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
 
@@ -67,8 +67,8 @@ KV token capacity is reserved pool slots when Isiro printed KV pool, else vLLM G
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Batch | 32 | **39** (**1.22x**) |
-| KV token capacity | 235120 (12.56 GiB KV) | **285056 (15.22 GiB KV)†** |
+| Batch | 32 | **40** (**1.25x**) |
+| KV token capacity | 235120 (12.56 GiB KV) | **284976 (15.22 GiB KV)†** |
 
 ### Generation (recall-matched KV, input 32 / output 256)
 
@@ -76,10 +76,10 @@ Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. Not equa
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 1872.79 | 1646.70 |
-| ITL (ms) p50 / p95 / p99 | 10.59 / 11.63 / 12.01 | 14.94 / 18.53 / 36.66 |
-| TPOT (ms) p50 / p95 / p99 | 10.82 / 11.08 / 11.08 | 15.17 / 15.17 / 15.47 |
-| TTFT (ms) p50 / p95 / p99 | 100.57 / 158.12 / 158.24 | 181.75 / 218.24 / 218.39 |
+| Output tok/s | 1872.79 | **2913.13** |
+| ITL (ms) p50 / p95 / p99 | 10.59 / 11.63 / 12.01 | 12.69 / 14.50 / 26.73 |
+| TPOT (ms) p50 / p95 / p99 | 10.82 / 11.08 / 11.08 | 12.87 / 13.19 / 13.34 |
+| TTFT (ms) p50 / p95 / p99 | 100.57 / 158.12 / 158.24 | 229.29 / 230.53 / 230.99 |
 
 ## Config
 
