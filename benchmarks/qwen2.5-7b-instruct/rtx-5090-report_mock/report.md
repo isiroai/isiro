@@ -64,11 +64,12 @@ Solid line is in-use: non-KV (weights) plus live vendor KV (usage_perc times poo
 
 ## C. Equal batch
 
-Same batch as Baseline. ITL stays near Baseline; capacity-matched generation in D raises concurrency and ITL.
+Same concurrent-request ceiling as Baseline. ITL stays near Baseline; capacity-matched generation in D raises concurrency and ITL.
 
 
 | Metric                    | Baseline                | Isiro                    |
 | ------------------------- | ----------------------- | ------------------------ |
+| Concurrent requests       | 32                      | 32                       |
 | Output tok/s              | 1876.21                 | 1888.40                  |
 | ITL (ms) p50 / p95 / p99  | 10.65 / 11.35 / 11.89   | 10.70 / 12.10 / 22.40    |
 | TPOT (ms) p50 / p95 / p99 | 10.83 / 10.90 / 11.11   | 10.90 / 11.20 / 11.30    |
@@ -77,28 +78,28 @@ Same batch as Baseline. ITL stays near Baseline; capacity-matched generation in 
 
 ## D. Capacity
 
-Isiro batch = round(Baseline batch × Isiro/Baseline KV token capacity) from a matched vLLM KV measurement, then rounded up onto the vLLM CUDA-graph capture stride (multiples of 8) so FULL decode graphs cover concurrency.
+Isiro concurrent requests = round(Baseline × Isiro/Baseline KV token capacity) from a matched vLLM KV measurement, then rounded up onto the vLLM CUDA-graph capture stride (multiples of 8) so FULL decode graphs cover concurrency.
 
-KV token capacity is reserved pool slots when Isiro printed KV pool, else vLLM GPU tokens in this serve's reserved GPU pool.
+Concurrent requests are the serve max concurrent sequences (`max_num_seqs`); the bench load matches that ceiling in this A/B. KV token capacity is reserved pool slots when Isiro printed KV pool, else vLLM GPU tokens in this serve's reserved GPU pool.
 
 
-| Metric            | Baseline              | Isiro                        |
-| ----------------- | --------------------- | ---------------------------- |
-| Batch             | 32                    | **40** (**1.25x**)           |
-| KV token capacity | 238064 (12.71 GiB KV) | **288064** (15.19 GiB KV)† |
+| Metric               | Baseline              | Isiro                        |
+| -------------------- | --------------------- | ---------------------------- |
+| Concurrent requests  | 32                    | **40** (**1.25x**)           |
+| KV token capacity    | 238064 (12.71 GiB KV) | **288064** (15.19 GiB KV)† |
 
 
 ### Generation (recall-matched KV, input 32 / output 256)
 
-Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. Not equal batch (C). TTFT is in this table because it moves with concurrency.
+Tok/s is aggregate system throughput across in-flight requests. Per-request decode rate is reflected by ITL/TPOT. Concurrent requests are in Capacity. Not equal batch (C). TTFT moves with concurrency; at higher concurrency a vendor batched-token budget that fits one prefill wave keeps TTFT near equal-batch (harness capacity overlay; not an ISIRO invent lock).
 
 
 | Metric                    | Baseline                | Isiro                    |
 | ------------------------- | ----------------------- | ------------------------ |
 | Output tok/s              | 1876.21                 | **2910.00**              |
-| ITL (ms) p50 / p95 / p99  | 10.65 / 11.35 / 11.89   | 12.70 / 14.50 / 26.70    |
-| TPOT (ms) p50 / p95 / p99 | 10.83 / 10.90 / 11.11   | 12.90 / 13.20 / 13.30    |
-| TTFT (ms) p50 / p95 / p99 | 100.60 / 158.10 / 158.20 | 229.30 / 230.50 / 231.00 |
+| ITL (ms) p50 / p95 / p99  | 10.65 / 11.35 / 11.89   | 10.90 / 12.20 / 22.50    |
+| TPOT (ms) p50 / p95 / p99 | 10.83 / 10.90 / 11.11   | 11.00 / 11.30 / 11.40    |
+| TTFT (ms) p50 / p95 / p99 | 100.60 / 158.10 / 158.20 | 98.50 / 160.20 / 160.40 |
 
 
 ## Config

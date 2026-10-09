@@ -603,6 +603,47 @@ class BenchmarkTests(unittest.TestCase):
         # Cannot grow past scale_hi: leave off-stride (product serve also aligns).
         self.assertEqual(align_seqs_to_cudagraph_stride(39, 39), 39)
 
+    def test_prefill_wave_cliff_under_vendor_2048(self) -> None:
+        """Capacity TTFT cliff: fair-share 2048/n < prompt → second prefill wave."""
+        vendor = 2048
+        # Measured chat-templated length for random input_len=32 on this A/B.
+        prompt = 61
+        for n, waves in ((32, 1), (33, 1), (34, 2), (40, 2)):
+            per_seq = vendor // n
+            need = 1 if per_seq >= prompt else 2
+            self.assertEqual(need, waves, msg=f"conc={n} per_seq={per_seq}")
+        self.assertGreater(40 * prompt, vendor)
+        self.assertLessEqual(32 * prompt, vendor)
+
+    def test_one_wave_batched_tokens_capacity_cliff(self) -> None:
+        from capacity_plan import one_wave_batched_tokens
+
+        # conc=32 fits vendor 2048 with pad (32*(32+32)=2048).
+        self.assertIsNone(one_wave_batched_tokens(32, 32))
+        # conc=34/40 need a second wave under 2048; harness raises budget (256-aligned).
+        self.assertEqual(one_wave_batched_tokens(34, 32), 2304)
+        self.assertEqual(one_wave_batched_tokens(40, 32), 2560)
+        # Product serve must not setdefault this knob.
+        vllm_py = (
+            Path(__file__).resolve().parents[3]
+            / "isiro-core"
+            / "src"
+            / "isiro_runtime"
+            / "targets"
+            / "vllm.py"
+        )
+        if not vllm_py.is_file():
+            vllm_py = Path("/home/kunle/repos/isiroai/isiro-core/src/isiro_runtime/targets/vllm.py")
+        text = vllm_py.read_text(encoding="utf-8")
+        self.assertNotIn(
+            'setdefault("max_num_batched_tokens"',
+            text,
+        )
+        self.assertNotIn(
+            "setdefault('max_num_batched_tokens'",
+            text,
+        )
+
     def test_equal_batch_block_has_raw_ratio_only(self) -> None:
         self.assertAlmostEqual(effective_bpv(1000, 600), 9.6)
         block = build_equal_batch_block(
@@ -794,9 +835,9 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("## Config", report)
             self.assertNotIn("## G. Config", report)
             self.assertNotIn("## G. Config / fairness / reproduce", report)
-            self.assertIn("| Batch |", report)
+            self.assertIn("| Concurrent requests |", report)
             self.assertIn(
-                "Isiro batch = round(Baseline batch × estimated KV ratio)",
+                "Isiro concurrent requests = round(Baseline × estimated KV",
                 report,
             )
             self.assertIn(

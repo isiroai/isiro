@@ -49,6 +49,12 @@ def default_scale_hi(
 # (e.g. 39) truncates FULL decode graphs to 32 and taxes ITL/tok/s.
 _CUDAGRAPH_CAPTURE_STRIDE = 8
 
+# vLLM default max_num_batched_tokens. Past this, fair-share chunked prefill
+# needs a second wave (Capacity TTFT cliff at conc>=34 for ~61-token prompts).
+_VENDOR_DEFAULT_BATCHED_TOKENS = 2048
+# Chat-template / special-token pad on top of random input_len for the cliff.
+_PROMPT_TOKEN_PAD = 32
+
 
 def align_seqs_to_cudagraph_stride(seqs: int, scale_hi: int) -> int:
     """Round ``seqs`` up onto the vLLM capture stride when it still fits ``hi``."""
@@ -61,6 +67,36 @@ def align_seqs_to_cudagraph_stride(seqs: int, scale_hi: int) -> int:
     if aligned > scale_hi:
         return int(seqs)
     return aligned
+
+
+def one_wave_batched_tokens(
+    concurrency: int,
+    input_tokens: int,
+    *,
+    vendor_default: int = _VENDOR_DEFAULT_BATCHED_TOKENS,
+    prompt_pad: int = _PROMPT_TOKEN_PAD,
+) -> int | None:
+    """Budget so one prefill wave fits ``concurrency`` prompts, or None.
+
+    Returns None when the vendor default already fits (no harness override).
+    Used only by the capacity A/B harness; product serve must not setdefault
+    ``max_num_batched_tokens``.
+    """
+    if concurrency < 1:
+        raise ValueError("concurrency must be >= 1")
+    if input_tokens < 0:
+        raise ValueError("input_tokens must be non-negative")
+    if vendor_default < 1:
+        raise ValueError("vendor_default must be >= 1")
+    prompt = int(input_tokens) + max(0, int(prompt_pad))
+    need = int(concurrency) * prompt
+    if need <= int(vendor_default):
+        return None
+    # Round up to 256 for a stable vendor knob; never below need.
+    # Keep near need (e.g. 2560 at conc=40): a much larger compile range
+    # (4096) lengthened Capacity TTFT on the 5090 A/B.
+    step = 256
+    return max(int(vendor_default), ((need + step - 1) // step) * step)
 
 
 def scale_seqs_from_kv_estimate(
@@ -327,6 +363,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     rm.add_argument("--kv-baseline-tokens", type=int, required=True)
     rm.add_argument("--kv-tic-tokens", type=int, required=True)
+    bt = sub.add_parser(
+        "one-wave-batched-tokens",
+        help="capacity harness max_num_batched_tokens (or empty if default fits)",
+    )
+    bt.add_argument("--concurrency", type=int, required=True)
+    bt.add_argument("--input-tokens", type=int, required=True)
+    bt.add_argument(
+        "--vendor-default",
+        type=int,
+        default=_VENDOR_DEFAULT_BATCHED_TOKENS,
+    )
+    bt.add_argument("--prompt-pad", type=int, default=_PROMPT_TOKEN_PAD)
     args = parser.parse_args(argv)
     if args.cmd == "concurrency":
         print(concurrency_for_seqs(args.max_num_seqs, args.bench_cap))
@@ -378,6 +426,18 @@ def main(argv: list[str] | None = None) -> int:
             args.kv_tic_tokens,
         )
         print(f"{ratio:.6f}")
+        return 0
+    if args.cmd == "one-wave-batched-tokens":
+        budget = one_wave_batched_tokens(
+            args.concurrency,
+            args.input_tokens,
+            vendor_default=args.vendor_default,
+            prompt_pad=args.prompt_pad,
+        )
+        if budget is None:
+            print("")
+        else:
+            print(int(budget))
         return 0
     return 2
 

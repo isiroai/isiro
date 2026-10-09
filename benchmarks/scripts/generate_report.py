@@ -501,21 +501,28 @@ def _section_c(
     arm = _arm_col()
     if seqs_matched:
         scale_blurb = (
-            f"Batch is {number(b_seqs, 0)} on both sides. "
+            f"Concurrent requests are {number(b_seqs, 0)} on both sides. "
             "Not scaled from KV token capacity."
         )
     elif scale_mode == "kv_measured":
         scale_blurb = (
-            f"{arm} batch = round(Baseline batch × {arm}/Baseline KV token "
-            "capacity) from a matched vLLM KV measurement."
+            f"{arm} concurrent requests = round(Baseline × {arm}/Baseline KV "
+            "token capacity) from a matched vLLM KV measurement, then rounded "
+            "up onto the vLLM CUDA-graph capture stride (multiples of 8) so "
+            "FULL decode graphs cover concurrency."
         )
     elif scale_mode == "kv_estimate":
         scale_blurb = (
-            f"{arm} batch = round(Baseline batch × estimated KV ratio), "
-            "where estimated KV adds on-disk weight savings to Baseline KV."
+            f"{arm} concurrent requests = round(Baseline × estimated KV "
+            "ratio), where estimated KV adds on-disk weight savings to "
+            "Baseline KV, then rounded up onto the vLLM CUDA-graph capture "
+            "stride when needed."
         )
     else:
-        scale_blurb = f"{arm} batch matches the configured Baseline batch."
+        scale_blurb = (
+            f"{arm} concurrent requests match the configured Baseline "
+            "concurrent-request ceiling."
+        )
     batch_ratio = f"{number(capacity.get('batch_ratio_derived'))}x"
     kv_token_ratio_val = capacity.get("kv_token_capacity_ratio_measured")
     kv_token_win = (
@@ -552,12 +559,14 @@ def _section_c(
         "",
         scale_blurb,
         "",
+        "Concurrent requests are the serve max concurrent sequences "
+        "(`max_num_seqs`); the bench load matches that ceiling in this A/B. "
         "KV token capacity is reserved pool slots when Isiro printed KV pool, "
         "else vLLM GPU tokens in this serve's reserved GPU pool.",
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
-        f"| Batch | {number(b_seqs, 0)} | {seqs_tic} |",
+        f"| Concurrent requests | {number(b_seqs, 0)} | {seqs_tic} |",
         f"| KV token capacity | {tokens_base} | {tokens_tic} |",
         "",
     ]
@@ -604,8 +613,12 @@ def _section_generation(
     lines = [
         heading,
         "",
-        "Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity."
-        f"{equal_note} TTFT is in this table because it moves with concurrency.",
+        "Tok/s is aggregate system throughput across in-flight requests. "
+        "Per-request decode rate is reflected by ITL/TPOT. Concurrent "
+        "requests are in Capacity."
+        f"{equal_note} TTFT moves with concurrency; at higher concurrency a "
+        "vendor batched-token budget that fits one prefill wave keeps TTFT "
+        "near equal-batch (harness capacity overlay; not an ISIRO invent lock).",
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
@@ -648,22 +661,32 @@ def _section_equal_batch(equal_batch: dict[str, Any]) -> list[str]:
     latency = equal_batch.get("latency_ms") or {}
     b_lat = latency.get("baseline") or {}
     t_lat = latency.get("tic") or {}
+    conc = equal_batch.get("max_num_seqs")
+    if conc is None:
+        conc = equal_batch.get("max_concurrency")
     lines = [
         "## C. Equal batch",
         "",
         (
-            "Same batch as Baseline. ITL stays near Baseline; "
-            "capacity-matched generation in D raises concurrency and ITL."
+            "Same concurrent-request ceiling as Baseline. ITL stays near "
+            "Baseline; capacity-matched generation in D raises concurrency "
+            "and ITL."
         ),
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
+    ]
+    if conc is not None:
+        lines.append(
+            f"| Concurrent requests | {number(conc, 0)} | {number(conc, 0)} |"
+        )
+    lines.append(
         (
             "| Output tok/s | "
             f"{number(tps.get('baseline'))} | "
             f"{number(tps.get('tic'))} |"
-        ),
-    ]
+        )
+    )
     if b_lat and t_lat:
         lines.extend(_compact_latency_rows(b_lat, t_lat))
     lines.append("")

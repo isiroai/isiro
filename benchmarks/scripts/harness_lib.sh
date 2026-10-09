@@ -374,6 +374,10 @@ build_baseline_serve() {
     --trust-remote-code
     --no-enable-flashinfer-autotune
   )
+  # Capacity harness only: one-wave prefill budget (not a product setdefault).
+  if [[ -n "${SERVE_MAX_NUM_BATCHED_TOKENS:-}" ]]; then
+    BASELINE_SERVE+=(--max-num-batched-tokens "${SERVE_MAX_NUM_BATCHED_TOKENS}")
+  fi
   if [[ "${SERVE_ENFORCE_EAGER}" == "true" ]]; then
     BASELINE_SERVE+=(--enforce-eager)
   fi
@@ -787,6 +791,34 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Capacity harness: raise vendor max_num_batched_tokens so one prefill wave
+# fits concurrent short prompts (avoids TTFT cliff past ~33 seqs @ 2048).
+# Empty = leave vendor default. Never set by product isiro serve.
+: "${SERVE_MAX_NUM_BATCHED_TOKENS:=}"
+: "${CAPACITY_BENCH_INPUT_TOKENS:=32}"
+
+apply_capacity_one_wave_batched_tokens() {
+  # Sets SERVE_MAX_NUM_BATCHED_TOKENS from current BENCH_MAX_CONCURRENCY, or clears it.
+  if [[ "${EXPERIMENT_KIND}" != "capacity" ]]; then
+    SERVE_MAX_NUM_BATCHED_TOKENS=""
+    return 0
+  fi
+  local conc="${BENCH_MAX_CONCURRENCY:-${SERVE_MAX_NUM_SEQS}}"
+  local budget
+  budget="$(
+    python3 "${BENCH_ROOT}/scripts/capacity_plan.py" one-wave-batched-tokens \
+      --concurrency "${conc}" \
+      --input-tokens "${CAPACITY_BENCH_INPUT_TOKENS}"
+  )"
+  if [[ -n "${budget}" ]]; then
+    SERVE_MAX_NUM_BATCHED_TOKENS="${budget}"
+    echo "capacity one-wave: max_num_batched_tokens=${budget} for conc=${conc} (harness overlay; not product setdefault)" >&2
+  else
+    SERVE_MAX_NUM_BATCHED_TOKENS=""
+    echo "capacity one-wave: vendor default batched tokens fit conc=${conc}" >&2
+  fi
+}
+
 prepare_tic_bundle() {
   mkdir -p "${TIC_BENCH_BUNDLE}"
   for source in "${TIC_MODEL_DIR}"/*; do
@@ -813,7 +845,8 @@ prepare_tic_bundle() {
     "${SERVE_TENSOR_PARALLEL_SIZE}" \
     "${SERVE_MAX_NUM_SEQS}" \
     "${SERVE_ENFORCE_EAGER}" \
-    "${_vllm_tag}" <<'PY'
+    "${_vllm_tag}" \
+    "${SERVE_MAX_NUM_BATCHED_TOKENS:-}" <<'PY'
 import re, sys
 
 (
@@ -825,7 +858,8 @@ import re, sys
     max_seqs,
     enforce_eager,
     docker_tag,
-) = sys.argv[1:9]
+    max_batched,
+) = sys.argv[1:10]
 text = open(source, encoding="utf-8").read()
 
 def upsert(text: str, key: str, value: str) -> str:
@@ -856,13 +890,28 @@ def upsert(text: str, key: str, value: str) -> str:
         raise SystemExit(f"could not set {key} in serve.yaml overlay")
     return updated
 
+def drop_key(text: str, key: str) -> str:
+    updated, _ = re.subn(
+        rf"^(\s*){re.escape(key)}:\s*.*\n?",
+        "",
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    return updated
+
 text = upsert(text, "max_model_len", max_model_len)
 text = upsert(text, "gpu_memory_utilization", gpu_util)
 text = upsert(text, "tensor_parallel_size", tp)
 text = upsert(text, "max_num_seqs", max_seqs)
 text = upsert(text, "no_enable_prefix_caching", "true")
+if str(max_batched).strip():
+    text = upsert(text, "max_num_batched_tokens", str(max_batched).strip())
+else:
+    # Equal-batch / non-capacity: do not leave a capacity overlay behind.
+    text = drop_key(text, "max_num_batched_tokens")
 if docker_tag:
-    # targets.vllm.docker.tag — keep indent under docker:
+    # targets.vllm.docker.tag - keep indent under docker:
     text = upsert(text, "tag", docker_tag)
 # enforce_eager is a forbidden serve.yaml key (isiro serve controls it).
 # Product default is outer graphs ON; eager A/B sets ISIRO_SERVE_ENFORCE_EAGER=1
@@ -1708,6 +1757,8 @@ scale_tic_seqs_from_measured_kv() {
 
   saved_seqs="${SERVE_MAX_NUM_SEQS}"
   SERVE_MAX_NUM_SEQS="${BASELINE_CAPACITY_SEQS}"
+  # Matched KV probe stays at vendor default batched tokens.
+  SERVE_MAX_NUM_BATCHED_TOKENS=""
   prepare_tic_bundle
   # Matched probe uses the timed graph mode (not eager capacity-search probes).
   if [[ "${SERVE_ENFORCE_EAGER}" == "false" ]]; then
@@ -1815,6 +1866,9 @@ run_timed_baseline_arm() {
   BENCH_MAX_CONCURRENCY="${BASELINE_CONC:-${BENCH_MAX_CONCURRENCY_CAP}}"
   if [[ "${EXPERIMENT_KIND}" == "equal-batch" ]]; then
     BENCH_MAX_CONCURRENCY="${BENCH_MAX_CONCURRENCY_CAP}"
+    SERVE_MAX_NUM_BATCHED_TOKENS=""
+  else
+    apply_capacity_one_wave_batched_tokens
   fi
   build_baseline_serve
   prepare_tic_bundle
@@ -1873,8 +1927,10 @@ run_timed_isiro_arm() {
   SERVE_MAX_NUM_SEQS="${TIC_CAPACITY_SEQS}"
   if [[ "${EXPERIMENT_KIND}" == "capacity" ]]; then
     BENCH_MAX_CONCURRENCY="${TIC_CONC}"
+    apply_capacity_one_wave_batched_tokens
   else
     BENCH_MAX_CONCURRENCY="${BENCH_MAX_CONCURRENCY_CAP}"
+    SERVE_MAX_NUM_BATCHED_TOKENS=""
   fi
   prepare_tic_bundle
 
@@ -1962,6 +2018,10 @@ PY
   capture_environment isiro host_isiro
   BENCH_MAX_CONCURRENCY="${TIC_CONC:-${BENCH_MAX_CONCURRENCY}}"
   run_profiles isiro
+  # Keep capacity serve log before equal-batch restart overwrites isiro-serve.log.
+  if [[ "${EXPERIMENT_KIND}" == "capacity" && -f "${LOG_DIR}/isiro-serve.log" ]]; then
+    cp -f "${LOG_DIR}/isiro-serve.log" "${LOG_DIR}/capacity-isiro-serve.log"
+  fi
   kill "${TIC_PID}" 2>/dev/null || true
   wait "${TIC_PID}" 2>/dev/null || true
   TIC_PID=""
@@ -2100,6 +2160,7 @@ PY
     echo "equal-batch baseline: cold start" >&2
     SERVE_MAX_NUM_SEQS="${matched_seqs}"
     BENCH_MAX_CONCURRENCY="${matched_conc}"
+    SERVE_MAX_NUM_BATCHED_TOKENS=""
     build_baseline_serve
     require_quiet_gpu
     ensure_api_port_free
@@ -2152,6 +2213,8 @@ PY
     echo "equal-batch TIC: cold start" >&2
     SERVE_MAX_NUM_SEQS="${matched_seqs}"
     BENCH_MAX_CONCURRENCY="${matched_conc}"
+    # Equal-batch keeps vendor default batched tokens (no capacity one-wave overlay).
+    SERVE_MAX_NUM_BATCHED_TOKENS=""
     prepare_tic_bundle
     if [[ "${SERVE_ENFORCE_EAGER}" == "false" ]]; then
       export ISIRO_SERVE_ENFORCE_EAGER=0
