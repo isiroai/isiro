@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen2.5-7b-instruct`
 
-`bf16` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-09 05:03 UTC
+`bf16` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-09 15:23 UTC
 
 Tooling:
 
@@ -50,14 +50,14 @@ Figure. Weights and KV vs 1-user context.
 
 ## C. Generation (equal batch, input 32 / output 256)
 
-Tok/s and latency at matched batch (`max_concurrency=32` / `max_num_seqs=32`). TTFT is in this table because it moves with concurrency. Baseline reused from the prior conc=32 arm; Isiro remetered after hybrid hot/cold policy (tall cold densify, mid-M empty-slot seed only).
+Tok/s and latency at matched batch (`max_concurrency=32` / `max_num_seqs=32`). TTFT is in this table because it moves with concurrency. Isiro remetered after reopening hybrid densify under GDX (`_PREFILL_HYBRID_ALLOWED`; invent-skip had left prefill on fused).
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 1871.72 | 1791.62 |
-| ITL (ms) p50 / p95 / p99 | 10.55 / 11.72 / 11.94 | 10.40 / 13.23 / 22.77 |
-| TPOT (ms) p50 / p95 / p99 | 10.76 / 11.06 / 11.06 | 10.89 / 11.07 / 11.44 |
-| TTFT (ms) p50 / p95 / p99 | 159.40 / 160.27 / 160.49 | 347.94 / 410.46 / 410.55 |
+| Output tok/s | 1871.72 | 1872.38 |
+| ITL (ms) p50 / p95 / p99 | 10.55 / 11.72 / 11.94 | 10.77 / 12.03 / 22.41 |
+| TPOT (ms) p50 / p95 / p99 | 10.76 / 11.06 / 11.06 | 11.02 / 11.11 / 11.29 |
+| TTFT (ms) p50 / p95 / p99 | 159.40 / 160.27 / 160.49 | 125.98 / 187.95 / 187.99 |
 
 ## Config
 
