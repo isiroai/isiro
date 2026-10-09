@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen2.5-7b-instruct`
 
-`bf16` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-09 00:30 UTC
+`bf16` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-09 03:39 UTC
 
 Tooling:
 
@@ -48,16 +48,16 @@ Figure. Weights and KV vs 1-user context.
 
 ![Weights and KV vs 1-user context](kv-bytes-vs-context.png)
 
-## C. Generation (recall-matched KV, input 32 / output 256)
+## C. Generation (equal batch, input 32 / output 256)
 
-Tok/s and latency at the recall-matched KV sizes. Batch is in Capacity. TTFT is in this table because it moves with concurrency.
+Tok/s and latency at matched batch (`max_concurrency=32` / `max_num_seqs=32`). TTFT is in this table because it moves with concurrency. Baseline reused from the prior conc=32 arm; Isiro remetered after path_a seq fail-closed (packed key T is not seq_tok).
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 1871.72 | 1779.89 |
-| ITL (ms) p50 / p95 / p99 | 10.55 / 11.72 / 11.94 | 10.74 / 11.86 / 21.95 |
-| TPOT (ms) p50 / p95 / p99 | 10.76 / 11.06 / 11.06 | 10.91 / 10.91 / 11.05 |
-| TTFT (ms) p50 / p95 / p99 | 159.40 / 160.27 / 160.49 | 421.31 / 421.98 / 422.16 |
+| Output tok/s | 1871.72 | 1794.42 |
+| ITL (ms) p50 / p95 / p99 | 10.55 / 11.72 / 11.94 | 10.55 / 12.85 / 22.91 |
+| TPOT (ms) p50 / p95 / p99 | 10.76 / 11.06 / 11.06 | 10.89 / 11.13 / 11.74 |
+| TTFT (ms) p50 / p95 / p99 | 159.40 / 160.27 / 160.49 | 351.95 / 420.10 / 420.24 |
 
 ## Config
 

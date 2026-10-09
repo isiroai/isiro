@@ -224,6 +224,16 @@ case "${_ISIRO_FIRST_RAW}" in
   1|true|yes|on) ISIRO_FIRST=1 ;;
 esac
 echo "  ISIRO_FIRST         = ${ISIRO_FIRST}" >&2
+# Eng remeter: serve+bench only (skip verify / GDX cold meters / baseline).
+_bench_env_truthy() {
+  case "${1:-}" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac
+}
+SKIP_VERIFY=0
+SKIP_GDX_METERS=0
+SKIP_BASELINE=0
+if _bench_env_truthy "${ISIRO_BENCH_SKIP_VERIFY:-}"; then SKIP_VERIFY=1; fi
+if _bench_env_truthy "${ISIRO_BENCH_SKIP_GDX_METERS:-}"; then SKIP_GDX_METERS=1; fi
+if _bench_env_truthy "${ISIRO_BENCH_SKIP_BASELINE:-}"; then SKIP_BASELINE=1; fi
 # PROFILES / BASELINE_REUSE are printed after counts resolve.
 
 # Matched A/B requires these knobs; refuse silent drift.
@@ -292,6 +302,9 @@ fi
 
 echo "  PROFILES          = ${SELECTED_PROFILES[*]}" >&2
 echo "  BASELINE_REUSE    = ${REUSE_BASELINE}" >&2
+echo "  SKIP_VERIFY       = ${SKIP_VERIFY}" >&2
+echo "  SKIP_GDX_METERS   = ${SKIP_GDX_METERS}" >&2
+echo "  SKIP_BASELINE     = ${SKIP_BASELINE}" >&2
 echo "==========================" >&2
 
 for command_name in python3 docker curl nvidia-smi ss; do
@@ -617,6 +630,29 @@ fi
 mkdir -p "${RUN_DIR}/baseline" "${RUN_DIR}/isiro" "${RAW_DIR}" "${LOG_DIR}"
 
 # Fail early on verify before long GPU work (capacity search / Docker serve).
+if [[ "${SKIP_VERIFY}" -eq 1 ]]; then
+  echo "verify: SKIP (ISIRO_BENCH_SKIP_VERIFY=1)" >&2
+  python3 - "${RUN_DIR}/verify.json" <<'PY'
+import json, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(
+    json.dumps(
+        {
+            "integrity_ok": True,
+            "verify_mode": "skipped",
+            "command": [],
+            "exit_code": 0,
+            "bit_exact_ok": True,
+            "skipped": True,
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
+else
 if [[ "${VERIFY_REFERENCE}" -eq 1 ]]; then
   echo "verify: bit-exact isiro verify -r" >&2
   echo "verify: checking compiler access..." >&2
@@ -680,8 +716,9 @@ json.dump(doc, open(sys.argv[1], "w", encoding="utf-8"), indent=2, sort_keys=Tru
 PY
 [[ "${VERIFY_EXIT}" -eq 0 ]] || { echo "isiro verify failed; see ${LOG_DIR}/verify.log" >&2; exit 2; }
 echo "verify: PASS" >&2
+fi
 
-if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
+if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
   # Cold GDX meters need torch (curve forward). Serve stays on product isiro;
   # this python is host-only. Prefer ISIRO_BENCH_PYTHON, else checkout .venv
   # next to ISIRO_CORE_SRC / ISIRO_REPO_SRC, else python3.
@@ -728,6 +765,17 @@ if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
     --gpu-count "${_gdx_gpu_count}" \
     "${_gdx_curve_extra[@]}"
   echo "gdx_kv_bytes_curve: PASS" >&2
+elif [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 1 ]]; then
+  echo "gdx_kv_meters: SKIP (ISIRO_BENCH_SKIP_GDX_METERS=1)" >&2
+  # compare_ab requires gdx_kv_bitexact.json when ISIRO_GDX is set; reuse ref.
+  if [[ -n "${ISIRO_BENCH_BASELINE_REF:-}" ]]; then
+    for _gdx_ref in gdx_kv_bitexact.json gdx_kv_bytes_curve.json kv-bytes-vs-context.png; do
+      if [[ -e "${ISIRO_BENCH_BASELINE_REF}/${_gdx_ref}" && ! -e "${RUN_DIR}/${_gdx_ref}" ]]; then
+        cp -a "${ISIRO_BENCH_BASELINE_REF}/${_gdx_ref}" "${RUN_DIR}/${_gdx_ref}"
+        echo "gdx_kv_meters: reused ${_gdx_ref} from ${ISIRO_BENCH_BASELINE_REF}" >&2
+      fi
+    done
+  fi
 fi
 
 cleanup() {
@@ -1941,15 +1989,42 @@ if [[ "${ISIRO_FIRST}" -eq 1 ]]; then
   fi
   write_commands_json
   run_timed_isiro_arm
-  # Cold baseline on the product stack (no reuse after Isiro).
-  REUSE_BASELINE=0
-  run_timed_baseline_arm
+  if [[ "${SKIP_BASELINE}" -eq 1 ]]; then
+    echo "baseline: SKIP (ISIRO_BENCH_SKIP_BASELINE=1)" >&2
+    BASELINE_SKIPPED=1
+    # compare_ab needs baseline_* JSON; reuse a prior equal-batch arm when set.
+    if [[ -n "${ISIRO_BENCH_BASELINE_REF:-}" && -d "${ISIRO_BENCH_BASELINE_REF}" ]]; then
+      for _ref in \
+        baseline_environment.json \
+        baseline/generation-32-256.json \
+        baseline_serve_config.json \
+        baseline_fingerprint.json
+      do
+        if [[ -e "${ISIRO_BENCH_BASELINE_REF}/${_ref}" ]]; then
+          mkdir -p "$(dirname "${RUN_DIR}/${_ref}")"
+          cp -a "${ISIRO_BENCH_BASELINE_REF}/${_ref}" "${RUN_DIR}/${_ref}"
+        fi
+      done
+      echo "baseline: reused artifacts from ${ISIRO_BENCH_BASELINE_REF}" >&2
+    fi
+  else
+    # Cold baseline on the product stack (no reuse after Isiro).
+    REUSE_BASELINE=0
+    run_timed_baseline_arm
+  fi
 else
   echo "timed arm order: baseline then Isiro" >&2
-  run_timed_baseline_arm
-  apply_capacity_kv_scale
-  write_commands_json
-  run_timed_isiro_arm
+  if [[ "${SKIP_BASELINE}" -eq 1 ]]; then
+    echo "baseline: SKIP (ISIRO_BENCH_SKIP_BASELINE=1); running Isiro only" >&2
+    BASELINE_SKIPPED=1
+    write_commands_json
+    run_timed_isiro_arm
+  else
+    run_timed_baseline_arm
+    apply_capacity_kv_scale
+    write_commands_json
+    run_timed_isiro_arm
+  fi
 fi
 
 # Capacity publish: matched equal-batch decode (transparency; capacity benefit not active).
