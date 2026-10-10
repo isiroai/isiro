@@ -295,7 +295,14 @@ def main(argv: list[str] | None = None) -> int:
     child_env["MODEL_SLUG"] = model
     # Defaults match published Graph ON report quality.
     child_env.setdefault("ISIRO_VERIFY_REFERENCE", "1")
-    child_env.setdefault("ISIRO_BENCH_EQUAL_BATCH", "1")
+    # Skip-baseline remeters: do not append equal-batch transparency (that
+    # cold-starts another baseline/Isiro serve after capacity and hides the
+    # unlock signal for tens of minutes).
+    _skip_base = child_env.get("ISIRO_BENCH_SKIP_BASELINE", "").strip().lower()
+    if _skip_base in ("1", "true", "yes", "on"):
+        child_env.setdefault("ISIRO_BENCH_EQUAL_BATCH", "0")
+    else:
+        child_env.setdefault("ISIRO_BENCH_EQUAL_BATCH", "1")
 
     if graph_off:
         runs = (("eager", False, True),)

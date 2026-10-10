@@ -441,6 +441,7 @@ class BenchmarkTests(unittest.TestCase):
         baseline = profile("baseline", "generation-32-256", 32, 256)
         tic = profile("isiro", "generation-32-256", 32, 256)
         tic["bench_config"]["max_concurrency"] = 64
+        tic["bench_config"]["num_prompts"] = 64
         tic["serve_config"]["max_num_seqs"] = 128
         env = {
             "gpu_model": "RTX 5090",
@@ -450,6 +451,31 @@ class BenchmarkTests(unittest.TestCase):
             "vllm_version": "0.25.1",
             "substrate": "docker",
         }
+        self.assertEqual(
+            fairness_mismatches(
+                baseline, tic, env, env, experiment_kind="capacity"
+            ),
+            [],
+        )
+
+    def test_fairness_equal_batch_rejects_reused_baseline_run_id(self) -> None:
+        baseline = profile("baseline", "generation-32-256", 32, 256)
+        tic = profile("isiro", "generation-32-256", 32, 256)
+        baseline["run_id"] = "old-path-a-ttft"
+        tic["run_id"] = "fresh-equal-batch"
+        env = {
+            "gpu_model": "RTX 5090",
+            "gpu_count": 1,
+            "driver_version": "1",
+            "cuda_version": "1",
+            "vllm_version": "0.25.1",
+            "substrate": "docker",
+        }
+        mismatches = fairness_mismatches(
+            baseline, tic, env, env, experiment_kind="equal-batch"
+        )
+        self.assertTrue(any("run_id" in item for item in mismatches), mismatches)
+        # Capacity may reuse baseline artifacts under SKIP_BASELINE.
         self.assertEqual(
             fairness_mismatches(
                 baseline, tic, env, env, experiment_kind="capacity"
@@ -618,11 +644,41 @@ class BenchmarkTests(unittest.TestCase):
     def test_one_wave_batched_tokens_capacity_cliff(self) -> None:
         from capacity_plan import one_wave_batched_tokens
 
-        # conc=32 fits vendor 2048 with pad (32*(32+32)=2048).
+        # Metered ~61 tok/prompt → pad=30; conc=32/33 fit vendor 2048.
         self.assertIsNone(one_wave_batched_tokens(32, 32))
-        # conc=34/40 need a second wave under 2048; harness raises budget (256-aligned).
+        self.assertIsNone(one_wave_batched_tokens(33, 32))
+        # conc=34/40 need a second wave; harness raises budget (256-aligned).
         self.assertEqual(one_wave_batched_tokens(34, 32), 2304)
         self.assertEqual(one_wave_batched_tokens(40, 32), 2560)
+
+    def test_harness_clamps_concurrency_to_max_num_seqs(self) -> None:
+        """Stale capacity BENCH_MAX_CONCURRENCY=40 must not overload seqs=32."""
+        harness = (
+            Path(__file__).resolve().parents[1] / "scripts" / "harness_lib.sh"
+        )
+        text = harness.read_text(encoding="utf-8")
+        self.assertIn("cannot exceed max_num_seqs", text)
+        self.assertIn("clamp BENCH_MAX_CONCURRENCY", text)
+
+    def test_harness_prompts_match_concurrency_avoids_ttft_tail(self) -> None:
+        """40@32 second-wave singles land on fused pf (~189ms); pack prompts=conc."""
+        harness = (
+            Path(__file__).resolve().parents[1] / "scripts" / "harness_lib.sh"
+        )
+        text = harness.read_text(encoding="utf-8")
+        self.assertIn("PROMPTS_MATCH_CONCURRENCY", text)
+        self.assertIn("timed_num_prompts", text)
+        self.assertIn('EQUALIZE_INPUT_TOKENS="${EQUALIZE_INPUT_TOKENS:-32}"', text)
+        # One-wave: batched tokens + dual compile [2048,N]. Omitting
+        # compilation_config fattens to [(1,N)]; [2048]-only still grows N.
+        self.assertIn("max_num_batched_tokens", text)
+        prep_start = text.index("prepare_tic_bundle()")
+        prep = text[prep_start : prep_start + 8000]
+        self.assertIn("compile_ranges_endpoints", prep)
+        self.assertIn("FULL_AND_PIECEWISE", prep)
+        self.assertIn('drop_key(text, "compilation_config")', prep)
+        self.assertIn("mb > 2048", prep)
+        self.assertIn("[2048,\" + str(mb)", prep)
         # Product serve must not setdefault this knob.
         vllm_py = (
             Path(__file__).resolve().parents[3]
@@ -732,6 +788,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("equal-batch TIC: reused capacity timed profiles", body)
         self.assertIn("equal-batch baseline: cold start", body)
         self.assertIn("equal-batch TIC: cold start", body)
+        self.assertIn("ISIRO_BENCH_SKIP_BASELINE=1; no REF profile", body)
+        self.assertIn("SKIP cold start; reused", body)
         self.assertIn("copy_equal_batch_profile_from_capacity", body)
         for banned in ("both-graph", "--graph-on", "--graph-off", "BOTH_GRAPH"):
             self.assertNotIn(banned, body)
@@ -970,6 +1028,34 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("ISIRO_BENCH_EQUAL_BATCH=1", result.stdout)
         self.assertIn("graphs:", result.stdout)
         self.assertNotIn("--graph-on", result.stdout)
+
+    def test_launch_dry_meta_skip_baseline_disables_equal_batch(self) -> None:
+        env = {
+            **dict(**{k: v for k, v in __import__("os").environ.items()}),
+            "ISIRO_BENCH_LAUNCH_DRY_META": "1",
+            "ISIRO_BENCH_SKIP_BASELINE": "1",
+        }
+        env.pop("ISIRO_BENCH_EQUAL_BATCH", None)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "launch_ab.py"),
+                "qwen2.5-7b-instruct",
+                "--dry-run",
+                "--system-id",
+                "rtx-5090",
+                "--config",
+                str(ROOT / "common.env.example"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+            cwd=str(ROOT.parent),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ISIRO_BENCH_EQUAL_BATCH=0", result.stdout)
+        self.assertNotIn("ISIRO_BENCH_EQUAL_BATCH=1", result.stdout)
 
     def test_launch_dry_meta_skip_needle_omits_needle_phase(self) -> None:
         env = {

@@ -50,10 +50,12 @@ def default_scale_hi(
 _CUDAGRAPH_CAPTURE_STRIDE = 8
 
 # vLLM default max_num_batched_tokens. Past this, fair-share chunked prefill
-# needs a second wave (Capacity TTFT cliff at conc>=34 for ~61-token prompts).
+# needs a second wave (Capacity TTFT cliff once conc*prompt_tokens > 2048).
 _VENDOR_DEFAULT_BATCHED_TOKENS = 2048
-# Chat-template / special-token pad on top of random input_len for the cliff.
-_PROMPT_TOKEN_PAD = 32
+# Chat-template / special-token pad on top of random input_len. Metered
+# generation-32-256 on Qwen chat is ~61 input tokens/prompt (pad≈29). Use 30
+# so conc=33 still fits vendor 2048; pad=32 falsely forced one-wave at 33/34.
+_PROMPT_TOKEN_PAD = 30
 
 
 def align_seqs_to_cudagraph_stride(seqs: int, scale_hi: int) -> int:

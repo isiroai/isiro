@@ -25,9 +25,12 @@ FAIR_BENCH_KEYS = (
     "burstiness",
     "seed",
 )
-# Capacity mode allows per-side concurrency (the win axis).
+# Capacity mode allows per-side concurrency (the win axis). With
+# PROMPTS_MATCH_CONCURRENCY, num_prompts follows that ceiling too.
 FAIR_BENCH_KEYS_CAPACITY = tuple(
-    key for key in FAIR_BENCH_KEYS if key != "max_concurrency"
+    key
+    for key in FAIR_BENCH_KEYS
+    if key not in ("max_concurrency", "num_prompts")
 )
 FAIR_SERVE_KEYS = (
     "max_model_len",
@@ -227,6 +230,17 @@ def fairness_mismatches(
         if left != right:
             mismatches.append(
                 f"environment.{key}: baseline={left!r}, tic={right!r}"
+            )
+    # Equal-batch latency wins must be same-run. Reused baseline artifacts
+    # (e.g. path-a TTFT 159ms) inflate Isiro deltas (97 vs 159) and hide the
+    # real matched win (~120 vs ~152 at prompts=conc=32).
+    if experiment_kind == "equal-batch":
+        b_run = baseline.get("run_id")
+        t_run = tic.get("run_id")
+        if b_run and t_run and b_run != t_run:
+            mismatches.append(
+                f"run_id: baseline={b_run!r}, tic={t_run!r} "
+                "(equal-batch latency must be same-run; refuse reused baseline)"
             )
     return mismatches
 

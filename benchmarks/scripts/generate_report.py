@@ -616,9 +616,10 @@ def _section_generation(
         "Tok/s is aggregate system throughput across in-flight requests. "
         "Per-request decode rate is reflected by ITL/TPOT. Concurrent "
         "requests are in Capacity."
-        f"{equal_note} TTFT moves with concurrency; at higher concurrency a "
-        "vendor batched-token budget that fits one prefill wave keeps TTFT "
-        "near equal-batch (harness capacity overlay; not an ISIRO invent lock).",
+        f"{equal_note} Latency-matched wins live in Equal batch (same conc as "
+        "Baseline, vendor compile band). Higher Capacity concurrency raises "
+        "aggregate tok/s and can move TTFT/ITL; the harness may raise "
+        "max_num_batched_tokens for one prefill wave (not an ISIRO invent lock).",
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
@@ -668,9 +669,10 @@ def _section_equal_batch(equal_batch: dict[str, Any]) -> list[str]:
         "## C. Equal batch",
         "",
         (
-            "Same concurrent-request ceiling as Baseline. ITL stays near "
-            "Baseline; capacity-matched generation in D raises concurrency "
-            "and ITL."
+            "Same concurrent-request ceiling as Baseline (latency-matched "
+            "surface: vendor compile band, hybrid dens~1). Capacity-matched "
+            "generation in D raises concurrency for aggregate tok/s; ITL/TTFT "
+            "there are not the equal-batch claim."
         ),
         "",
         f"| Metric | Baseline | {arm} |",

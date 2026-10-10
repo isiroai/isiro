@@ -115,6 +115,12 @@ SERVE_MAX_NUM_SEQS="${SERVE_MAX_NUM_SEQS:-32}"
 : "${SERVE_PREFIX_CACHING:=false}"
 : "${SERVE_ENFORCE_EAGER:=false}"
 BENCH_MAX_CONCURRENCY="${BENCH_MAX_CONCURRENCY:-32}"
+# Stale capacity exports (e.g. BENCH_MAX_CONCURRENCY=40 with seqs=32) overload
+# equal-batch (load_errors, bogus TTFT). Never admit more than max_num_seqs.
+if [[ "${BENCH_MAX_CONCURRENCY}" -gt "${SERVE_MAX_NUM_SEQS}" ]]; then
+  echo "clamp BENCH_MAX_CONCURRENCY ${BENCH_MAX_CONCURRENCY} -> ${SERVE_MAX_NUM_SEQS} (cannot exceed max_num_seqs)" >&2
+  BENCH_MAX_CONCURRENCY="${SERVE_MAX_NUM_SEQS}"
+fi
 PRECISION="${PRECISION:-bf16}"
 case "${PRECISION}" in
   bf16|fp8) ;;
@@ -262,9 +268,24 @@ WARMUPS="${PUBLISH_WARMUPS}"
 PROMPTS="${PUBLISH_PROMPTS}"
 REPLICATES="${PUBLISH_REPLICATES}"
 PUBLISH_QUALITY=1
-EQUALIZE_PROMPTS="${EQUALIZE_PROMPTS:-16}"
-EQUALIZE_INPUT_TOKENS="${EQUALIZE_INPUT_TOKENS:-128}"
-EQUALIZE_OUTPUT_TOKENS="${EQUALIZE_OUTPUT_TOKENS:-64}"
+# Equalize must pack the same concurrency × input as timed generation so
+# hybrid densify + inductor see tall prefill M (not 16×128 while timed is 32×61).
+# Output stays short: warm prefill/TTFT path, not a full 256-token decode.
+EQUALIZE_PROMPTS="${EQUALIZE_PROMPTS:-0}"
+EQUALIZE_INPUT_TOKENS="${EQUALIZE_INPUT_TOKENS:-32}"
+EQUALIZE_OUTPUT_TOKENS="${EQUALIZE_OUTPUT_TOKENS:-8}"
+# Timed prompts default to concurrency. 40@32 leaves a second admit wave of
+# singles (M~61) on fused pf (~189ms) while the packed wave is hybrid (~97ms):
+# that is the equal-batch TTFT p95/p99 cliff, not a true latency regress.
+PROMPTS_MATCH_CONCURRENCY="${PROMPTS_MATCH_CONCURRENCY:-1}"
+
+timed_num_prompts() {
+  if [[ "${PROMPTS_MATCH_CONCURRENCY}" == "1" ]]; then
+    echo "${BENCH_MAX_CONCURRENCY}"
+  else
+    echo "${PROMPTS}"
+  fi
+}
 
 # Profile selection. Public default is decode-only. TTFT names remain allowed
 # for eng iteration via --profiles=... or ISIRO_BENCH_FULL_PROFILES=1.
@@ -907,9 +928,31 @@ text = upsert(text, "max_num_seqs", max_seqs)
 text = upsert(text, "no_enable_prefix_caching", "true")
 if str(max_batched).strip():
     text = upsert(text, "max_num_batched_tokens", str(max_batched).strip())
+    # Domino: equal-batch hybrid win sits on vendor compile [(1,2048)]
+    # (conc=32, no batched overlay). Capacity conc=40 needs batched=2560;
+    # omitting compilation_config fattens to [(1,N)] (TTFT ~224). Pinning
+    # endpoints to [2048] alone still grows a second range from batched
+    # tokens (225810). Dual-range [2048,N] is the least-bad capacity
+    # compile shape (~141 best). Keep path_a mode/cudagraph fields.
+    # Quote as a YAML string: unquoted {...} becomes a mapping and breaks CLI.
+    try:
+        mb = int(str(max_batched).strip())
+    except ValueError:
+        mb = 0
+    if mb > 2048:
+        cc = (
+            "'{\"mode\":3,\"cudagraph_mode\":\"FULL_AND_PIECEWISE\","
+            "\"compile_ranges_endpoints\":[2048," + str(mb) + "],"
+            "\"inductor_compile_config\":{\"combo_kernels\":true,"
+            "\"benchmark_combo_kernel\":true}}'"
+        )
+        text = upsert(text, "compilation_config", cc)
+    else:
+        text = drop_key(text, "compilation_config")
 else:
     # Equal-batch / non-capacity: do not leave a capacity overlay behind.
     text = drop_key(text, "max_num_batched_tokens")
+    text = drop_key(text, "compilation_config")
 if docker_tag:
     # targets.vllm.docker.tag - keep indent under docker:
     text = upsert(text, "tag", docker_tag)
@@ -998,10 +1041,15 @@ wait_ready() {
 
 equalize_warmup() {
   variant="$1"
+  local eq_prompts="${EQUALIZE_PROMPTS}"
+  if [[ "${eq_prompts}" -le 0 ]]; then
+    eq_prompts="${BENCH_MAX_CONCURRENCY}"
+  fi
   curl -fsS "${API_URL}/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"${MODEL_ID}\",\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}],\"max_tokens\":1,\"temperature\":0}" \
     >/dev/null
+  echo "equalize: prompts=${eq_prompts} conc=${BENCH_MAX_CONCURRENCY} in=${EQUALIZE_INPUT_TOKENS} out=${EQUALIZE_OUTPUT_TOKENS}" >&2
   python3 "${BENCH_ROOT}/scripts/run_bench.py" \
     --variant "${variant}" \
     --profile "warmup-equalize" \
@@ -1011,7 +1059,7 @@ equalize_warmup() {
     --input-tokens "${EQUALIZE_INPUT_TOKENS}" \
     --output-tokens "${EQUALIZE_OUTPUT_TOKENS}" \
     --num-warmups 0 \
-    --num-prompts "${EQUALIZE_PROMPTS}" \
+    --num-prompts "${eq_prompts}" \
     --max-concurrency "${BENCH_MAX_CONCURRENCY}" \
     --seed "${BENCH_SEED}" \
     --replicates 1 \
@@ -1331,6 +1379,9 @@ run_profiles() {
   profile=""
   input_tokens=""
   output_tokens=""
+  local nprompts
+  nprompts="$(timed_num_prompts)"
+  echo "profiles: prompts=${nprompts} conc=${BENCH_MAX_CONCURRENCY} (match_concurrency=${PROMPTS_MATCH_CONCURRENCY})" >&2
   declare -A _selected=()
   for name in "${SELECTED_PROFILES[@]}"; do
     _selected["${name}"]=1
@@ -1346,7 +1397,7 @@ run_profiles() {
       --input-tokens "${input_tokens}" \
       --output-tokens "${output_tokens}" \
       --num-warmups "${WARMUPS}" \
-      --num-prompts "${PROMPTS}" \
+      --num-prompts "${nprompts}" \
       --max-concurrency "${BENCH_MAX_CONCURRENCY}" \
       --seed "${BENCH_SEED}" \
       --replicates "${REPLICATES}" \
@@ -2151,60 +2202,95 @@ PY
   if [[ "${matched_seqs}" == "${capacity_base_seqs}" && \
         -n "${capacity_base_conc}" && \
         "${matched_conc}" == "${capacity_base_conc}" ]]; then
-    if copy_equal_batch_profile_from_capacity baseline; then
+    # Reuse only when capacity timed prompts already match concurrency
+    # (PROMPTS_MATCH_CONCURRENCY). Else fairness fails on num_prompts.
+    _cap_prompts="$(
+      python3 -c "import json;print(json.load(open('${RUN_DIR}/baseline/generation-32-256.json')).get('bench_config',{}).get('num_prompts',''))" 2>/dev/null || true
+    )"
+    if [[ "${_cap_prompts}" == "${matched_conc}" ]] && \
+       copy_equal_batch_profile_from_capacity baseline; then
       reuse_baseline=1
       echo "equal-batch baseline: reused capacity timed profiles" >&2
     fi
   fi
   if [[ "${reuse_baseline}" -eq 0 ]]; then
-    echo "equal-batch baseline: cold start" >&2
-    SERVE_MAX_NUM_SEQS="${matched_seqs}"
-    BENCH_MAX_CONCURRENCY="${matched_conc}"
-    SERVE_MAX_NUM_BATCHED_TOKENS=""
-    build_baseline_serve
-    require_quiet_gpu
-    ensure_api_port_free
-    "${BASELINE_SERVE[@]}" >"${LOG_DIR}/equal-batch-baseline-serve.log" 2>&1 &
-    BASELINE_PID=$!
-    wait_ready "${LOG_DIR}/equal-batch-baseline-serve.log" || {
-      echo "equal-batch baseline serve failed; see ${LOG_DIR}/equal-batch-baseline-serve.log" >&2
-      tail -n 80 "${LOG_DIR}/equal-batch-baseline-serve.log" >&2 || true
-      kill "${BASELINE_PID}" 2>/dev/null || true
-      exit 2
-    }
-    if [[ -f "${RUN_DIR}/baseline_serve_config.json" ]]; then
+    if [[ "${SKIP_BASELINE}" -eq 1 ]]; then
+      # Never cold-start baseline when the operator skipped it; reuse REF.
+      _eq_ref_base=""
+      if [[ -n "${ISIRO_BENCH_BASELINE_REF:-}" ]]; then
+        for _cand in \
+          "${ISIRO_BENCH_BASELINE_REF}/equal_batch/baseline/generation-32-256.json" \
+          "${ISIRO_BENCH_BASELINE_REF}/baseline/generation-32-256.json"
+        do
+          if [[ -f "${_cand}" ]]; then
+            _eq_ref_base="${_cand}"
+            break
+          fi
+        done
+      fi
+      if [[ -n "${_eq_ref_base}" ]]; then
+        mkdir -p "${RUN_DIR}/equal_batch/baseline"
+        cp -f "${_eq_ref_base}" \
+          "${RUN_DIR}/equal_batch/baseline/generation-32-256.json"
+        echo "equal-batch baseline: SKIP cold start; reused ${_eq_ref_base}" >&2
+        reuse_baseline=1
+      else
+        echo "equal-batch baseline: SKIP (ISIRO_BENCH_SKIP_BASELINE=1; no REF profile)" >&2
+      fi
+    else
+      echo "equal-batch baseline: cold start" >&2
+      SERVE_MAX_NUM_SEQS="${matched_seqs}"
+      BENCH_MAX_CONCURRENCY="${matched_conc}"
+      SERVE_MAX_NUM_BATCHED_TOKENS=""
+      build_baseline_serve
+      require_quiet_gpu
+      ensure_api_port_free
+      "${BASELINE_SERVE[@]}" >"${LOG_DIR}/equal-batch-baseline-serve.log" 2>&1 &
+      BASELINE_PID=$!
+      wait_ready "${LOG_DIR}/equal-batch-baseline-serve.log" || {
+        echo "equal-batch baseline serve failed; see ${LOG_DIR}/equal-batch-baseline-serve.log" >&2
+        tail -n 80 "${LOG_DIR}/equal-batch-baseline-serve.log" >&2 || true
+        kill "${BASELINE_PID}" 2>/dev/null || true
+        exit 2
+      }
+      if [[ -f "${RUN_DIR}/baseline_serve_config.json" ]]; then
+        cp -f "${RUN_DIR}/baseline_serve_config.json" \
+          "${RUN_DIR}/equal_batch/baseline_serve_config.capacity.json"
+      fi
+      cp -f "${LOG_DIR}/equal-batch-baseline-serve.log" "${LOG_DIR}/baseline-serve.log"
+      write_effective_config baseline
       cp -f "${RUN_DIR}/baseline_serve_config.json" \
-        "${RUN_DIR}/equal_batch/baseline_serve_config.capacity.json"
+        "${RUN_DIR}/equal_batch/baseline_serve_config.json"
+      equalize_warmup baseline
+      python3 "${BENCH_ROOT}/scripts/run_bench.py" \
+        --variant baseline \
+        --profile generation-32-256 \
+        --run-id "${RUN_ID}" \
+        --model "${MODEL_ID}" \
+        --api-url "${API_URL}" \
+        --input-tokens 32 \
+        --output-tokens 256 \
+        --num-warmups "${WARMUPS}" \
+        --num-prompts "$(timed_num_prompts)" \
+        --max-concurrency "${BENCH_MAX_CONCURRENCY}" \
+        --seed "${BENCH_SEED}" \
+        --replicates "${REPLICATES}" \
+        --serve-config "${RUN_DIR}/equal_batch/baseline_serve_config.json" \
+        --raw-dir "${RAW_DIR}/equal_batch/baseline" \
+        --out "${RUN_DIR}/equal_batch/baseline/generation-32-256.json" \
+        --vllm-image "${VLLM_IMAGE}"
+      stop_baseline_container
     fi
-    cp -f "${LOG_DIR}/equal-batch-baseline-serve.log" "${LOG_DIR}/baseline-serve.log"
-    write_effective_config baseline
-    cp -f "${RUN_DIR}/baseline_serve_config.json" \
-      "${RUN_DIR}/equal_batch/baseline_serve_config.json"
-    equalize_warmup baseline
-    python3 "${BENCH_ROOT}/scripts/run_bench.py" \
-      --variant baseline \
-      --profile generation-32-256 \
-      --run-id "${RUN_ID}" \
-      --model "${MODEL_ID}" \
-      --api-url "${API_URL}" \
-      --input-tokens 32 \
-      --output-tokens 256 \
-      --num-warmups "${WARMUPS}" \
-      --num-prompts "${PROMPTS}" \
-      --max-concurrency "${BENCH_MAX_CONCURRENCY}" \
-      --seed "${BENCH_SEED}" \
-      --replicates "${REPLICATES}" \
-      --serve-config "${RUN_DIR}/equal_batch/baseline_serve_config.json" \
-      --raw-dir "${RAW_DIR}/equal_batch/baseline" \
-      --out "${RUN_DIR}/equal_batch/baseline/generation-32-256.json" \
-      --vllm-image "${VLLM_IMAGE}"
-    stop_baseline_container
   fi
 
   if [[ "${matched_seqs}" == "${capacity_tic_seqs}" && \
         -n "${capacity_tic_conc}" && \
         "${matched_conc}" == "${capacity_tic_conc}" ]]; then
-    if copy_equal_batch_profile_from_capacity isiro; then
+    _cap_prompts="$(
+      python3 -c "import json;print(json.load(open('${RUN_DIR}/isiro/generation-32-256.json')).get('bench_config',{}).get('num_prompts',''))" 2>/dev/null || true
+    )"
+    if [[ "${_cap_prompts}" == "${matched_conc}" ]] && \
+       copy_equal_batch_profile_from_capacity isiro; then
       reuse_tic=1
       echo "equal-batch TIC: reused capacity timed profiles" >&2
     fi
@@ -2259,7 +2345,7 @@ PY
       --input-tokens 32 \
       --output-tokens 256 \
       --num-warmups "${WARMUPS}" \
-      --num-prompts "${PROMPTS}" \
+      --num-prompts "$(timed_num_prompts)" \
       --max-concurrency "${BENCH_MAX_CONCURRENCY}" \
       --seed "${BENCH_SEED}" \
       --replicates "${REPLICATES}" \

@@ -1,10 +1,8 @@
 {
   "alphabet": "bf16",
-  "baseline_weight_bytes": 15343770665,
   "error": null,
   "fa_bpv": 16.0,
   "head_dim": 128,
-  "isiro_weight_bytes": 11005853696,
   "kv_heads": 4,
   "layers": 28,
   "live_window": 512,
