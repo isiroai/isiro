@@ -8,6 +8,7 @@ Matched A/B with `vllm bench serve`: vLLM **baseline** vs **Isiro**
 - Benchmarked:
   - [Qwen2.5-7B-Instruct](qwen2.5-7b-instruct/) ([Isiro report](qwen2.5-7b-instruct/rtx-5090-report/))
   - [Gemma 4 12B IT](gemma-4-12B-it/)
+  - [Gemma 4 12B IT FP8](gemma-4-12B-it-fp8/) ([Isiro report](gemma-4-12B-it-fp8/rtx-5090-report/))
   - [Qwen3.8-27B](qwen3.8-27b/)
 
 ## Prerequisites
@@ -34,6 +35,8 @@ cp benchmarks/common.env.example benchmarks/{model}/common.env
 # Optional: bf16 KV compress A/B (ISIRO_GDX=bf16; lean publish skips NIAH)
 # cp benchmarks/common.env.bf16.gdx-kv.example \
 #   benchmarks/{model}/common.env.bf16.gdx-kv
+# Optional: Hub FP8 weights + bf16 GDX KV (basename must end in .fp8)
+# cp benchmarks/common.env.fp8.example benchmarks/{model}/common.env.fp8
 ```
 
 

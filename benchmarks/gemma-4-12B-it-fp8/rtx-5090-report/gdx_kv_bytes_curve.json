@@ -1,0 +1,61 @@
+{
+  "alphabet": "bf16",
+  "error": null,
+  "fa_bpv": 16.0,
+  "head_dim": 256,
+  "kv_heads": 8,
+  "layers": 48,
+  "live_window": 512,
+  "model_dir": "gemma-4-12B-it",
+  "ok": true,
+  "points": [
+    {
+      "T": 512,
+      "cold_t": 0,
+      "fa_twin_nbytes": 201326592,
+      "gdx_cold_nbytes": 0,
+      "gdx_total_nbytes": 201326592,
+      "payload_bpv": null,
+      "save_vs_fa": 0.0
+    },
+    {
+      "T": 1024,
+      "cold_t": 512,
+      "fa_twin_nbytes": 402653184,
+      "gdx_cold_nbytes": 136719511,
+      "gdx_total_nbytes": 338046103,
+      "payload_bpv": 12.93173654874166,
+      "save_vs_fa": 0.16045342137416208
+    },
+    {
+      "T": 2048,
+      "cold_t": 1536,
+      "fa_twin_nbytes": 805306368,
+      "gdx_cold_nbytes": 256461557,
+      "gdx_total_nbytes": 457788149,
+      "payload_bpv": 11.514074245700234,
+      "save_vs_fa": 0.4315354165931543
+    },
+    {
+      "T": 4096,
+      "cold_t": 3584,
+      "fa_twin_nbytes": 1610612736,
+      "gdx_cold_nbytes": 278603055,
+      "gdx_total_nbytes": 479929647,
+      "payload_bpv": 11.318200954926816,
+      "save_vs_fa": 0.7020204570144415
+    },
+    {
+      "T": 8192,
+      "cold_t": 7680,
+      "fa_twin_nbytes": 3221225472,
+      "gdx_cold_nbytes": 322727164,
+      "gdx_total_nbytes": 524053756,
+      "payload_bpv": 11.236484384148314,
+      "save_vs_fa": 0.8373123022417227
+    }
+  ],
+  "schema": "isiro-benchmark-gdx-kv-bytes-curve-v2",
+  "source": "real_model_kv",
+  "text": "gutenberg_1342"
+}

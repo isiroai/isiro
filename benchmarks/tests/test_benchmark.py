@@ -24,6 +24,7 @@ from benchmark_lib import (  # noqa: E402
     effective_bpv,
     fairness_mismatches,
     normalize_vllm_result,
+    resolve_fp8_baseline_quantization,
     validate_capacity,
     validate_capacity_memory_story,
     validate_equal_batch,
@@ -1786,6 +1787,42 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn('loc="lower left"', src)
         self.assertIn("KV (GiB)", src)
         self.assertIn("2, 1", src)  # 2x1 subplot layout
+
+
+class ResolveFp8BaselineQuantizationTests(unittest.TestCase):
+    def test_compressed_tensors_from_config_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "quantization_config": {
+                            "quant_method": "compressed-tensors",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                resolve_fp8_baseline_quantization(root),
+                "compressed-tensors",
+            )
+
+    def test_modelopt_from_hf_quant_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "hf_quant_config.json").write_text(
+                json.dumps({"quantization": {"quant_algo": "FP8"}}),
+                encoding="utf-8",
+            )
+            self.assertEqual(resolve_fp8_baseline_quantization(root), "modelopt")
+
+    def test_plain_bf16_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text("{}", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                resolve_fp8_baseline_quantization(root)
 
 
 if __name__ == "__main__":

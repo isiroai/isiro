@@ -346,24 +346,41 @@ fi
 [[ -d "${TIC_MODEL_DIR}" ]] || { echo "TIC model directory not found" >&2; exit 2; }
 
 # Precision/path guard: refuse mismatched Hub quant configs.
+# FP8: modelopt (hf_quant_config.json) or compressed-tensors (config.json).
+FP8_BASELINE_QUANT=""
 if [[ "${PRECISION}" == "fp8" ]]; then
-  if [[ ! -f "${BASELINE_MODEL_DIR}/hf_quant_config.json" ]]; then
-    echo "PRECISION=fp8 requires Hub FP8 baseline with hf_quant_config.json" >&2
-    exit 2
-  fi
-  if ! python3 - "${BASELINE_MODEL_DIR}/hf_quant_config.json" <<'PY'
-import json, sys
-doc = json.load(open(sys.argv[1], encoding="utf-8"))
-algo = str((doc.get("quantization") or {}).get("quant_algo") or "").upper()
-raise SystemExit(0 if algo == "FP8" else 1)
+  FP8_BASELINE_QUANT="$(
+    PYTHONPATH="${BENCH_ROOT}/scripts${PYTHONPATH:+:${PYTHONPATH}}" python3 - \
+      "${BASELINE_MODEL_DIR}" <<'PY'
+import sys
+from pathlib import Path
+from benchmark_lib import resolve_fp8_baseline_quantization
+
+try:
+    print(resolve_fp8_baseline_quantization(Path(sys.argv[1])))
+except ValueError as exc:
+    print(exc, file=sys.stderr)
+    raise SystemExit(1)
 PY
-  then
-    echo "PRECISION=fp8 baseline hf_quant_config.json must set quant_algo FP8" >&2
+  )" || {
+    echo "PRECISION=fp8 baseline quant resolve failed" >&2
     exit 2
-  fi
+  }
 elif [[ -f "${BASELINE_MODEL_DIR}/hf_quant_config.json" ]]; then
   echo "PRECISION=bf16 but baseline has hf_quant_config.json; use PRECISION=fp8 / common.env.fp8" >&2
   exit 2
+elif [[ -f "${BASELINE_MODEL_DIR}/config.json" ]]; then
+  if PYTHONPATH="${BENCH_ROOT}/scripts${PYTHONPATH:+:${PYTHONPATH}}" python3 - \
+    "${BASELINE_MODEL_DIR}/config.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+method = str((doc.get("quantization_config") or {}).get("quant_method") or "").lower()
+raise SystemExit(0 if method in ("compressed-tensors", "compressed_tensors") else 1)
+PY
+  then
+    echo "PRECISION=bf16 but baseline is compressed-tensors FP8; use PRECISION=fp8 / common.env.fp8" >&2
+    exit 2
+  fi
 fi
 
 build_baseline_serve() {
@@ -381,8 +398,8 @@ build_baseline_serve() {
     --served-model-name "${MODEL_ID}"
   )
   if [[ "${PRECISION}" == "fp8" ]]; then
-    # Hub modelopt FP8: do not force --dtype bfloat16.
-    BASELINE_SERVE+=(--quantization modelopt)
+    # Hub FP8 (modelopt or compressed-tensors): do not force --dtype bfloat16.
+    BASELINE_SERVE+=(--quantization "${FP8_BASELINE_QUANT}")
   else
     BASELINE_SERVE+=(--dtype bfloat16)
   fi
@@ -483,15 +500,19 @@ print_command() {
 }
 
 write_commands_json() {
-  python3 - "${RUN_DIR}/commands.json" \
+  PYTHONPATH="${BENCH_ROOT}/scripts${PYTHONPATH:+:${PYTHONPATH}}" python3 - \
+    "${RUN_DIR}/commands.json" \
     "${BASELINE_MODEL_DIR}" "${TIC_MODEL_DIR}" "${TIC_BENCH_BUNDLE}" \
     "${VLLM_IMAGE}" "${MODEL_ID}" "${API_PORT}" \
     "${SERVE_MAX_MODEL_LEN}" "${SERVE_GPU_MEMORY_UTILIZATION}" \
     "${SERVE_TENSOR_PARALLEL_SIZE}" "${SERVE_MAX_NUM_SEQS}" \
     "${BASELINE_REUSED_FROM}" "${PRECISION}" "${SERVE_ENFORCE_EAGER}" \
     "${VERIFY_REFERENCE}" \
-    "${SERVE_KV_CACHE_DTYPE:-}" "${ISIRO_BENCH_GDX_KV:-}" <<'PY'
+    "${SERVE_KV_CACHE_DTYPE:-}" "${ISIRO_BENCH_GDX_KV:-}" \
+    "${FP8_BASELINE_QUANT:-}" <<'PY'
 import json, sys
+from benchmark_lib import resolve_fp8_baseline_quantization
+
 (
     out,
     baseline_model,
@@ -510,6 +531,7 @@ import json, sys
     verify_reference,
     kv_cache_dtype,
     gdx_kv,
+    fp8_quant,
 ) = sys.argv[1:]
 baseline = [
     "docker", "run", "--rm", "--gpus", "all",
@@ -520,7 +542,8 @@ baseline = [
     "--served-model-name", model_id,
 ]
 if precision == "fp8":
-    baseline.extend(["--quantization", "modelopt"])
+    quant = fp8_quant or resolve_fp8_baseline_quantization(baseline_model)
+    baseline.extend(["--quantization", quant])
 else:
     baseline.extend(["--dtype", "bfloat16"])
 baseline.extend([
@@ -556,6 +579,10 @@ doc = {
     "kv_cache_dtype": kv_cache_dtype or None,
     "isiro_gdx_kv": gdx_kv or None,
 }
+if precision == "fp8":
+    doc["fp8_baseline_quantization"] = (
+        fp8_quant or resolve_fp8_baseline_quantization(baseline_model)
+    )
 if gdx_kv:
     doc["tic_serve_env"] = {
         "ISIRO_GDX": gdx_kv,
@@ -780,11 +807,14 @@ if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
   if [[ -f "${RUN_DIR}/summary.json" ]]; then
     _gdx_curve_extra+=(--summary-json "${RUN_DIR}/summary.json")
   fi
+  # Optional override: Hub FP8 baselines may not run a dense HF forward for
+  # real KV capture; point at a bf16 twin when measuring GDX bf16 pages.
+  _gdx_curve_model_dir="${ISIRO_BENCH_GDX_MODEL_DIR:-${BASELINE_MODEL_DIR}}"
   "${_gdx_host_python}" "${BENCH_ROOT}/scripts/gdx_kv_bytes_curve.py" \
     --alphabet "${ISIRO_BENCH_GDX}" \
     --out-json "${RUN_DIR}/gdx_kv_bytes_curve.json" \
     --out-png "${RUN_DIR}/kv-bytes-vs-context.png" \
-    --model-dir "${BASELINE_MODEL_DIR}" \
+    --model-dir "${_gdx_curve_model_dir}" \
     --model "${MODEL_ID}" \
     --gpu-model "${_gdx_gpu_model}" \
     --gpu-count "${_gdx_gpu_count}" \

@@ -66,6 +66,37 @@ def load_json(path: Path | str) -> dict[str, Any]:
     return value
 
 
+def resolve_fp8_baseline_quantization(model_dir: Path | str) -> str:
+    """Return vLLM ``--quantization`` for a Hub FP8 baseline directory.
+
+    Supports ModelOpt (``hf_quant_config.json`` with ``quant_algo`` FP8) and
+    llm-compressor / compressed-tensors checkpoints (``config.json``
+    ``quantization_config.quant_method``).
+    """
+    root = Path(model_dir)
+    hf_quant = root / "hf_quant_config.json"
+    if hf_quant.is_file():
+        doc = load_json(hf_quant)
+        algo = str((doc.get("quantization") or {}).get("quant_algo") or "").upper()
+        if algo != "FP8":
+            raise ValueError(
+                f"{hf_quant}: quantization.quant_algo must be FP8 (got {algo!r})"
+            )
+        return "modelopt"
+    config_path = root / "config.json"
+    if config_path.is_file():
+        doc = load_json(config_path)
+        method = str(
+            (doc.get("quantization_config") or {}).get("quant_method") or ""
+        ).lower()
+        if method in ("compressed-tensors", "compressed_tensors"):
+            return "compressed-tensors"
+    raise ValueError(
+        f"{root}: PRECISION=fp8 needs hf_quant_config.json (modelopt FP8) "
+        "or config.json quantization_config.quant_method=compressed-tensors"
+    )
+
+
 def write_json(path: Path | str, value: Any) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)

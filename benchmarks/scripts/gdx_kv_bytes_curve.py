@@ -232,15 +232,36 @@ def measure_curve(
         ids = ids.repeat(1, reps)
     ids = ids[:, :max_t].contiguous().cuda()
 
+    # Prefer checkpoint dtype (Hub FP8 stays float8). Forcing bf16 breaks
+    # compressed-tensors weight/activation pairs.
     model = AutoModelForCausalLM.from_pretrained(
         str(model_path),
-        dtype=torch.bfloat16,
+        torch_dtype="auto",
         trust_remote_code=True,
+        low_cpu_mem_usage=True,
     )
     model = model.eval().cuda()
+    # Prefer the inner stack (no lm_head). Large-vocab CausalLM forwards
+    # materialize logits [B,T,V] and OOM on 12B-class models at T=8k.
+    forward_mod = model
+    for attr in ("language_model", "model", "transformer"):
+        inner = getattr(model, attr, None)
+        if inner is not None and callable(getattr(inner, "forward", None)):
+            forward_mod = inner
+            break
     with torch.inference_mode():
-        out = model(input_ids=ids, use_cache=True)
-    pkv = out.past_key_values
+        try:
+            out = forward_mod(input_ids=ids, use_cache=True)
+        except RuntimeError:
+            # Some multimodal stacks need the outer CausalLM entry.
+            out = model(input_ids=ids, use_cache=True)
+    pkv = getattr(out, "past_key_values", None)
+    if pkv is None and isinstance(out, (tuple, list)) and len(out) >= 2:
+        pkv = out[1]
+    # Drop weights before cold packing; only KV pages are needed next.
+    del model, forward_mod, out
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     if pkv is None:
         return {
             "schema": SCHEMA,
@@ -323,8 +344,8 @@ def measure_curve(
                 "payload_bpv": float(bpv_acc / max(n_pack, 1)),
             }
         )
-    # Free GPU before plot.
-    del model, out, pkv, layers_kv, ids
+    # Free GPU before plot (weights already dropped after forward).
+    del pkv, layers_kv, ids
     torch.cuda.empty_cache()
 
     cold_pts = [p for p in points if int(p["cold_t"]) > 0]
