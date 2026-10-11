@@ -424,11 +424,7 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
     return [
         "## A. GPU memory",
         "",
-        (
-            f"Savings % uses `1 - {arm}/Baseline` for loaded weights. "
-            f"For KV it uses `{arm}/Baseline - 1` as a % gain "
-            "(and the matching `x` ratio)."
-        ),
+        f"Savings % uses `1 - {arm}/Baseline` for loaded weights.",
         "",
         "### Weights",
         "",
@@ -445,7 +441,7 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
 
 
 def _section_kv_reservation(kv: dict[str, Any]) -> list[str]:
-    """Reserved GPU KV vs Baseline default fill. Gain is ``Isiro/Baseline - 1``."""
+    """Reserved GPU KV vs Baseline default fill (no Savings %; pool size is not a win)."""
     b_tokens = kv.get("baseline_tokens_measured")
     t_tokens = kv.get("tic_tokens_measured")
     b_bytes = kv.get("baseline_memory_bytes_measured")
@@ -454,29 +450,21 @@ def _section_kv_reservation(kv: dict[str, Any]) -> list[str]:
     t_gib = pool_gib(t_bytes, t_tokens, peer_bytes=b_bytes, peer_tokens=b_tokens)
     if b_gib is None or t_gib is None:
         return []
-    pct = _simple_gain_pct(b_gib, t_gib)
-    win = t_gib > b_gib
-    if pct is None:
-        pct_cell = "null"
-    else:
-        ratio = 1.0 + float(pct) / 100.0
-        pct_cell = f"{number(pct)}% ({number(ratio)}x)"
     b_tok = number(b_tokens, 0) if b_tokens is not None else "null"
     t_tok = number(t_tokens, 0) if t_tokens is not None else "null"
-    tic_cell = f"{bold_win(f'{t_gib:.2f} GiB', win=win)} ({t_tok} tokens)†"
+    tic_cell = f"{t_gib:.2f} GiB ({t_tok} tokens)†"
     from needle_haystack import kv_overflow_footnote_lines
 
     arm = _arm_col()
     return [
         "### KV cache",
         "",
-        f"| Metric | Baseline default fill | {arm} reserved KV | Savings % |",
-        "|--------|-----------------------|-------------------|-----------|",
+        f"| Metric | Baseline default fill | {arm} reserved KV |",
+        "|--------|-----------------------|-------------------|",
         (
             "| GPU memory reserved for KV | "
             f"{b_gib:.2f} GiB ({b_tok} tokens) | "
-            f"{tic_cell} | "
-            f"{bold_win(pct_cell, win=win)} |"
+            f"{tic_cell} |"
         ),
         "",
         *kv_overflow_footnote_lines(),

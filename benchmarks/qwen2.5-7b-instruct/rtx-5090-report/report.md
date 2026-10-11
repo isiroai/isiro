@@ -24,7 +24,7 @@ GDX cold coding-rate vs naive vendor KV bits (estimate): bf16 ~29-31% vs 16 bpv;
 
 ## A. GPU memory
 
-Savings % uses `1 - Isiro/Baseline` for loaded weights. For KV it uses `Isiro/Baseline - 1` as a % gain (and the matching `x` ratio).
+Savings % uses `1 - Isiro/Baseline` for loaded weights.
 
 ### Weights
 
@@ -34,9 +34,9 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights. For KV it uses `Isiro/Ba
 
 ### KV cache
 
-| Metric | Baseline default fill | Isiro reserved KV | Savings % |
-|--------|-----------------------|-------------------|-----------|
-| GPU memory reserved for KV | 12.56 GiB (235120 tokens) | **15.14 GiB** (283568 tokens)† | **20.54% (1.21x)** |
+| Metric | Baseline default fill | Isiro reserved KV |
+|--------|-----------------------|-------------------|
+| GPU memory reserved for KV | 12.56 GiB (235120 tokens) | 15.14 GiB (283568 tokens)† |
 
 † Reserved pool on the GPU at vendor KV bytes/token. Token counts are pool admission slots (same bpv as the vendor dtype), not GDX-coded cold capacity. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
 
@@ -88,6 +88,7 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 |------|-------|
 | System | `rtx-5090` |
 | CUDA graphs | on (eager prefill, graph decode) |
+| Weights | `bf16` |
 | KV cache | dtype `bfloat16`; `ISIRO_GDX=bf16` on Isiro |
 | Compiler | `v0.1.1` |
 | Runtime | `v0.1.1` |

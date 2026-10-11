@@ -1,9 +1,12 @@
 {
   "alphabet": "bf16",
+  "baseline_weight_bytes": 15343770664,
   "error": null,
   "fa_bpv": 16.0,
   "head_dim": 128,
+  "isiro_weight_bytes": 11005853696,
   "kv_heads": 4,
+  "kv_precision": "bf16",
   "layers": 28,
   "live_window": 512,
   "model_dir": "Qwen2.5-7B-Instruct",
@@ -57,5 +60,6 @@
   ],
   "schema": "isiro-benchmark-gdx-kv-bytes-curve-v2",
   "source": "real_model_kv",
-  "text": "gutenberg_1342"
+  "text": "gutenberg_1342",
+  "weight_precision": "bf16"
 }
