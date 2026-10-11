@@ -818,6 +818,8 @@ if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
     --model "${MODEL_ID}" \
     --gpu-model "${_gdx_gpu_model}" \
     --gpu-count "${_gdx_gpu_count}" \
+    --weight-precision "${PRECISION}" \
+    --kv-precision "${ISIRO_BENCH_GDX}" \
     "${_gdx_curve_extra[@]}"
   echo "gdx_kv_bytes_curve: PASS" >&2
 elif [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 1 ]]; then
@@ -1985,6 +1987,13 @@ scrape_baseline_environment_for_scale() {
   # Boot baseline long enough to scrape KV env for TIC capacity scale, then stop.
   # Used only when ISIRO_FIRST=1 so timed Isiro can still KV-scale.
   # Log name must be baseline-serve.log: capture_environment reads that path.
+  # When SKIP_BASELINE + BASELINE_REF already have env JSON, reuse (no boot).
+  if [[ -n "${ISIRO_BENCH_BASELINE_REF:-}" && -f "${ISIRO_BENCH_BASELINE_REF}/baseline_environment.json" ]]; then
+    cp -a "${ISIRO_BENCH_BASELINE_REF}/baseline_environment.json" \
+      "${RUN_DIR}/baseline_environment.json"
+    echo "isiro-first: reused baseline_environment.json from ${ISIRO_BENCH_BASELINE_REF} (no scrape)" >&2
+    return 0
+  fi
   SERVE_MAX_NUM_SEQS="${BASELINE_CAPACITY_SEQS}"
   build_baseline_serve
   require_quiet_gpu

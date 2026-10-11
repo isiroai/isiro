@@ -64,10 +64,14 @@ def figure_tagline(
     gpu: str = "",
     gpu_count: int | None = None,
     model: str = "",
+    weight_precision: str = "",
+    kv_precision: str = "",
 ) -> str:
-    """GPU box (name x count) and model under the figure title."""
+    """GPU box, model, and optional weight/KV precisions under the figure."""
     gpu_s = str(gpu or "").strip()
     model_s = str(model or "").strip()
+    w_s = str(weight_precision or "").strip()
+    kv_s = str(kv_precision or "").strip()
     count: int | None = int(gpu_count) if gpu_count else None
     if rows is not None:
         for item in rows:
@@ -84,11 +88,29 @@ def figure_tagline(
                 model_s = str(
                     item.get("model") or item.get("model_id") or ""
                 ).strip()
+            if not w_s:
+                w_s = str(
+                    item.get("weight_precision")
+                    or item.get("precision")
+                    or ""
+                ).strip()
+            if not kv_s:
+                kv_s = str(
+                    item.get("kv_precision")
+                    or item.get("kv_cache_dtype")
+                    or item.get("isiro_gdx_kv")
+                    or ""
+                ).strip()
             if gpu_s and model_s:
                 break
     if gpu_s and count is not None and count > 0:
         gpu_s = f"{gpu_s} x {count}"
-    return " | ".join(part for part in (gpu_s, model_s) if part)
+    parts = [gpu_s, model_s]
+    if w_s:
+        parts.append(f"weights {w_s}")
+    if kv_s:
+        parts.append(f"KV {kv_s}")
+    return " | ".join(part for part in parts if part)
 
 
 def format_gib_cell(size: float) -> str:

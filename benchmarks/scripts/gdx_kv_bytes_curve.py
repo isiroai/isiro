@@ -402,6 +402,8 @@ def render_png(
     gpu: str = "",
     gpu_count: int | None = None,
     model: str = "",
+    weight_precision: str = "",
+    kv_precision: str = "",
 ) -> None:
     """2x1: KV-only (top) and weights+KV (bottom). No GDX in legend labels."""
     import matplotlib
@@ -426,7 +428,20 @@ def render_png(
         and float(b_w) > 0
         and float(t_w) > 0
     )
-    tagline = figure_tagline(gpu=gpu, gpu_count=gpu_count, model=model)
+    w_prec = str(weight_precision or doc.get("weight_precision") or "").strip()
+    kv_prec = str(
+        kv_precision
+        or doc.get("kv_precision")
+        or doc.get("alphabet")
+        or ""
+    ).strip()
+    tagline = figure_tagline(
+        gpu=gpu,
+        gpu_count=gpu_count,
+        model=model,
+        weight_precision=w_prec,
+        kv_precision=kv_prec,
+    )
     if has_weights:
         fig, (ax0, ax1) = plt.subplots(
             2, 1, figsize=(7.2, 7.6), dpi=140, sharex=False
@@ -575,6 +590,18 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional summary.json; reads footprint model_loading_bytes_reported",
     )
+    parser.add_argument(
+        "--weight-precision",
+        default=os.environ.get("PRECISION")
+        or os.environ.get("ISIRO_BENCH_PRECISION")
+        or "",
+        help="Weight precision for the figure tagline (e.g. fp8, bf16)",
+    )
+    parser.add_argument(
+        "--kv-precision",
+        default="",
+        help="KV precision for the figure tagline (default: --alphabet)",
+    )
     args = parser.parse_args(argv)
     tokens = [int(x) for x in str(args.tokens).split(",") if x.strip()]
     if not args.model_dir or not Path(args.model_dir).is_dir():
@@ -608,6 +635,12 @@ def main(argv: list[str] | None = None) -> int:
     if b_w > 0 and t_w > 0:
         doc["baseline_weight_bytes"] = b_w
         doc["isiro_weight_bytes"] = t_w
+    w_prec = str(args.weight_precision or "").strip()
+    kv_prec = str(args.kv_precision or args.alphabet or "").strip()
+    if w_prec:
+        doc["weight_precision"] = w_prec
+    if kv_prec:
+        doc["kv_precision"] = kv_prec
     args.out_json.parent.mkdir(parents=True, exist_ok=True)
     args.out_json.write_text(
         json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -619,6 +652,8 @@ def main(argv: list[str] | None = None) -> int:
             gpu=str(args.gpu_model or ""),
             gpu_count=int(args.gpu_count) or None,
             model=str(args.model or ""),
+            weight_precision=w_prec,
+            kv_precision=kv_prec,
         )
         print(
             f"gdx_kv_bytes_curve: PASS alphabet={doc.get('alphabet')} "

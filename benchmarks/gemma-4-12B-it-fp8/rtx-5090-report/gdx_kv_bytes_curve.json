@@ -1,9 +1,12 @@
 {
   "alphabet": "bf16",
+  "baseline_weight_bytes": 13690208256,
   "error": null,
   "fa_bpv": 16.0,
   "head_dim": 256,
+  "isiro_weight_bytes": 12981538652,
   "kv_heads": 8,
+  "kv_precision": "bf16",
   "layers": 48,
   "live_window": 512,
   "model_dir": "gemma-4-12B-it",
@@ -57,5 +60,6 @@
   ],
   "schema": "isiro-benchmark-gdx-kv-bytes-curve-v2",
   "source": "real_model_kv",
-  "text": "gutenberg_1342"
+  "text": "gutenberg_1342",
+  "weight_precision": "fp8"
 }

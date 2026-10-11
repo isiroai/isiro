@@ -906,6 +906,7 @@ def _section_g(
         "|------|-------|",
         f"| System | `{summary.get('system_id', '')}` |",
         f"| CUDA graphs | {graph_cell} |",
+        f"| Weights | `{summary.get('precision', '')}` |",
         f"| KV cache | {kv_cell} |",
         f"| Compiler | `{compiler}` |",
         f"| Runtime | `{runtime}` |",
@@ -1100,12 +1101,36 @@ def write_report(run_dir: Path, output: Path) -> Path:
                         i = argv.index("--served-model-name")
                         if i + 1 < len(argv):
                             model_tag = str(argv[i + 1])
+                summary_for_prec = (
+                    load_json(run_dir / "summary.json")
+                    if (run_dir / "summary.json").is_file()
+                    else {}
+                )
+                cmds_for_prec = (
+                    load_json(run_dir / "commands.json")
+                    if (run_dir / "commands.json").is_file()
+                    else {}
+                )
+                w_prec = str(
+                    summary_for_prec.get("precision")
+                    or gdx_doc.get("weight_precision")
+                    or ""
+                ).strip()
+                kv_prec = str(
+                    cmds_for_prec.get("isiro_gdx_kv")
+                    or cmds_for_prec.get("kv_cache_dtype")
+                    or gdx_doc.get("kv_precision")
+                    or gdx_doc.get("alphabet")
+                    or ""
+                ).strip()
                 _render_gdx_png(
                     gdx_doc,
                     dest_png,
                     gpu=str(env.get("gpu_model") or ""),
                     gpu_count=env.get("gpu_count"),
                     model=model_tag,
+                    weight_precision=w_prec,
+                    kv_precision=kv_prec,
                 )
             except Exception:
                 _shutil.copy2(gdx_png_src, dest_png)
