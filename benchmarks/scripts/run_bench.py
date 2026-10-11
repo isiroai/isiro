@@ -21,7 +21,12 @@ from benchmark_lib import (
 )
 
 
-def bench_prefix(*, vllm_image: str | None, raw_dir: Path) -> list[str]:
+def bench_prefix(
+    *,
+    vllm_image: str | None,
+    raw_dir: Path,
+    extra_mounts: list[Path] | None = None,
+) -> list[str]:
     """Host `vllm` if present; else `docker run … --entrypoint vllm <VLLM_IMAGE>`."""
     binary = shutil.which("vllm")
     if binary:
@@ -32,7 +37,7 @@ def bench_prefix(*, vllm_image: str | None, raw_dir: Path) -> list[str]:
             "(same image as baseline serve / VLLM_IMAGE)"
         )
     mount = raw_dir.resolve()
-    return [
+    cmd = [
         "docker",
         "run",
         "--rm",
@@ -42,10 +47,15 @@ def bench_prefix(*, vllm_image: str | None, raw_dir: Path) -> list[str]:
         f"{mount}:{mount}",
         "-w",
         str(mount),
-        "--entrypoint",
-        "vllm",
-        vllm_image,
     ]
+    for extra in extra_mounts or []:
+        resolved = extra.resolve()
+        if resolved.is_dir():
+            cmd.extend(["-v", f"{resolved}:{resolved}:ro"])
+    # Prefer --tokenizer on a local dir (see BENCH_TOKENIZER). Do not pass Hub
+    # tokens on the docker argv (dry-run / logs would echo them).
+    cmd.extend(["--entrypoint", "vllm", vllm_image])
+    return cmd
 
 
 def executable() -> list[str]:
@@ -59,8 +69,16 @@ def bench_command(args: argparse.Namespace, result_path: Path) -> list[str]:
     if not base_url.endswith("/v1"):
         base_url += "/v1"
     result_path = result_path.resolve()
-    prefix = bench_prefix(vllm_image=args.vllm_image, raw_dir=args.raw_dir)
-    return [
+    tok = (getattr(args, "tokenizer", None) or "").strip() or None
+    extra_mounts: list[Path] = []
+    if tok and Path(tok).is_dir():
+        extra_mounts.append(Path(tok))
+    prefix = bench_prefix(
+        vllm_image=args.vllm_image,
+        raw_dir=args.raw_dir,
+        extra_mounts=extra_mounts,
+    )
+    cmd = [
         *prefix,
         "bench",
         "serve",
@@ -72,34 +90,41 @@ def bench_command(args: argparse.Namespace, result_path: Path) -> list[str]:
         args.endpoint,
         "--model",
         args.model,
-        "--dataset-name",
-        "random",
-        "--num-prompts",
-        str(args.num_prompts),
-        "--num-warmups",
-        str(args.num_warmups),
-        "--request-rate",
-        "inf",
-        "--max-concurrency",
-        str(args.max_concurrency),
-        "--burstiness",
-        "1.0",
-        "--seed",
-        str(args.seed),
-        "--random-input-len",
-        str(args.input_tokens),
-        "--random-output-len",
-        str(args.output_tokens),
-        "--metric-percentiles",
-        "50,95,99",
-        "--save-result",
-        "--result-filename",
-        str(result_path),
-        "--metadata",
-        f"variant={args.variant}",
-        "--metadata",
-        f"profile={args.profile}",
     ]
+    if tok:
+        cmd.extend(["--tokenizer", tok])
+    cmd.extend(
+        [
+            "--dataset-name",
+            "random",
+            "--num-prompts",
+            str(args.num_prompts),
+            "--num-warmups",
+            str(args.num_warmups),
+            "--request-rate",
+            "inf",
+            "--max-concurrency",
+            str(args.max_concurrency),
+            "--burstiness",
+            "1.0",
+            "--seed",
+            str(args.seed),
+            "--random-input-len",
+            str(args.input_tokens),
+            "--random-output-len",
+            str(args.output_tokens),
+            "--metric-percentiles",
+            "50,95,99",
+            "--save-result",
+            "--result-filename",
+            str(result_path),
+            "--metadata",
+            f"variant={args.variant}",
+            "--metadata",
+            f"profile={args.profile}",
+        ]
+    )
+    return cmd
 
 
 def run_once(command: list[str], output: Path) -> dict[str, Any]:
@@ -121,6 +146,11 @@ def main() -> int:
     parser.add_argument("--profile", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--tokenizer",
+        default=None,
+        help="Local tokenizer dir (avoids gated Hub fetch for meta-llama/*).",
+    )
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--backend", default="openai-chat")
     parser.add_argument("--endpoint", default="/chat/completions")

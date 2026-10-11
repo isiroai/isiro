@@ -107,6 +107,12 @@ fi
 : "${TIC_MODEL_DIR:?set TIC_MODEL_DIR in common.env}"
 : "${MODEL_ID:?set MODEL_ID in common.env}"
 : "${VLLM_IMAGE:?set VLLM_IMAGE in common.env}"
+# Local tokenizer for vllm bench (gated Hub ids like meta-llama/*).
+: "${BENCH_TOKENIZER:=${BASELINE_MODEL_DIR}}"
+BENCH_TOKENIZER_ARGS=()
+if [[ -d "${BENCH_TOKENIZER}" ]]; then
+  BENCH_TOKENIZER_ARGS=(--tokenizer "${BENCH_TOKENIZER}")
+fi
 # Serve knobs (defaults match benchmarks/common.env.example).
 : "${SERVE_MAX_MODEL_LEN:=4096}"
 : "${SERVE_GPU_MEMORY_UTILIZATION:=0.90}"
@@ -476,6 +482,10 @@ start_tic_serve() {
   if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
     export ISIRO_GDX="${ISIRO_BENCH_GDX}"
     export ISIRO_GDX_COLD_READY=1
+    # common.env may set ISIRO_GDX_* without export; Docker forward uses compgen -e.
+    if [[ -n "${ISIRO_GDX_FP8_KV_SCALES_OK:-}" ]]; then
+      export ISIRO_GDX_FP8_KV_SCALES_OK
+    fi
   else
     unset ISIRO_GDX || true
   fi
@@ -510,7 +520,7 @@ write_commands_json() {
     "${VERIFY_REFERENCE}" \
     "${SERVE_KV_CACHE_DTYPE:-}" "${ISIRO_BENCH_GDX_KV:-}" \
     "${FP8_BASELINE_QUANT:-}" <<'PY'
-import json, sys
+import json, os, sys
 from benchmark_lib import resolve_fp8_baseline_quantization
 
 (
@@ -588,6 +598,9 @@ if gdx_kv:
         "ISIRO_GDX": gdx_kv,
         "ISIRO_GDX_COLD_READY": "1",
     }
+    scales_ok = os.environ.get("ISIRO_GDX_FP8_KV_SCALES_OK", "").strip()
+    if scales_ok:
+        doc["tic_serve_env"]["ISIRO_GDX_FP8_KV_SCALES_OK"] = scales_ok
 if reused_from:
     doc["baseline_reused_from"] = reused_from
 json.dump(doc, open(out, "w", encoding="utf-8"), indent=2, sort_keys=True)
@@ -807,6 +820,9 @@ if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
   if [[ -f "${RUN_DIR}/summary.json" ]]; then
     _gdx_curve_extra+=(--summary-json "${RUN_DIR}/summary.json")
   fi
+  if [[ -n "${ISIRO_BENCH_GDX_TEXT_FILE:-}" && -f "${ISIRO_BENCH_GDX_TEXT_FILE}" ]]; then
+    _gdx_curve_extra+=(--text-file "${ISIRO_BENCH_GDX_TEXT_FILE}")
+  fi
   # Optional override: Hub FP8 baselines may not run a dense HF forward for
   # real KV capture; point at a bf16 twin when measuring GDX bf16 pages.
   _gdx_curve_model_dir="${ISIRO_BENCH_GDX_MODEL_DIR:-${BASELINE_MODEL_DIR}}"
@@ -825,14 +841,25 @@ if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
 elif [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 1 ]]; then
   echo "gdx_kv_meters: SKIP (ISIRO_BENCH_SKIP_GDX_METERS=1)" >&2
   # compare_ab requires gdx_kv_bitexact.json when ISIRO_GDX is set; reuse ref.
-  if [[ -n "${ISIRO_BENCH_BASELINE_REF:-}" ]]; then
+  _gdx_meter_src="${ISIRO_BENCH_BASELINE_REF:-}"
+  if [[ -z "${_gdx_meter_src}" || ! -e "${_gdx_meter_src}/gdx_kv_bitexact.json" ]]; then
+    # Fall back to newest prior scratch for this system that already metered.
+    _gdx_meter_src="$(
+      ls -1dt "${SCRATCH_ROOT}"/*-"${SYSTEM_ID}" 2>/dev/null \
+        | while read -r _d; do
+            [[ -e "${_d}/gdx_kv_bitexact.json" && "${_d}" != "${RUN_DIR}" ]] && echo "${_d}" && break
+          done
+    )"
+  fi
+  if [[ -n "${_gdx_meter_src}" ]]; then
     for _gdx_ref in gdx_kv_bitexact.json gdx_kv_bytes_curve.json kv-bytes-vs-context.png; do
-      if [[ -e "${ISIRO_BENCH_BASELINE_REF}/${_gdx_ref}" && ! -e "${RUN_DIR}/${_gdx_ref}" ]]; then
-        cp -a "${ISIRO_BENCH_BASELINE_REF}/${_gdx_ref}" "${RUN_DIR}/${_gdx_ref}"
-        echo "gdx_kv_meters: reused ${_gdx_ref} from ${ISIRO_BENCH_BASELINE_REF}" >&2
+      if [[ -e "${_gdx_meter_src}/${_gdx_ref}" && ! -e "${RUN_DIR}/${_gdx_ref}" ]]; then
+        cp -a "${_gdx_meter_src}/${_gdx_ref}" "${RUN_DIR}/${_gdx_ref}"
+        echo "gdx_kv_meters: reused ${_gdx_ref} from ${_gdx_meter_src}" >&2
       fi
     done
   fi
+  unset _gdx_meter_src _gdx_ref
 fi
 
 cleanup() {
@@ -1087,6 +1114,7 @@ equalize_warmup() {
     --profile "warmup-equalize" \
     --run-id "${RUN_ID}" \
     --model "${MODEL_ID}" \
+    "${BENCH_TOKENIZER_ARGS[@]}" \
     --api-url "${API_URL}" \
     --input-tokens "${EQUALIZE_INPUT_TOKENS}" \
     --output-tokens "${EQUALIZE_OUTPUT_TOKENS}" \
@@ -1425,6 +1453,7 @@ run_profiles() {
       --profile "${profile}" \
       --run-id "${RUN_ID}" \
       --model "${MODEL_ID}" \
+      "${BENCH_TOKENIZER_ARGS[@]}" \
       --api-url "${API_URL}" \
       --input-tokens "${input_tokens}" \
       --output-tokens "${output_tokens}" \
@@ -2306,6 +2335,7 @@ PY
         --profile generation-32-256 \
         --run-id "${RUN_ID}" \
         --model "${MODEL_ID}" \
+        "${BENCH_TOKENIZER_ARGS[@]}" \
         --api-url "${API_URL}" \
         --input-tokens 32 \
         --output-tokens 256 \
@@ -2380,6 +2410,7 @@ PY
       --profile generation-32-256 \
       --run-id "${RUN_ID}" \
       --model "${MODEL_ID}" \
+      "${BENCH_TOKENIZER_ARGS[@]}" \
       --api-url "${API_URL}" \
       --input-tokens 32 \
       --output-tokens 256 \
