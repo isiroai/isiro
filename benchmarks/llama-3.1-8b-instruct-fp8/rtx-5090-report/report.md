@@ -42,7 +42,7 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights.
 
 ### KV vs context
 
-`ISIRO_GDX=fp8` on KV from a Project Gutenberg text forward. At T=8192: Baseline KV 0.50 GiB, Isiro KV 0.17 GiB; save 0.33 GiB (65.3%). Bottom panel adds loaded weights (Baseline 8.51 GiB, Isiro 7.93 GiB): at T=8192, Baseline 9.01 GiB vs Isiro 8.10 GiB (weights + KV).
+`ISIRO_GDX=fp8` on vendor FA fp8 KV pages from a Project Gutenberg prefill (`kv_source=vendor_fa_pages`). At T=8192: Baseline KV 0.50 GiB, Isiro KV 0.39 GiB; save 0.11 GiB (21.7%). Bottom panel adds loaded weights (Baseline 8.51 GiB, Isiro 7.93 GiB): at T=8192, Baseline 9.01 GiB vs Isiro 8.32 GiB (weights + KV).
 
 Figure. Weights and KV vs 1-user context.
 

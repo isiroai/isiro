@@ -1046,6 +1046,14 @@ def write_report(run_dir: Path, output: Path) -> Path:
             import shutil as _shutil
 
             gdx_doc = load_json(gdx_curve)
+            _gdx_alph = str(gdx_doc.get("alphabet") or "").strip().lower()
+            if _gdx_alph in ("fp8", "fp8_e4m3", "fp4", "nvfp4", "e2m1"):
+                if str(gdx_doc.get("kv_source") or "") != "vendor_fa_pages":
+                    raise RuntimeError(
+                        "gdx_kv_bytes_curve.json alphabet="
+                        f"{_gdx_alph!r} requires kv_source=vendor_fa_pages "
+                        "(vendor FA pages; refuse bf16-stand-in curves at publish)"
+                    )
             dest_png = output.parent / "kv-bytes-vs-context.png"
             # Re-render when summary has weight bytes so the 2x1 panel stays current.
             try:

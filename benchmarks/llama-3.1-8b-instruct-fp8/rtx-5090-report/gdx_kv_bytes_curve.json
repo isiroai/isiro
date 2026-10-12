@@ -6,11 +6,13 @@
   "fa_twin_mode": "full_sequence",
   "head_dim": 128,
   "isiro_weight_bytes": 8514772664,
+  "kv_cache_dtype": "fp8",
   "kv_heads": 8,
   "kv_precision": "fp8",
+  "kv_source": "vendor_fa_pages",
   "layers": 32,
   "live_window": 512,
-  "model_dir": "Llama-3.1-8B-Instruct",
+  "model_dir": "Llama-3.1-8B-Instruct-FP8",
   "n_full_layers": 32,
   "n_sliding_layers": 0,
   "ok": true,
@@ -28,42 +30,42 @@
       "T": 1024,
       "cold_t": 16384,
       "fa_twin_nbytes": 67108864,
-      "gdx_cold_nbytes": 11098205,
-      "gdx_total_nbytes": 44652637,
-      "payload_bpv": 2.6460182666778564,
-      "save_vs_fa": 0.33462385833263397
+      "gdx_cold_nbytes": 29591095,
+      "gdx_total_nbytes": 63145527,
+      "payload_bpv": 7.055066823959351,
+      "save_vs_fa": 0.05905832350254059
     },
     {
       "T": 2048,
       "cold_t": 49152,
       "fa_twin_nbytes": 134217728,
-      "gdx_cold_nbytes": 31481235,
-      "gdx_total_nbytes": 65035667,
-      "payload_bpv": 2.5019037723541246,
-      "save_vs_fa": 0.5154465213418007
+      "gdx_cold_nbytes": 81076596,
+      "gdx_total_nbytes": 114631028,
+      "payload_bpv": 6.4433889389038095,
+      "save_vs_fa": 0.14593228697776794
     },
     {
       "T": 4096,
       "cold_t": 114688,
       "fa_twin_nbytes": 268435456,
-      "gdx_cold_nbytes": 71835836,
-      "gdx_total_nbytes": 105390268,
-      "payload_bpv": 2.446713992527554,
-      "save_vs_fa": 0.6073906570672989
+      "gdx_cold_nbytes": 182954750,
+      "gdx_total_nbytes": 216509182,
+      "payload_bpv": 6.231401647840228,
+      "save_vs_fa": 0.19344044476747513
     },
     {
       "T": 8192,
       "cold_t": 245760,
       "fa_twin_nbytes": 536870912,
-      "gdx_cold_nbytes": 152801849,
-      "gdx_total_nbytes": 186356281,
-      "payload_bpv": 2.4287199815114344,
-      "save_vs_fa": 0.6528843771666288
+      "gdx_cold_nbytes": 386690859,
+      "gdx_total_nbytes": 420245291,
+      "payload_bpv": 6.146285676956176,
+      "save_vs_fa": 0.21723214723169804
     }
   ],
   "schema": "isiro-benchmark-gdx-kv-bytes-curve-v3",
   "sliding_window": null,
-  "source": "real_model_kv",
-  "text": "pride_and_prejudice.txt",
+  "source": "vendor_fa_pages",
+  "text": "gutenberg_1342",
   "weight_precision": "fp8"
 }

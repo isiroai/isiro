@@ -2,9 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Plot cold GDX KV bytes vs FA twin across context length T.
 
-Uses real model KV from a real token stream (Project Gutenberg text).
-One forward at max T; each T slices that cache. Hot window stays FA; cold
-prefix is GDX o1. Writes PNG + JSON for the public report.
+Uses real KV from a real token stream (Project Gutenberg text). Hot window
+stays FA; cold prefix is GDX o1. Writes PNG + JSON for the public report.
+
+KV sources (fail-closed):
+- ``bf16`` alphabet: HF forward on a dense/bf16-capable weight tree (real bf16
+  bit patterns; matches product bf16 deposit bitcast).
+- ``fp8`` / ``fp4`` alphabets: vendor FA page bytes from
+  ``gdx_kv_curve_vendor_pages.py`` (same ``kv_cache_dtype`` as serve). Product
+  GDX compresses those pages only; there is no bf16→e4m3/e2m1 cast.
 
 FA twin and GDX cold lengths follow vendor layer caps from config
 (``layer_types`` + ``sliding_window``): sliding layers use
@@ -173,6 +179,18 @@ def _load_real_text(*, text_file: Path | None, cache_dir: Path) -> str:
     return text
 
 
+def _require_uint8_codes(codes, *, where: str):
+    """Fail-closed: fp8/fp4 pack path accepts vendor uint8 codes only."""
+    import numpy as np
+
+    arr = np.asarray(codes)
+    if arr.dtype != np.uint8:
+        raise TypeError(
+            f"{where}: expected vendor uint8 FA codes, got dtype={arr.dtype}"
+        )
+    return np.ascontiguousarray(arr)
+
+
 def _pack_codes_nbytes(alphabet: str, codes) -> tuple[int, float]:
     """Pack one [1,T,H,D] code stack → (packed_nbytes, payload_bpv)."""
     import numpy as np
@@ -193,7 +211,7 @@ def _pack_codes_nbytes(alphabet: str, codes) -> tuple[int, float]:
             encode_gdx_e4m3_msb_o1,
         )
 
-        u8 = np.ascontiguousarray(codes, dtype=np.uint8)
+        u8 = _require_uint8_codes(codes, where="pack_fp8")
         ra = encode_gdx_e4m3_msb_o1(u8)
         n = int(ra.n_values)
         packed = int(ra.streams.nbytes + ra.offsets.nbytes + ra.freq_blob.nbytes)
@@ -204,7 +222,7 @@ def _pack_codes_nbytes(alphabet: str, codes) -> tuple[int, float]:
             encode_gdx_e2m1_o1,
         )
 
-        u8 = np.ascontiguousarray(codes, dtype=np.uint8)
+        u8 = _require_uint8_codes(codes, where="pack_fp4")
         ra = encode_gdx_e2m1_o1(u8)
         n = int(ra.n_values)
         packed = int(ra.streams.nbytes + ra.offsets.nbytes + ra.freq_blob.nbytes)
@@ -214,8 +232,7 @@ def _pack_codes_nbytes(alphabet: str, codes) -> tuple[int, float]:
 
 
 def _kv_layer_to_lthd(k_or_v) -> Any:
-    """HF cache [B,H,T,D] → numpy [1,T,H,D] uint16 (bf16 bits) or uint8."""
-    import numpy as np
+    """HF cache [B,H,T,D] → numpy [1,T,H,D] uint16 (bf16 bits)."""
     import torch
 
     t = k_or_v.detach()
@@ -229,29 +246,219 @@ def _kv_layer_to_lthd(k_or_v) -> Any:
     if t.dtype == torch.float16:
         u16 = t.to(torch.bfloat16).view(torch.uint16).cpu().numpy()
         return u16[:1]
-    if t.dtype == torch.uint8:
-        return t.cpu().numpy()[:1]
-    u16 = t.to(torch.bfloat16).view(torch.uint16).cpu().numpy()
-    return u16[:1]
+    raise RuntimeError(
+        f"bf16 curve fail-closed: expected bf16/fp16 HF KV, got dtype={t.dtype}"
+    )
 
 
-def _codes_for_alphabet(page_lthd, alphabet: str):
-    """Map bf16-bit page to the deposit alphabet codes."""
+def _gate_curve_points(
+    points: list[dict[str, Any]],
+    *,
+    fa_bpv: float,
+) -> tuple[bool, str | None]:
+    cold_pts = [p for p in points if int(p["cold_t"]) > 0]
+    if not cold_pts:
+        return False, "GDX cold bytes curve has no cold-T points"
+    last = cold_pts[-1]
+    if float(last["save_vs_fa"]) <= 0.0:
+        return False, "GDX cold+hot bytes did not beat FA twin at max T"
+    if float(last.get("payload_bpv") or fa_bpv) >= float(fa_bpv):
+        return False, (
+            "GDX payload bpv at max T did not beat FA twin "
+            f"({last.get('payload_bpv')} >= {fa_bpv})"
+        )
+    if len(cold_pts) >= 2:
+        first = cold_pts[0]
+        t_ratio = float(last["cold_t"]) / float(max(int(first["cold_t"]), 1))
+        b_ratio = float(last["gdx_cold_nbytes"]) / float(
+            max(int(first["gdx_cold_nbytes"]), 1)
+        )
+        if t_ratio >= 4.0 and b_ratio < 2.0:
+            return False, (
+                "GDX cold nbytes did not grow with T "
+                f"(cold_t x{t_ratio:.1f}, bytes x{b_ratio:.2f})"
+            )
+    return True, None
+
+
+def measure_curve_from_vendor_pages(
+    alphabet: str,
+    *,
+    tokens: list[int],
+    vendor_pages: str | Path,
+    model_dir: str | Path | None = None,
+    live_window: int = _DEFAULT_W,
+    kv_cache_dtype: str = "",
+) -> dict[str, Any]:
+    """Curve from vendor FA page dump (fp8/fp4 SSOT)."""
     import numpy as np
 
+    err = _ensure_runtime_import()
+    if err is not None:
+        return {"schema": SCHEMA, "ok": False, "error": err, "points": []}
     a = alphabet.strip().lower()
-    if a in ("bf16", "bfloat16"):
-        return page_lthd
-    if a in ("fp8", "fp8_e4m3"):
-        # Real vendor path stores e4m3; for the curve, take the high byte of
-        # the bf16 word as a stand-in code plane (not a second silent quant
-        # on the serve path; measurement-only).
-        u = np.ascontiguousarray(page_lthd, dtype=np.uint16)
-        return ((u.astype(np.uint32) >> 8) & 0xFF).astype(np.uint8)
-    if a in ("fp4", "nvfp4", "e2m1"):
-        u = np.ascontiguousarray(page_lthd, dtype=np.uint16)
-        return ((u.astype(np.uint32) >> 12) & 0xF).astype(np.uint8)
-    raise ValueError(f"unsupported alphabet {alphabet!r}")
+    if a not in ("fp8", "fp8_e4m3", "fp4", "nvfp4", "e2m1"):
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"vendor pages require fp8/fp4 alphabet, got {alphabet!r}",
+            "points": [],
+        }
+    path = Path(vendor_pages)
+    if not path.is_file():
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"vendor pages missing: {path}",
+            "points": [],
+        }
+    try:
+        blob = np.load(path, allow_pickle=False)
+        k_all = np.asarray(blob["k"])
+        v_all = np.asarray(blob["v"])
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"vendor pages load failed: {exc}",
+            "points": [],
+        }
+    if k_all.dtype != np.uint8 or v_all.dtype != np.uint8:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": (
+                "vendor pages fail-closed: expected uint8 FA codes, "
+                f"got k={k_all.dtype} v={v_all.dtype}"
+            ),
+            "points": [],
+        }
+    if k_all.ndim != 4 or v_all.ndim != 4 or k_all.shape != v_all.shape:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"vendor pages shape invalid k={k_all.shape} v={v_all.shape}",
+            "points": [],
+        }
+    n_layers, max_t_pages, kv_heads, head_dim = (int(x) for x in k_all.shape)
+    tok_list = sorted({int(t) for t in tokens if int(t) > 0})
+    if not tok_list:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": "no positive token lengths",
+            "points": [],
+        }
+    if int(tok_list[-1]) > max_t_pages:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": (
+                f"tokens max {tok_list[-1]} exceeds vendor pages T={max_t_pages}"
+            ),
+            "points": [],
+        }
+    model_path = Path(model_dir) if model_dir else path.parent
+    layer_caps, cap_meta = _layer_caps_from_config(model_path)
+    if len(layer_caps) < n_layers:
+        layer_caps = list(layer_caps) + [None] * (n_layers - len(layer_caps))
+    elif len(layer_caps) > n_layers:
+        layer_caps = layer_caps[:n_layers]
+    fa_bpv = _fa_bpv(a)
+    points: list[dict[str, Any]] = []
+    for T in tok_list:
+        fa_hot = 0
+        fa_cold = 0
+        gdx_cold = 0
+        cold_tokens = 0
+        bpv_acc = 0.0
+        n_pack = 0
+        for li in range(n_layers):
+            cap = layer_caps[li] if li < len(layer_caps) else None
+            eff_t = _vendor_eff_t(int(T), cap)
+            if eff_t < 1:
+                continue
+            # Vendor dump is a full-sequence prefix; sliding layers keep the
+            # last eff_t tokens of that prefix (same as HF slice path).
+            t_end = int(T)
+            t_start = t_end - eff_t
+            k_vis = k_all[li, t_start:t_end, :, :]
+            v_vis = v_all[li, t_start:t_end, :, :]
+            hot_t = min(eff_t, int(live_window))
+            cold_t_layer = max(0, eff_t - int(live_window))
+            fa_hot += _layer_fa_nbytes(
+                eff_t=hot_t, kv_heads=kv_heads, head_dim=head_dim, fa_bpv=fa_bpv
+            )
+            fa_cold += _layer_fa_nbytes(
+                eff_t=cold_t_layer,
+                kv_heads=kv_heads,
+                head_dim=head_dim,
+                fa_bpv=fa_bpv,
+            )
+            cold_tokens += int(cold_t_layer)
+            if cold_t_layer < 1:
+                continue
+            for page in (k_vis[:cold_t_layer], v_vis[:cold_t_layer]):
+                codes = _require_uint8_codes(
+                    page.reshape(1, cold_t_layer, kv_heads, head_dim),
+                    where="vendor_page",
+                )
+                packed, bpv = _pack_codes_nbytes(a, codes)
+                gdx_cold += int(packed)
+                bpv_acc += float(bpv)
+                n_pack += 1
+        fa_all = int(fa_cold + fa_hot)
+        gdx_total = int(gdx_cold + fa_hot)
+        if cold_tokens < 1:
+            points.append(
+                {
+                    "T": int(T),
+                    "cold_t": 0,
+                    "fa_twin_nbytes": fa_all,
+                    "gdx_cold_nbytes": 0,
+                    "gdx_total_nbytes": fa_all,
+                    "save_vs_fa": 0.0,
+                    "payload_bpv": None,
+                }
+            )
+            continue
+        save = 1.0 - (float(gdx_total) / float(max(fa_all, 1)))
+        points.append(
+            {
+                "T": int(T),
+                "cold_t": int(cold_tokens),
+                "fa_twin_nbytes": int(fa_all),
+                "gdx_cold_nbytes": int(gdx_cold),
+                "gdx_total_nbytes": int(gdx_total),
+                "save_vs_fa": float(save),
+                "payload_bpv": float(bpv_acc / max(n_pack, 1)),
+            }
+        )
+    ok, err_msg = _gate_curve_points(points, fa_bpv=fa_bpv)
+    alphabet_out = "fp8" if a in ("fp8_e4m3",) else (
+        "fp4" if a in ("nvfp4", "e2m1") else a
+    )
+    return {
+        "schema": SCHEMA,
+        "ok": ok,
+        "source": "vendor_fa_pages",
+        "kv_source": "vendor_fa_pages",
+        "kv_cache_dtype": str(kv_cache_dtype or "").strip() or None,
+        "text": "gutenberg_1342",
+        "model_dir": model_path.name if model_path.is_dir() else path.stem,
+        "alphabet": alphabet_out,
+        "fa_bpv": fa_bpv,
+        "live_window": int(live_window),
+        "layers": int(n_layers),
+        "kv_heads": int(kv_heads),
+        "head_dim": int(head_dim),
+        "fa_twin_mode": cap_meta.get("fa_twin_mode"),
+        "sliding_window": cap_meta.get("sliding_window"),
+        "n_sliding_layers": cap_meta.get("n_sliding"),
+        "n_full_layers": cap_meta.get("n_full"),
+        "points": points,
+        "error": err_msg,
+    }
 
 
 def measure_curve(
@@ -263,7 +470,18 @@ def measure_curve(
     live_window: int = _DEFAULT_W,
     cache_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Real-KV curve: one model forward, slice per T, pack cold prefix."""
+    """Real-KV curve (bf16 alphabet): one HF forward, slice per T, pack cold."""
+    a0 = alphabet.strip().lower()
+    if a0 in ("fp8", "fp8_e4m3", "fp4", "nvfp4", "e2m1"):
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": (
+                f"alphabet {alphabet!r} requires --vendor-pages "
+                "(vendor FA e4m3/nvfp4 storage; no bf16 cast)"
+            ),
+            "points": [],
+        }
     err = _ensure_runtime_import()
     if err is not None:
         return {"schema": SCHEMA, "ok": False, "error": err, "points": []}
@@ -441,8 +659,7 @@ def measure_curve(
             k_page = _kv_layer_to_lthd(k_vis[:, :, :cold_t_layer, :])
             v_page = _kv_layer_to_lthd(v_vis[:, :, :cold_t_layer, :])
             for page in (k_page, v_page):
-                codes = _codes_for_alphabet(page, a)
-                packed, bpv = _pack_codes_nbytes(a, codes)
+                packed, bpv = _pack_codes_nbytes(a, page)
                 gdx_cold += int(packed)
                 bpv_acc += float(bpv)
                 n_pack += 1
@@ -477,39 +694,12 @@ def measure_curve(
     del pkv, layers_kv, ids
     torch.cuda.empty_cache()
 
-    cold_pts = [p for p in points if int(p["cold_t"]) > 0]
-    err_msg: str | None = None
-    ok = False
-    if not cold_pts:
-        err_msg = "GDX cold bytes curve has no cold-T points"
-    else:
-        last = cold_pts[-1]
-        if float(last["save_vs_fa"]) <= 0.0:
-            err_msg = "GDX cold+hot bytes did not beat FA twin at max T"
-        elif float(last.get("payload_bpv") or fa_bpv) >= float(fa_bpv):
-            err_msg = (
-                "GDX payload bpv at max T did not beat FA twin "
-                f"({last.get('payload_bpv')} >= {fa_bpv})"
-            )
-        elif len(cold_pts) >= 2:
-            first = cold_pts[0]
-            t_ratio = float(last["cold_t"]) / float(max(int(first["cold_t"]), 1))
-            b_ratio = float(last["gdx_cold_nbytes"]) / float(
-                max(int(first["gdx_cold_nbytes"]), 1)
-            )
-            if t_ratio >= 4.0 and b_ratio < 2.0:
-                err_msg = (
-                    "GDX cold nbytes did not grow with T "
-                    f"(cold_t x{t_ratio:.1f}, bytes x{b_ratio:.2f})"
-                )
-            else:
-                ok = True
-        else:
-            ok = True
+    ok, err_msg = _gate_curve_points(points, fa_bpv=fa_bpv)
     return {
         "schema": SCHEMA,
         "ok": ok,
         "source": "real_model_kv",
+        "kv_source": "hf_bf16_kv",
         # Basename only: public tree must not record private checkout paths.
         "text": (
             "gutenberg_1342"
@@ -739,22 +929,58 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="KV precision for the figure tagline (default: --alphabet)",
     )
+    parser.add_argument(
+        "--vendor-pages",
+        type=Path,
+        default=None,
+        help="npz from gdx_kv_curve_vendor_pages.py (required for fp8/fp4)",
+    )
+    parser.add_argument(
+        "--kv-cache-dtype",
+        default=os.environ.get("SERVE_KV_CACHE_DTYPE") or "",
+        help="Recorded vendor kv_cache_dtype (fp8 / nvfp4)",
+    )
     args = parser.parse_args(argv)
     tokens = [int(x) for x in str(args.tokens).split(",") if x.strip()]
-    if not args.model_dir or not Path(args.model_dir).is_dir():
-        print(
-            "gdx_kv_bytes_curve: FAIL error=--model-dir required (real KV)",
-            file=sys.stderr,
+    alphabet = str(args.alphabet)
+    a_norm = alphabet.strip().lower()
+    needs_vendor = a_norm in ("fp8", "fp8_e4m3", "fp4", "nvfp4", "e2m1")
+    if needs_vendor:
+        if args.vendor_pages is None or not Path(args.vendor_pages).is_file():
+            print(
+                "gdx_kv_bytes_curve: FAIL error=--vendor-pages required for "
+                f"alphabet={alphabet!r} (vendor FA pages; no bf16 cast)",
+                file=sys.stderr,
+            )
+            return 2
+        model_for_caps = (
+            Path(args.model_dir)
+            if args.model_dir and Path(args.model_dir).is_dir()
+            else Path(args.vendor_pages).parent
         )
-        return 2
-    doc = measure_curve(
-        str(args.alphabet),
-        tokens=tokens,
-        model_dir=Path(args.model_dir),
-        text_file=args.text_file,
-        live_window=int(args.live_window),
-        cache_dir=args.out_json.parent / ".gdx_kv_curve_cache",
-    )
+        doc = measure_curve_from_vendor_pages(
+            alphabet,
+            tokens=tokens,
+            vendor_pages=Path(args.vendor_pages),
+            model_dir=model_for_caps,
+            live_window=int(args.live_window),
+            kv_cache_dtype=str(args.kv_cache_dtype or ""),
+        )
+    else:
+        if not args.model_dir or not Path(args.model_dir).is_dir():
+            print(
+                "gdx_kv_bytes_curve: FAIL error=--model-dir required (real KV)",
+                file=sys.stderr,
+            )
+            return 2
+        doc = measure_curve(
+            alphabet,
+            tokens=tokens,
+            model_dir=Path(args.model_dir),
+            text_file=args.text_file,
+            live_window=int(args.live_window),
+            cache_dir=args.out_json.parent / ".gdx_kv_curve_cache",
+        )
     b_w = int(args.baseline_weight_bytes or 0)
     t_w = int(args.isiro_weight_bytes or 0)
     if args.summary_json is not None and args.summary_json.is_file():

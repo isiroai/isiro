@@ -69,11 +69,15 @@ Single-request latency: `SERVE_MAX_NUM_SEQS=1` and `BENCH_MAX_CONCURRENCY=1` (or
 
 The report includes needle-in-a-haystack (fact retrieval by context length) and
 `vllm bench serve` (tok/s, ITL). Plot deps: `benchmarks/requirements-plot.txt`.
-GDX cold meters (host CUDA, not the vLLM image): pinned in
-`benchmarks/requirements-gdx-meters.txt`; the harness runs
-`scripts/ensure_gdx_meter_env.py` at start (managed venv
+GDX cold meters: bitexact + bf16 curve pack on host CUDA (pinned in
+`benchmarks/requirements-gdx-meters.txt`; harness runs
+`scripts/ensure_gdx_meter_env.py` at start: managed venv
 `~/.isiro/bench-venv`, override with `ISIRO_BENCH_PYTHON` /
-`ISIRO_BENCH_VENV` / `ISIRO_BENCH_TORCH_INDEX`).
+`ISIRO_BENCH_VENV` / `ISIRO_BENCH_TORCH_INDEX`). For `ISIRO_BENCH_GDX=fp8`
+or `fp4`, the KV-bytes curve captures vendor FA page bytes inside
+`VLLM_IMAGE` (`scripts/gdx_kv_curve_vendor_pages.py`, same
+`SERVE_KV_CACHE_DTYPE` as serve) then packs on the host. There is no
+bf16→e4m3 cast; Hub FP8 baselines do not need a bf16 twin for that curve.
 
 Harness writes a timestamped report directory (gitignored):
 
