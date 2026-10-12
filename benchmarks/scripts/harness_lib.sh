@@ -246,6 +246,37 @@ SKIP_BASELINE=0
 if _bench_env_truthy "${ISIRO_BENCH_SKIP_VERIFY:-}"; then SKIP_VERIFY=1; fi
 if _bench_env_truthy "${ISIRO_BENCH_SKIP_GDX_METERS:-}"; then SKIP_GDX_METERS=1; fi
 if _bench_env_truthy "${ISIRO_BENCH_SKIP_BASELINE:-}"; then SKIP_BASELINE=1; fi
+
+# GDX cold meters use host Python (serve stays in pinned VLLM_IMAGE). Remotes
+# drift on transformers/kernels; bootstrap a managed venv + fail-closed
+# preflight before verify/serve so a missing kernels pin cannot burn a run.
+if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
+  echo "gdx_meter_env: ensuring pinned host meter python" >&2
+  _gdx_ensure_args=()
+  if [[ -n "${ISIRO_BENCH_PYTHON:-}" && -x "${ISIRO_BENCH_PYTHON}" ]]; then
+    _gdx_ensure_args+=(--python "${ISIRO_BENCH_PYTHON}")
+  fi
+  if [[ -n "${ISIRO_BENCH_VENV:-}" ]]; then
+    _gdx_ensure_args+=(--venv "${ISIRO_BENCH_VENV}")
+  fi
+  if [[ -n "${ISIRO_BENCH_TORCH_INDEX:-}" ]]; then
+    _gdx_ensure_args+=(--torch-index-url "${ISIRO_BENCH_TORCH_INDEX}")
+  fi
+  ISIRO_BENCH_PYTHON="$(
+    python3 "${BENCH_ROOT}/scripts/ensure_gdx_meter_env.py" \
+      --requirements "${BENCH_ROOT}/requirements-gdx-meters.txt" \
+      --print-python \
+      "${_gdx_ensure_args[@]}"
+  )" || {
+    echo "gdx_meter_env: FAIL (fix host meter deps before remeter)" >&2
+    echo "  pin file: ${BENCH_ROOT}/requirements-gdx-meters.txt" >&2
+    echo "  managed venv: \${ISIRO_BENCH_VENV:-~/.isiro/bench-venv}" >&2
+    exit 2
+  }
+  export ISIRO_BENCH_PYTHON
+  echo "  ISIRO_BENCH_PYTHON = ${ISIRO_BENCH_PYTHON}" >&2
+  unset _gdx_ensure_args
+fi
 # PROFILES / BASELINE_REUSE are printed after counts resolve.
 
 # Matched A/B requires these knobs; refuse silent drift.
@@ -788,27 +819,10 @@ echo "verify: PASS" >&2
 fi
 
 if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
-  # Cold GDX meters need torch (curve forward). Serve stays on product isiro;
-  # this python is host-only. Prefer ISIRO_BENCH_PYTHON, else checkout .venv
-  # next to ISIRO_CORE_SRC / ISIRO_REPO_SRC, else python3.
-  _gdx_host_python="python3"
-  if [[ -n "${ISIRO_BENCH_PYTHON:-}" && -x "${ISIRO_BENCH_PYTHON}" ]]; then
-    _gdx_host_python="${ISIRO_BENCH_PYTHON}"
-  else
-    for _gdx_hint in "${ISIRO_CORE_SRC:-}" "${ISIRO_REPO_SRC:-}"; do
-      [[ -n "${_gdx_hint}" ]] || continue
-      if [[ -d "${_gdx_hint}/isiro_runtime" || -d "${_gdx_hint}/isiro_encoder" ]]; then
-        _gdx_cand="$(cd "${_gdx_hint}/.." && pwd)/.venv/bin/python"
-      else
-        _gdx_cand="$(cd "${_gdx_hint}" && pwd)/.venv/bin/python"
-      fi
-      if [[ -x "${_gdx_cand}" ]]; then
-        _gdx_host_python="${_gdx_cand}"
-        break
-      fi
-    done
-  fi
-  echo "gdx_kv_bitexact: measuring cold roundtrip (alphabet=${ISIRO_BENCH_GDX})" >&2
+  # Host meter python was preflighted at harness start (ensure_gdx_meter_env).
+  : "${ISIRO_BENCH_PYTHON:?ISIRO_BENCH_PYTHON unset after gdx_meter_env ensure}"
+  _gdx_host_python="${ISIRO_BENCH_PYTHON}"
+  echo "gdx_kv_bitexact: measuring cold roundtrip (alphabet=${ISIRO_BENCH_GDX}; python=${_gdx_host_python})" >&2
   "${_gdx_host_python}" "${BENCH_ROOT}/scripts/gdx_kv_bitexact.py" \
     --alphabet "${ISIRO_BENCH_GDX}" \
     --out "${RUN_DIR}/gdx_kv_bitexact.json"

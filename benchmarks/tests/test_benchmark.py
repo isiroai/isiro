@@ -1910,5 +1910,54 @@ class ResolveFp8BaselineQuantizationTests(unittest.TestCase):
                 resolve_fp8_baseline_quantization(root)
 
 
+class GdxMeterEnvTests(unittest.TestCase):
+    def test_requirements_pin_kernels_band(self) -> None:
+        text = (ROOT / "requirements-gdx-meters.txt").read_text(encoding="utf-8")
+        self.assertIn("kernels>=0.17.0,<0.18.0", text)
+        self.assertIn("transformers", text)
+        self.assertIn("numpy", text)
+
+    def test_harness_calls_ensure_before_meters(self) -> None:
+        src = (SCRIPTS / "harness_lib.sh").read_text(encoding="utf-8")
+        self.assertIn("ensure_gdx_meter_env.py", src)
+        self.assertLess(
+            src.index("gdx_meter_env: ensuring pinned host meter python"),
+            src.index("gdx_kv_bitexact: measuring cold roundtrip"),
+        )
+
+    def test_preflight_fails_closed_without_kernels(self) -> None:
+        from ensure_gdx_meter_env import preflight_python
+
+        # System python3 almost never has the meter stack; must fail closed.
+        report = preflight_python(Path(sys.executable), need_cuda=False)
+        self.assertFalse(report.ok)
+        self.assertTrue(
+            any("kernels" in e for e in report.errors),
+            report.errors,
+        )
+
+    def test_ensure_dry_run_prints_python(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            venv = Path(tmp) / "bench-venv"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "ensure_gdx_meter_env.py"),
+                    "--venv",
+                    str(venv),
+                    "--requirements",
+                    str(ROOT / "requirements-gdx-meters.txt"),
+                    "--dry-run",
+                    "--print-python",
+                    "--allow-no-cuda",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("bin/python", result.stdout.strip())
+
+
 if __name__ == "__main__":
     unittest.main()

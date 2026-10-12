@@ -69,6 +69,11 @@ Single-request latency: `SERVE_MAX_NUM_SEQS=1` and `BENCH_MAX_CONCURRENCY=1` (or
 
 The report includes needle-in-a-haystack (fact retrieval by context length) and
 `vllm bench serve` (tok/s, ITL). Plot deps: `benchmarks/requirements-plot.txt`.
+GDX cold meters (host CUDA, not the vLLM image): pinned in
+`benchmarks/requirements-gdx-meters.txt`; the harness runs
+`scripts/ensure_gdx_meter_env.py` at start (managed venv
+`~/.isiro/bench-venv`, override with `ISIRO_BENCH_PYTHON` /
+`ISIRO_BENCH_VENV` / `ISIRO_BENCH_TORCH_INDEX`).
 
 Harness writes a timestamped report directory (gitignored):
 
