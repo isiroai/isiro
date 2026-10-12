@@ -36,6 +36,7 @@ class GdxVendorPagesCurveTests(unittest.TestCase):
         self.assertIn("no bf16 cast", curve)
         self.assertIn("gdx_kv_curve_vendor_pages.py", harness)
         self.assertIn("--vendor-pages", harness)
+        self.assertIn("vendor_fa_pages_unsupported_reason", harness)
         # fp8/fp4 harness path uses BASELINE_MODEL_DIR, not the bf16 twin override.
         fp8_block_start = harness.index("gdx_kv_curve_vendor_pages")
         fp8_block = harness[fp8_block_start : fp8_block_start + 1200]

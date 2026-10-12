@@ -70,6 +70,44 @@ def _fa_bpv(alphabet: str) -> float:
     return 16.0
 
 
+def _is_packed_fa_layer_type(name: str) -> bool:
+    """Dense / sliding FA only (exclude KDA, Mamba, MLA, sparse)."""
+    s = str(name).lower()
+    if "linear" in s or "mamba" in s or s in ("gdn", "ssm", "kda"):
+        return False
+    if "sparse" in s or "mla" in s:
+        return False
+    if "full" in s or "sliding" in s or s in ("attention", "full_attention"):
+        return True
+    return False
+
+
+def _fa_dump_layer_caps(
+    model_path: Path, layer_caps: list[int | None]
+) -> list[int | None]:
+    """Caps matching a vendor packed-FA page dump (skip KDA/Mamba/MLA/sparse)."""
+    cfg_path = model_path / "config.json"
+    if not cfg_path.is_file():
+        return []
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    tc = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else cfg
+    layer_types = tc.get("layer_types") or cfg.get("layer_types")
+    if not isinstance(layer_types, list) or not layer_types:
+        return []
+    fa_caps: list[int | None] = []
+    for i, lt in enumerate(layer_types):
+        if not _is_packed_fa_layer_type(str(lt)):
+            continue
+        if i < len(layer_caps):
+            fa_caps.append(layer_caps[i])
+        else:
+            fa_caps.append(None)
+    return fa_caps
+
+
 def _layer_caps_from_config(model_path: Path) -> tuple[list[int | None], dict[str, Any]]:
     """Per-layer vendor KV length cap from Hub config.
 
@@ -95,10 +133,6 @@ def _layer_caps_from_config(model_path: Path) -> tuple[list[int | None], dict[st
     if sliding is None:
         sliding = cfg.get("sliding_window")
     n_layers = int(tc.get("num_hidden_layers") or cfg.get("num_hidden_layers") or 0)
-    if not isinstance(layer_types, list) or not layer_types:
-        caps: list[int | None] = [None] * max(n_layers, 0)
-        meta["n_full"] = len(caps)
-        return caps, meta
     sw: int | None
     if isinstance(sliding, (int, float)) and int(sliding) > 0:
         sw = int(sliding)
@@ -106,6 +140,21 @@ def _layer_caps_from_config(model_path: Path) -> tuple[list[int | None], dict[st
         sw = int(sliding[0]) if int(sliding[0]) > 0 else None
     else:
         sw = None
+    if not isinstance(layer_types, list) or not layer_types:
+        # Global sliding_window with no layer_types (e.g. CSA2 Flash): every
+        # layer is window-capped. Dense GQA with no SW keeps full sequence.
+        if sw is not None and n_layers > 0:
+            caps = [sw] * n_layers
+            meta = {
+                "fa_twin_mode": "vendor_layer_caps",
+                "sliding_window": sw,
+                "n_sliding": n_layers,
+                "n_full": 0,
+            }
+            return caps, meta
+        caps = [None] * max(n_layers, 0)
+        meta["n_full"] = len(caps)
+        return caps, meta
     caps = []
     n_slide = 0
     n_full = 0
@@ -360,10 +409,27 @@ def measure_curve_from_vendor_pages(
         }
     model_path = Path(model_dir) if model_dir else path.parent
     layer_caps, cap_meta = _layer_caps_from_config(model_path)
-    if len(layer_caps) < n_layers:
+    # Vendor FA dumps omit Mamba/GDN / linear_attn slabs. Keep only FA-capable
+    # config layers (full / sliding), or fall back to full-sequence per page.
+    fa_caps = _fa_dump_layer_caps(model_path, layer_caps)
+    if len(fa_caps) == n_layers:
+        layer_caps = fa_caps
+        cap_meta = {
+            **cap_meta,
+            "fa_twin_mode": "vendor_fa_pages",
+            "n_full": sum(1 for c in layer_caps if c is None),
+            "n_sliding": sum(1 for c in layer_caps if c is not None),
+        }
+    elif len(layer_caps) < n_layers:
         layer_caps = list(layer_caps) + [None] * (n_layers - len(layer_caps))
     elif len(layer_caps) > n_layers:
-        layer_caps = layer_caps[:n_layers]
+        layer_caps = [None] * n_layers
+        cap_meta = {
+            **cap_meta,
+            "fa_twin_mode": "vendor_fa_pages",
+            "n_full": n_layers,
+            "n_sliding": 0,
+        }
     fa_bpv = _fa_bpv(a)
     points: list[dict[str, Any]] = []
     for T in tok_list:

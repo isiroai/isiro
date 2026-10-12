@@ -853,6 +853,23 @@ if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
       )"
       [[ "${_gdx_curve_max_t}" -ge 512 ]] || _gdx_curve_max_t=8192
       _gdx_vendor_pages="${RUN_DIR}/gdx_vendor_fa_pages.npz"
+      # Fail closed before docker when HF ABI is MLA/sparse/CSA2 (GLM/DeepSeek Flash).
+      _gdx_preflight_err="$(
+        "${_gdx_host_python}" - <<PY
+from pathlib import Path
+import sys
+sys.path.insert(0, "${BENCH_ROOT}/scripts")
+from gdx_kv_curve_vendor_pages import vendor_fa_pages_unsupported_reason
+r = vendor_fa_pages_unsupported_reason(Path("${BASELINE_MODEL_DIR}"))
+if r:
+    print(r)
+    raise SystemExit(2)
+PY
+      )" || {
+        echo "gdx_kv_curve_vendor_pages: FAIL ${_gdx_preflight_err}" >&2
+        echo "gdx_kv_curve_vendor_pages: path_a FA curve only; TIC serve still uses ISIRO_GDX auto-route (unique_c). Skip meters with ISIRO_BENCH_SKIP_GDX_METERS=1 until a unique_c curve exists." >&2
+        exit 2
+      }
       echo "gdx_kv_curve_vendor_pages: capturing FA pages (kv_cache_dtype=${SERVE_KV_CACHE_DTYPE}; image=${VLLM_IMAGE}; model=${BASELINE_MODEL_DIR})" >&2
       _gdx_vendor_mounts=(-v "${BASELINE_MODEL_DIR}:${BASELINE_MODEL_DIR}:ro")
       _gdx_vendor_mounts+=(-v "${BENCH_ROOT}/scripts:${BENCH_ROOT}/scripts:ro")
