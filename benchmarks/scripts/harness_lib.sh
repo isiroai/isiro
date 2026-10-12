@@ -352,7 +352,7 @@ fi
 [[ -d "${TIC_MODEL_DIR}" ]] || { echo "TIC model directory not found" >&2; exit 2; }
 
 # Precision/path guard: refuse mismatched Hub quant configs.
-# FP8: modelopt (hf_quant_config.json) or compressed-tensors (config.json).
+# FP8: modelopt, compressed-tensors, or native Hub quant_method=fp8.
 FP8_BASELINE_QUANT=""
 if [[ "${PRECISION}" == "fp8" ]]; then
   FP8_BASELINE_QUANT="$(
@@ -381,10 +381,14 @@ elif [[ -f "${BASELINE_MODEL_DIR}/config.json" ]]; then
 import json, sys
 doc = json.load(open(sys.argv[1], encoding="utf-8"))
 method = str((doc.get("quantization_config") or {}).get("quant_method") or "").lower()
-raise SystemExit(0 if method in ("compressed-tensors", "compressed_tensors") else 1)
+raise SystemExit(
+    0
+    if method in ("compressed-tensors", "compressed_tensors", "fp8")
+    else 1
+)
 PY
   then
-    echo "PRECISION=bf16 but baseline is compressed-tensors FP8; use PRECISION=fp8 / common.env.fp8" >&2
+    echo "PRECISION=bf16 but baseline is Hub FP8; use PRECISION=fp8 / common.env.fp8" >&2
     exit 2
   fi
 fi

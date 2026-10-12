@@ -42,7 +42,7 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights.
 
 ### KV vs context
 
-`ISIRO_GDX=bf16` on KV from a Project Gutenberg text forward. At T=8192: Baseline KV 3.00 GiB, Isiro KV 0.49 GiB; save 2.51 GiB (83.7%). Bottom panel adds loaded weights (Baseline 12.75 GiB, Isiro 12.09 GiB): at T=8192, Baseline 15.75 GiB vs Isiro 12.58 GiB (weights + KV).
+`ISIRO_GDX=bf16` on KV from a Project Gutenberg text forward. FA twin follows vendor layer caps (40 sliding @1024 + 8 full; per-layer KV heads/dim). At T=8192: Baseline KV 0.44 GiB, Isiro KV 0.36 GiB; save 0.07 GiB (16.9%). Bottom panel adds loaded weights (Baseline 12.75 GiB, Isiro 12.09 GiB): at T=8192, Baseline 13.19 GiB vs Isiro 12.45 GiB (weights + KV).
 
 Figure. Weights and KV vs 1-user context.
 

@@ -11,10 +11,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-ALLOWED_SYSTEM_IDS = ("rtx-5090", "a100", "h100")
+ALLOWED_SYSTEM_IDS = ("rtx-5090", "rtx-pro-6000-blackwell", "a100", "h100")
 GPU_NAME_MAP = (
     ("geforce rtx 5090", "rtx-5090"),
     ("rtx 5090", "rtx-5090"),
+    # Prefer the longer PRO 6000 needle before a bare "rtx" match.
+    ("rtx pro 6000", "rtx-pro-6000-blackwell"),
     ("a100", "a100"),
     ("h100", "h100"),
 )

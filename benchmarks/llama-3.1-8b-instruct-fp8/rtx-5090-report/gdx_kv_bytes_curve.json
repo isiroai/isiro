@@ -1,0 +1,69 @@
+{
+  "alphabet": "fp8",
+  "baseline_weight_bytes": 9137542922,
+  "error": null,
+  "fa_bpv": 8.0,
+  "fa_twin_mode": "full_sequence",
+  "head_dim": 128,
+  "isiro_weight_bytes": 8514772664,
+  "kv_heads": 8,
+  "kv_precision": "fp8",
+  "layers": 32,
+  "live_window": 512,
+  "model_dir": "Llama-3.1-8B-Instruct",
+  "n_full_layers": 32,
+  "n_sliding_layers": 0,
+  "ok": true,
+  "points": [
+    {
+      "T": 512,
+      "cold_t": 0,
+      "fa_twin_nbytes": 33554432,
+      "gdx_cold_nbytes": 0,
+      "gdx_total_nbytes": 33554432,
+      "payload_bpv": null,
+      "save_vs_fa": 0.0
+    },
+    {
+      "T": 1024,
+      "cold_t": 16384,
+      "fa_twin_nbytes": 67108864,
+      "gdx_cold_nbytes": 11098205,
+      "gdx_total_nbytes": 44652637,
+      "payload_bpv": 2.6460182666778564,
+      "save_vs_fa": 0.33462385833263397
+    },
+    {
+      "T": 2048,
+      "cold_t": 49152,
+      "fa_twin_nbytes": 134217728,
+      "gdx_cold_nbytes": 31481235,
+      "gdx_total_nbytes": 65035667,
+      "payload_bpv": 2.5019037723541246,
+      "save_vs_fa": 0.5154465213418007
+    },
+    {
+      "T": 4096,
+      "cold_t": 114688,
+      "fa_twin_nbytes": 268435456,
+      "gdx_cold_nbytes": 71835836,
+      "gdx_total_nbytes": 105390268,
+      "payload_bpv": 2.446713992527554,
+      "save_vs_fa": 0.6073906570672989
+    },
+    {
+      "T": 8192,
+      "cold_t": 245760,
+      "fa_twin_nbytes": 536870912,
+      "gdx_cold_nbytes": 152801849,
+      "gdx_total_nbytes": 186356281,
+      "payload_bpv": 2.4287199815114344,
+      "save_vs_fa": 0.6528843771666288
+    }
+  ],
+  "schema": "isiro-benchmark-gdx-kv-bytes-curve-v3",
+  "sliding_window": null,
+  "source": "real_model_kv",
+  "text": "pride_and_prejudice.txt",
+  "weight_precision": "fp8"
+}

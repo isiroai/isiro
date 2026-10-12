@@ -5,6 +5,11 @@
 Uses real model KV from a real token stream (Project Gutenberg text).
 One forward at max T; each T slices that cache. Hot window stays FA; cold
 prefix is GDX o1. Writes PNG + JSON for the public report.
+
+FA twin and GDX cold lengths follow vendor layer caps from config
+(``layer_types`` + ``sliding_window``): sliding layers use
+``min(T, window)``, full layers use ``T``. That matches vLLM hybrid
+AttentionSpec geometry better than naive ``T * all_layers``.
 """
 
 from __future__ import annotations
@@ -16,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "isiro-benchmark-gdx-kv-bytes-curve-v2"
+SCHEMA = "isiro-benchmark-gdx-kv-bytes-curve-v3"
 
 _DEFAULT_W = 512
 # Public-domain long text (Project Gutenberg #1342). Cached under the out dir.
@@ -59,13 +64,100 @@ def _fa_bpv(alphabet: str) -> float:
     return 16.0
 
 
+def _layer_caps_from_config(model_path: Path) -> tuple[list[int | None], dict[str, Any]]:
+    """Per-layer vendor KV length cap from Hub config.
+
+    ``None`` means full-sequence KV (no sliding cap). An int is the sliding
+    window (vendor keeps at most that many tokens for the layer).
+    """
+    cfg_path = model_path / "config.json"
+    meta: dict[str, Any] = {
+        "fa_twin_mode": "full_sequence",
+        "sliding_window": None,
+        "n_sliding": 0,
+        "n_full": 0,
+    }
+    if not cfg_path.is_file():
+        return [], meta
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [], meta
+    tc = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else cfg
+    layer_types = tc.get("layer_types") or cfg.get("layer_types")
+    sliding = tc.get("sliding_window")
+    if sliding is None:
+        sliding = cfg.get("sliding_window")
+    n_layers = int(tc.get("num_hidden_layers") or cfg.get("num_hidden_layers") or 0)
+    if not isinstance(layer_types, list) or not layer_types:
+        caps: list[int | None] = [None] * max(n_layers, 0)
+        meta["n_full"] = len(caps)
+        return caps, meta
+    sw: int | None
+    if isinstance(sliding, (int, float)) and int(sliding) > 0:
+        sw = int(sliding)
+    elif isinstance(sliding, list) and sliding:
+        sw = int(sliding[0]) if int(sliding[0]) > 0 else None
+    else:
+        sw = None
+    caps = []
+    n_slide = 0
+    n_full = 0
+    for i, lt in enumerate(layer_types):
+        name = str(lt).lower()
+        if sw is not None and "sliding" in name:
+            # Optional per-index window when config lists them.
+            if isinstance(sliding, list) and i < len(sliding) and int(sliding[i]) > 0:
+                caps.append(int(sliding[i]))
+            else:
+                caps.append(sw)
+            n_slide += 1
+        else:
+            caps.append(None)
+            n_full += 1
+    if n_layers > len(caps):
+        caps.extend([None] * (n_layers - len(caps)))
+        n_full += n_layers - len(layer_types)
+    meta = {
+        "fa_twin_mode": "vendor_layer_caps" if n_slide else "full_sequence",
+        "sliding_window": sw,
+        "n_sliding": n_slide,
+        "n_full": n_full,
+    }
+    return caps, meta
+
+
+def _vendor_eff_t(seq_t: int, cap: int | None) -> int:
+    """Tokens a vendor FA layer retains at logical sequence length ``seq_t``."""
+    t = max(0, int(seq_t))
+    if cap is None:
+        return t
+    return min(t, max(0, int(cap)))
+
+
+def _layer_fa_nbytes(
+    *,
+    eff_t: int,
+    kv_heads: int,
+    head_dim: int,
+    fa_bpv: float,
+) -> int:
+    """K+V FA bytes for one layer at ``eff_t`` tokens."""
+    return int((int(eff_t) * 2 * int(kv_heads) * int(head_dim) * float(fa_bpv) + 7) // 8)
+
+
 def _load_real_text(*, text_file: Path | None, cache_dir: Path) -> str:
     """Load a real long document (fixture / cache / Gutenberg download)."""
     if text_file is not None and text_file.is_file():
         return text_file.read_text(encoding="utf-8", errors="replace")
-    fixture = Path(__file__).resolve().parent / "fixtures" / _REAL_TEXT_NAME
-    if fixture.is_file():
-        return fixture.read_text(encoding="utf-8", errors="replace")
+    # Prefer benchmarks/fixtures (repo layout); keep scripts/fixtures as alias.
+    here = Path(__file__).resolve().parent
+    for fixture in (
+        here.parent / "fixtures" / _REAL_TEXT_NAME,
+        here / "fixtures" / _REAL_TEXT_NAME,
+    ):
+        if fixture.is_file():
+            return fixture.read_text(encoding="utf-8", errors="replace")
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / _REAL_TEXT_NAME
     if cached.is_file() and cached.stat().st_size > 10_000:
@@ -297,46 +389,83 @@ def measure_curve(
     head_dim = int(k0.shape[-1])
     fa_bpv = _fa_bpv(alphabet)
     a = alphabet.strip().lower()
+    layer_caps, cap_meta = _layer_caps_from_config(model_path)
+    if len(layer_caps) < n_layers:
+        layer_caps = list(layer_caps) + [None] * (n_layers - len(layer_caps))
+    elif len(layer_caps) > n_layers:
+        layer_caps = layer_caps[:n_layers]
     points: list[dict[str, Any]] = []
     for T in tok_list:
-        cold_t = max(0, int(T) - int(live_window))
-        fa_hot_t = min(int(T), int(live_window))
-        fa_hot = int((fa_hot_t * n_layers * 2 * kv_heads * head_dim * fa_bpv + 7) // 8)
-        if cold_t < 1:
-            points.append(
-                {
-                    "T": int(T),
-                    "cold_t": 0,
-                    "fa_twin_nbytes": fa_hot,
-                    "gdx_cold_nbytes": 0,
-                    "gdx_total_nbytes": fa_hot,
-                    "save_vs_fa": 0.0,
-                    "payload_bpv": None,
-                }
-            )
-            continue
+        fa_hot = 0
+        fa_cold = 0
         gdx_cold = 0
+        cold_tokens = 0
         bpv_acc = 0.0
         n_pack = 0
-        for k_t, v_t in layers_kv:
-            k_page = _kv_layer_to_lthd(k_t[:, :, :cold_t, :])
-            v_page = _kv_layer_to_lthd(v_t[:, :, :cold_t, :])
+        for li, (k_t, v_t) in enumerate(layers_kv):
+            cap = layer_caps[li] if li < len(layer_caps) else None
+            theo_eff = _vendor_eff_t(int(T), cap)
+            cache_t = int(k_t.shape[2])
+            # From a max-T forward: prefer the logical prefix [:T]. Sliding
+            # layers keep the last theo_eff tokens of that prefix; full
+            # layers keep the whole prefix. If HF already windowed the
+            # layer (cache_t < T), fall back to the tail of what remains.
+            if cache_t >= int(T):
+                t_end = int(T)
+                t_start = t_end - theo_eff
+                k_vis = k_t[:, :, t_start:t_end, :]
+                v_vis = v_t[:, :, t_start:t_end, :]
+                eff_t = theo_eff
+            else:
+                eff_t = min(theo_eff, cache_t)
+                if eff_t < 1:
+                    continue
+                k_vis = k_t[:, :, cache_t - eff_t : cache_t, :]
+                v_vis = v_t[:, :, cache_t - eff_t : cache_t, :]
+            if eff_t < 1:
+                continue
+            lh = int(k_vis.shape[1])
+            ld = int(k_vis.shape[-1])
+            hot_t = min(eff_t, int(live_window))
+            cold_t_layer = max(0, eff_t - int(live_window))
+            fa_hot += _layer_fa_nbytes(
+                eff_t=hot_t, kv_heads=lh, head_dim=ld, fa_bpv=fa_bpv
+            )
+            fa_cold += _layer_fa_nbytes(
+                eff_t=cold_t_layer, kv_heads=lh, head_dim=ld, fa_bpv=fa_bpv
+            )
+            cold_tokens += int(cold_t_layer)
+            if cold_t_layer < 1:
+                continue
+            # Cold = older side of the vendor-visible window.
+            k_page = _kv_layer_to_lthd(k_vis[:, :, :cold_t_layer, :])
+            v_page = _kv_layer_to_lthd(v_vis[:, :, :cold_t_layer, :])
             for page in (k_page, v_page):
                 codes = _codes_for_alphabet(page, a)
                 packed, bpv = _pack_codes_nbytes(a, codes)
                 gdx_cold += int(packed)
                 bpv_acc += float(bpv)
                 n_pack += 1
-        fa_cold = int(
-            (cold_t * n_layers * 2 * kv_heads * head_dim * fa_bpv + 7) // 8
-        )
-        fa_all = fa_cold + fa_hot
-        gdx_total = gdx_cold + fa_hot
+        fa_all = int(fa_cold + fa_hot)
+        gdx_total = int(gdx_cold + fa_hot)
+        if cold_tokens < 1:
+            points.append(
+                {
+                    "T": int(T),
+                    "cold_t": 0,
+                    "fa_twin_nbytes": fa_all,
+                    "gdx_cold_nbytes": 0,
+                    "gdx_total_nbytes": fa_all,
+                    "save_vs_fa": 0.0,
+                    "payload_bpv": None,
+                }
+            )
+            continue
         save = 1.0 - (float(gdx_total) / float(max(fa_all, 1)))
         points.append(
             {
                 "T": int(T),
-                "cold_t": int(cold_t),
+                "cold_t": int(cold_tokens),
                 "fa_twin_nbytes": int(fa_all),
                 "gdx_cold_nbytes": int(gdx_cold),
                 "gdx_total_nbytes": int(gdx_total),
@@ -381,8 +510,12 @@ def measure_curve(
         "schema": SCHEMA,
         "ok": ok,
         "source": "real_model_kv",
-        "text": "gutenberg_1342" if text_file is None else str(text_file),
         # Basename only: public tree must not record private checkout paths.
+        "text": (
+            "gutenberg_1342"
+            if text_file is None
+            else Path(text_file).name
+        ),
         "model_dir": model_path.name,
         "alphabet": a if a not in ("fp8_e4m3",) else "fp8",
         "fa_bpv": fa_bpv,
@@ -390,6 +523,10 @@ def measure_curve(
         "layers": int(n_layers),
         "kv_heads": int(kv_heads),
         "head_dim": int(head_dim),
+        "fa_twin_mode": cap_meta.get("fa_twin_mode"),
+        "sliding_window": cap_meta.get("sliding_window"),
+        "n_sliding_layers": cap_meta.get("n_sliding"),
+        "n_full_layers": cap_meta.get("n_full"),
         "points": points,
         "error": err_msg,
     }

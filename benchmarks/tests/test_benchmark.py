@@ -975,6 +975,10 @@ class BenchmarkTests(unittest.TestCase):
     def test_system_id_resolve_and_reject(self) -> None:
         self.assertEqual(resolve_system_id("a100", None), "a100")
         self.assertEqual(resolve_system_id(None, "h100"), "h100")
+        self.assertEqual(
+            resolve_system_id("rtx-pro-6000-blackwell", None),
+            "rtx-pro-6000-blackwell",
+        )
         with self.assertRaises(SystemExit):
             resolve_system_id("mi300", None)
 
@@ -1728,6 +1732,69 @@ class BenchmarkTests(unittest.TestCase):
         md2 = "\n".join(render_story_markdown(doc))
         self.assertIn("Graph 2", md2)
 
+    def test_gdx_kv_layer_caps_from_hybrid_config(self) -> None:
+        from gdx_kv_bytes_curve import (
+            _layer_caps_from_config,
+            _layer_fa_nbytes,
+            _vendor_eff_t,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "text_config": {
+                            "num_hidden_layers": 6,
+                            "sliding_window": 1024,
+                            "layer_types": [
+                                "sliding_attention",
+                                "sliding_attention",
+                                "full_attention",
+                                "sliding_attention",
+                                "sliding_attention",
+                                "full_attention",
+                            ],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            caps, meta = _layer_caps_from_config(root)
+        self.assertEqual(meta.get("fa_twin_mode"), "vendor_layer_caps")
+        self.assertEqual(meta.get("sliding_window"), 1024)
+        self.assertEqual(meta.get("n_sliding"), 4)
+        self.assertEqual(meta.get("n_full"), 2)
+        self.assertEqual(caps, [1024, 1024, None, 1024, 1024, None])
+        self.assertEqual(_vendor_eff_t(8192, 1024), 1024)
+        self.assertEqual(_vendor_eff_t(512, 1024), 512)
+        self.assertEqual(_vendor_eff_t(8192, None), 8192)
+        # Hybrid FA twin at T=8192, bf16, H=8, D=256: 0.8125 GiB for
+        # Gemma-shaped 40 sliding + 8 full scales down here to 6 layers.
+        fa = 0
+        for cap in caps:
+            fa += _layer_fa_nbytes(
+                eff_t=_vendor_eff_t(8192, cap),
+                kv_heads=8,
+                head_dim=256,
+                fa_bpv=16.0,
+            )
+        # 4*1024 + 2*8192 = 20480 token-layers; *2*8*256*2 bytes
+        self.assertEqual(fa, 20480 * 2 * 8 * 256 * 2)
+
+    def test_gdx_kv_layer_caps_full_sequence_without_layer_types(self) -> None:
+        from gdx_kv_bytes_curve import _layer_caps_from_config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text(
+                json.dumps({"num_hidden_layers": 3}),
+                encoding="utf-8",
+            )
+            caps, meta = _layer_caps_from_config(root)
+        self.assertEqual(meta.get("fa_twin_mode"), "full_sequence")
+        self.assertEqual(caps, [None, None, None])
+
     def test_gdx_kv_bytes_curve_cold_grows_with_t(self) -> None:
         import os
         from pathlib import Path
@@ -1780,6 +1847,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertNotIn("gaussian", src.lower())
         self.assertNotIn("_bf16_page", src)
         self.assertIn("real_model_kv", src)
+        self.assertIn("vendor_layer_caps", src)
+        self.assertIn("_layer_caps_from_config", src)
         self.assertIn("Baseline (weights + KV)", src)
         self.assertIn("Isiro (weights + KV)", src)
         self.assertIn("Baseline (KV)", src)
@@ -1816,6 +1885,22 @@ class ResolveFp8BaselineQuantizationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(resolve_fp8_baseline_quantization(root), "modelopt")
+
+    def test_native_hub_fp8_quant_method(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config.json").write_text(
+                json.dumps(
+                    {
+                        "quantization_config": {
+                            "quant_method": "fp8",
+                            "fmt": "e4m3",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(resolve_fp8_baseline_quantization(root), "fp8")
 
     def test_plain_bf16_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
