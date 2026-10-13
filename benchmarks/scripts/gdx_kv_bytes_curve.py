@@ -410,16 +410,29 @@ def measure_curve_from_mla_latent(
             "error": "no positive token lengths",
             "points": [],
         }
-    if int(tok_list[-1]) > max_t_pages:
-        return {
-            "schema": SCHEMA,
-            "ok": False,
-            "error": (
-                f"tokens max {tok_list[-1]} exceeds mla latent T={max_t_pages}"
-            ),
-            "points": [],
-        }
+    # T beyond capture: tile measured latent in capture-sized chunks and sum
+    # packed nbytes (remeter pack without a multi-GB recapture array).
+    tiled = bool(int(tok_list[-1]) > max_t_pages)
     fa_bpv = _fa_bpv(a)
+    pack_len_cache: dict[int, tuple[int, float]] = {}
+
+    def _pack_cold_len(need_t: int) -> tuple[int, float]:
+        need_t = int(need_t)
+        if need_t in pack_len_cache:
+            return pack_len_cache[need_t]
+        gdx = 0
+        bpv_acc = 0.0
+        n_pack = 0
+        for li in range(n_layers):
+            page = lat[li : li + 1, :need_t, None, :]
+            packed, bpv = _pack_codes_nbytes(a, page)
+            gdx += int(packed)
+            bpv_acc += float(bpv)
+            n_pack += 1
+        out = (int(gdx), float(bpv_acc / max(n_pack, 1)))
+        pack_len_cache[need_t] = out
+        return out
+
     points: list[dict[str, Any]] = []
     for T in tok_list:
         hot_t = min(int(T), int(live_window))
@@ -428,15 +441,23 @@ def measure_curve_from_mla_latent(
         fa_all = int(n_layers * int(T) * dim * fa_bpv) // 8
         fa_hot = int(n_layers * hot_t * dim * fa_bpv) // 8
         gdx_cold = 0
-        bpv_acc = 0.0
-        n_pack = 0
+        payload_bpv: float | None = None
         if cold_t > 0:
-            for li in range(n_layers):
-                page = lat[li : li + 1, :cold_t, None, :]  # [1,cold,1,D]
-                packed, bpv = _pack_codes_nbytes(a, page)
-                gdx_cold += int(packed)
-                bpv_acc += float(bpv)
-                n_pack += 1
+            need_t = int(cold_t)
+            if need_t <= max_t_pages:
+                gdx_cold, payload_bpv = _pack_cold_len(need_t)
+            else:
+                n_full, rem = divmod(need_t, max_t_pages)
+                full_nb, full_bpv = _pack_cold_len(max_t_pages)
+                gdx_cold = int(n_full) * int(full_nb)
+                bpv_w = float(full_bpv) * float(n_full) * float(max_t_pages)
+                denom = float(n_full) * float(max_t_pages)
+                if rem > 0:
+                    rem_nb, rem_bpv = _pack_cold_len(rem)
+                    gdx_cold += int(rem_nb)
+                    bpv_w += float(rem_bpv) * float(rem)
+                    denom += float(rem)
+                payload_bpv = float(bpv_w / max(denom, 1.0))
         gdx_total = int(gdx_cold + fa_hot)
         if cold_t < 1:
             points.append(
@@ -460,7 +481,9 @@ def measure_curve_from_mla_latent(
                 "gdx_cold_nbytes": int(gdx_cold),
                 "gdx_total_nbytes": int(gdx_total),
                 "save_vs_fa": float(save),
-                "payload_bpv": float(bpv_acc / max(n_pack, 1)),
+                "payload_bpv": (
+                    None if payload_bpv is None else float(payload_bpv)
+                ),
             }
         )
     ok, err_msg = _gate_curve_points(points, fa_bpv=fa_bpv)
@@ -477,7 +500,11 @@ def measure_curve_from_mla_latent(
         "layers": int(n_layers),
         "kv_heads": 1,
         "head_dim": int(dim),
-        "fa_twin_mode": "mla_latent_full_sequence",
+        "fa_twin_mode": (
+            "mla_latent_tiled_sequence" if tiled else "mla_latent_full_sequence"
+        ),
+        "capture_t": int(max_t_pages),
+        "tiled_beyond_capture": bool(tiled),
         "sliding_window": None,
         "n_sliding_layers": 0,
         "n_full_layers": int(n_layers),
@@ -960,11 +987,15 @@ def render_png(
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
 
     _scripts = str(Path(__file__).resolve().parent)
     if _scripts not in sys.path:
         sys.path.insert(0, _scripts)
     from needle_haystack import figure_tagline
+
+    def _comma_x(val: float, _pos: int) -> str:
+        return f"{int(round(val)):,}"
 
     pts = list(doc.get("points") or [])
     if not pts:
@@ -1005,6 +1036,7 @@ def render_png(
         ax0.set_xlabel("Context tokens T")
         ax0.set_ylabel("KV (GiB)")
         ax0.set_ylim(bottom=0.0)
+        ax0.xaxis.set_major_formatter(FuncFormatter(_comma_x))
         ax0.tick_params(axis="x", labelbottom=True)
         ax0.grid(True, alpha=0.28)
         ax0.legend(frameon=False, loc="upper left")
@@ -1028,6 +1060,7 @@ def render_png(
         ax1.set_xlabel("Context tokens T")
         ax1.set_ylabel("Weights + KV (GiB)")
         ax1.set_ylim(bottom=0.0)
+        ax1.xaxis.set_major_formatter(FuncFormatter(_comma_x))
         ax1.tick_params(axis="x", labelbottom=True)
         ax1.grid(True, alpha=0.28)
         ax1.legend(frameon=False, loc="lower left")
@@ -1055,6 +1088,7 @@ def render_png(
         ax.set_xlabel("Context tokens T")
         ax.set_ylabel("KV (GiB)")
         ax.set_ylim(bottom=0.0)
+        ax.xaxis.set_major_formatter(FuncFormatter(_comma_x))
         ax.grid(True, alpha=0.28)
         ax.legend(frameon=False)
         bottom = 0.14

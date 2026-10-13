@@ -4,8 +4,9 @@
 
 Tooling:
 
-- Ambient twin scrape (`remeter_path_a_vs_vanilla.py`) on vast-glm (graphs-on; no Docker)
-- GDX KV-bytes curve from vendor MLA latent capture (`mla_latent_real_t100k.npz`, T=100000)
+- `vllm bench serve` (tok/s, ITL / TPOT / TTFT percentiles)
+- Ambient twin scrape (`remeter_path_a_vs_vanilla.py`) for NIAH / GDX ledger
+- GDX KV-bytes curve from vendor MLA latent capture (`mla_latent_real_t100k.npz`; T through 1,000,000 via tiled remeter)
 
 Compared:
 
@@ -53,22 +54,20 @@ Reserved pool is vendor admission slots, not GDX-coded cold capacity. Physical v
 Cold o1 slab vs synthetic twin (not nvidia-smi). After attach-ordinal fix, all 11 Full MLA layers deposit.
 
 
-| Metric                 | Value      |
-| ---------------------- | ---------- |
+| Metric                 | Value       |
+| ---------------------- | ----------- |
 | `n_deposit` / hooks    | **11 / 11** |
-| `save_vs_all_fa`       | **0.987**  |
-| `f_cold`               | 1.0        |
-| `slab_nbytes`          | 88976      |
-| `mla_latent_raw_bytes` | 6869632    |
+| `save_vs_all_fa`       | **0.987**   |
+| `f_cold`               | 1.0         |
+| `slab_nbytes`          | 88976       |
+| `mla_latent_raw_bytes` | 6869632     |
 
 
 `save_vs_all_fa = 1 - slab/raw` on deposited cold (W=512 live window stays twin-dense outside this ledger).
 
 ### KV vs context (coded cold)
 
-`ISIRO_GDX=fp8` on vendor MLA latent (`kv_source=vendor_mla_latent`, W=512). Capture T=100000. Hot window amortizes with T; at T=100000: Baseline twin **688.17 MiB**, Isiro total **395.17 MiB**; save **42.6%** (real latent pack rate, not the live ledger 0.987 on the short cold deposit).
-
-Calculated at T=1e6 with the measured cold rate (~0.572 of twin): save **≈42.8%** (asymptote of the curve pack rate). Label: calculated, not remetered.
+`ISIRO_GDX=fp8` on vendor MLA latent (`kv_source=vendor_mla_latent`, W=512). Capture T=100,000; points through T=1,000,000 remeter pack on tiled capture chunks (`fa_twin_mode=mla_latent_tiled_sequence`). At T=1,000,000: Baseline KV **6.88 GiB**, Isiro KV **3.94 GiB**; save **42.8%** (coded cold pack rate). Live ledger 0.987 remains the short deposited-prefix meter, not this full-sequence curve.
 
 Figure. Weights and KV vs 1-user context (tagline: `weights nvfp4 | KV fp8`).
 
@@ -76,27 +75,33 @@ Figure. Weights and KV vs 1-user context (tagline: `weights nvfp4 | KV fp8`).
 
 ## C. Capacity
 
+Concurrent requests are 10 on both sides. Not scaled from KV token capacity.
+
 
 | Metric              | Baseline | Isiro |
 | ------------------- | -------- | ----- |
 | Concurrent requests | 10       | 10    |
 
 
-### Generation (ambient stream scrape, graphs-on)
+### Generation (recall-matched KV, input 32 / output 256)
+
+Tok/s is aggregate system throughput across in-flight requests (`vllm bench serve`, `--temperature 0`, `--max-concurrency 10`, 40 prompts). Per-request decode rate is reflected by ITL/TPOT.
 
 
-| Metric               | Baseline | Isiro     |
-| -------------------- | -------- | --------- |
-| Stream tok/s         | 60.27    | 60.10     |
-| Stream ITL p50 (ms)  | 11.62    | **11.50** |
-| Stream TTFT (ms)     | 130.55   | **111.77** |
+| Metric                    | Baseline                | Isiro                   |
+| ------------------------- | ----------------------- | ----------------------- |
+| Output tok/s              | 451.94                  | **459.79**              |
+| ITL (ms) p50 / p95 / p99  | 19.61 / 23.86 / 27.15   | 21.04 / **21.63** / **22.20** |
+| TPOT (ms) p50 / p95 / p99 | **19.37** / **20.50** / 26.13 | 20.94 / 21.17 / **21.33** |
+| TTFT (ms) p50 / p95 / p99 | 306.44 / 1952.48 / 1952.86 | **230.50** / **325.33** / **325.94** |
 
 
-Isiro stream ITL p50 beats baseline on the matched graphs-on twin. Tok/s is within scrape noise of baseline.
+Isiro wins aggregate output tok/s and TTFT (especially p95/p99 under concurrency). ITL/TPOT p50 are slightly higher than baseline; ITL p95/p99 are tighter.
 
 ## Config
 
 - Baseline model: `/root/models/llm/fp4/GLM-5.3-Flash-NVFP4`
 - TIC model: `/root/models/llm/fp4/GLM-5.3-Flash-NVFP4-TIC` (`serve.yaml` as above)
-- `ISIRO_BENCH_MLA_LATENT_NPZ=/workspace/logs/mla_latent_real_t100k.npz`
-- Artifacts: `isiro_gdx_mla_graphs_scrape.json`, `vanilla_matched_scrape.json`, `gdx_kv_bytes_curve.json`, `kv-bytes-vs-context.png`
+- Bench: `isiro_gdx_bench_serve.json`, `vanilla_matched_bench_serve.json`
+- Curve: `gdx_kv_bytes_curve.json`, `kv-bytes-vs-context.png` (T through 1,000,000)
+- Ledger / NIAH: `isiro_gdx_mla_graphs_scrape.json`, `vanilla_matched_scrape.json`

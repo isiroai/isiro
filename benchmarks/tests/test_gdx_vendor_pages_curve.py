@@ -126,6 +126,32 @@ class GdxVendorPagesCurveTests(unittest.TestCase):
             self.assertGreaterEqual(len(cold), 2)
             self.assertGreater(float(cold[-1]["save_vs_fa"]), 0.0)
 
+    def test_mla_latent_curve_tiles_beyond_capture(self) -> None:
+        from gdx_kv_bytes_curve import measure_curve_from_mla_latent
+
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rng = np.random.default_rng(5)
+            lat = np.zeros((2, 1024, 32), dtype=np.uint8)
+            lat[:, ::17, ::3] = rng.integers(1, 15, size=lat[:, ::17, ::3].shape)
+            npz = root / "mla.npz"
+            np.savez_compressed(npz, g0=lat)
+            doc = measure_curve_from_mla_latent(
+                "fp8",
+                tokens=[512, 2048],
+                mla_latent=npz,
+                live_window=512,
+                kv_cache_dtype="fp8_ds_mla",
+            )
+            if doc.get("error") and "not importable" in str(doc.get("error")):
+                self.skipTest("isiro_runtime not importable for GDX curve")
+            self.assertTrue(doc.get("ok"), doc.get("error"))
+            self.assertTrue(doc.get("tiled_beyond_capture"))
+            self.assertEqual(doc.get("fa_twin_mode"), "mla_latent_tiled_sequence")
+            self.assertEqual(int(doc["points"][-1]["T"]), 2048)
+
 
 if __name__ == "__main__":
     unittest.main()
