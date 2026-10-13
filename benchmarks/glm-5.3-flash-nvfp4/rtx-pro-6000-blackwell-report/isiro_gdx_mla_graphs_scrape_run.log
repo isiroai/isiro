@@ -1,0 +1,20 @@
+{
+  "arm": "gdx",
+  "recipe": "ISIRO_GDX_KV=fp8 ISIRO_GDX_LIVE_WINDOW=512 ISIRO_GDX_FUSED_ATTEND=0 --max-model-len 8192",
+  "long_ms": 369.44290198152885,
+  "short_chat_ttft_ms": 148.82288099033758,
+  "stream_ttft_ms": 134.08738997532055,
+  "stream_itl_p50_ms": 11.502951994771138,
+  "stream_tok_s": 60.09810339377658,
+  "gpu_kv_tokens": null,
+  "long_ok": 0,
+  "niah": {
+    "niah_256_d50": 1.0,
+    "niah_1024_d50": 1.0,
+    "niah_2048_d50": 1.0,
+    "niah_4000_d0": 1.0,
+    "niah_4000_d50": 1.0,
+    "niah_8000_d50": 1.0
+  }
+}
+wrote /workspace/logs/isiro_gdx_mla_graphs_scrape.json
