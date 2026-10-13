@@ -1,0 +1,51 @@
+{
+  "alphabet": "fp8",
+  "error": null,
+  "fa_bpv": 8.0,
+  "fa_twin_mode": "mla_latent_full_sequence",
+  "head_dim": 656,
+  "kv_cache_dtype": "fp8_ds_mla",
+  "kv_heads": 1,
+  "kv_precision": "fp8",
+  "kv_source": "vendor_mla_latent",
+  "layers": 11,
+  "live_window": 512,
+  "model_dir": "logs",
+  "n_full_layers": 11,
+  "n_sliding_layers": 0,
+  "ok": true,
+  "points": [
+    {
+      "T": 512,
+      "cold_t": 0,
+      "fa_twin_nbytes": 3694592,
+      "gdx_cold_nbytes": 0,
+      "gdx_total_nbytes": 3694592,
+      "payload_bpv": null,
+      "save_vs_fa": 0.0
+    },
+    {
+      "T": 1024,
+      "cold_t": 5632,
+      "fa_twin_nbytes": 7389184,
+      "gdx_cold_nbytes": 2956341,
+      "gdx_total_nbytes": 6650933,
+      "payload_bpv": 6.401445139273836,
+      "save_vs_fa": 0.09990967879538526
+    },
+    {
+      "T": 2048,
+      "cold_t": 16896,
+      "fa_twin_nbytes": 14778368,
+      "gdx_cold_nbytes": 7729364,
+      "gdx_total_nbytes": 11423956,
+      "payload_bpv": 5.578866985402808,
+      "save_vs_fa": 0.22698122011848665
+    }
+  ],
+  "schema": "isiro-benchmark-gdx-kv-bytes-curve-v3",
+  "sliding_window": null,
+  "source": "vendor_mla_latent",
+  "text": "mla_latent_real.npz",
+  "weight_precision": "fp8"
+}

@@ -330,6 +330,163 @@ def _gate_curve_points(
     return True, None
 
 
+def measure_curve_from_mla_latent(
+    alphabet: str,
+    *,
+    tokens: list[int],
+    mla_latent: str | Path,
+    live_window: int = _DEFAULT_W,
+    kv_cache_dtype: str = "",
+) -> dict[str, Any]:
+    """Curve from vendor MLA latent dump (path_a_mla / o1-mla-latent).
+
+    NPZ key ``g0`` or ``latent``: uint8 ``[n_layers, T, D]`` (or
+    ``[n_layers, T, 1, D]``). Hot window stays uncompressed twin; cold
+    prefix is o1-packed per layer (single plane, not K∥V).
+    """
+    import numpy as np
+
+    err = _ensure_runtime_import()
+    if err is not None:
+        return {"schema": SCHEMA, "ok": False, "error": err, "points": []}
+    a = alphabet.strip().lower()
+    if a not in ("fp8", "fp8_e4m3"):
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"mla latent curve requires fp8 alphabet, got {alphabet!r}",
+            "points": [],
+        }
+    path = Path(mla_latent)
+    if not path.is_file():
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"mla latent missing: {path}",
+            "points": [],
+        }
+    try:
+        blob = np.load(path, allow_pickle=False)
+        if "g0" in blob.files:
+            lat = np.asarray(blob["g0"])
+        elif "latent" in blob.files:
+            lat = np.asarray(blob["latent"])
+        else:
+            return {
+                "schema": SCHEMA,
+                "ok": False,
+                "error": f"mla latent npz needs g0 or latent; keys={blob.files}",
+                "points": [],
+            }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"mla latent load failed: {exc}",
+            "points": [],
+        }
+    if lat.dtype != np.uint8:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"mla latent fail-closed: expected uint8, got {lat.dtype}",
+            "points": [],
+        }
+    if lat.ndim == 4 and int(lat.shape[2]) == 1:
+        lat = lat[:, :, 0, :]
+    if lat.ndim != 3:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": f"mla latent shape invalid {lat.shape} (want [L,T,D])",
+            "points": [],
+        }
+    n_layers, max_t_pages, dim = (int(x) for x in lat.shape)
+    tok_list = sorted({int(t) for t in tokens if int(t) > 0})
+    if not tok_list:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": "no positive token lengths",
+            "points": [],
+        }
+    if int(tok_list[-1]) > max_t_pages:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": (
+                f"tokens max {tok_list[-1]} exceeds mla latent T={max_t_pages}"
+            ),
+            "points": [],
+        }
+    fa_bpv = _fa_bpv(a)
+    points: list[dict[str, Any]] = []
+    for T in tok_list:
+        hot_t = min(int(T), int(live_window))
+        cold_t = max(0, int(T) - int(live_window))
+        # Twin = full latent residency (1 byte/value at fa_bpv=8).
+        fa_all = int(n_layers * int(T) * dim * fa_bpv) // 8
+        fa_hot = int(n_layers * hot_t * dim * fa_bpv) // 8
+        gdx_cold = 0
+        bpv_acc = 0.0
+        n_pack = 0
+        if cold_t > 0:
+            for li in range(n_layers):
+                page = lat[li : li + 1, :cold_t, None, :]  # [1,cold,1,D]
+                packed, bpv = _pack_codes_nbytes(a, page)
+                gdx_cold += int(packed)
+                bpv_acc += float(bpv)
+                n_pack += 1
+        gdx_total = int(gdx_cold + fa_hot)
+        if cold_t < 1:
+            points.append(
+                {
+                    "T": int(T),
+                    "cold_t": 0,
+                    "fa_twin_nbytes": fa_all,
+                    "gdx_cold_nbytes": 0,
+                    "gdx_total_nbytes": fa_all,
+                    "save_vs_fa": 0.0,
+                    "payload_bpv": None,
+                }
+            )
+            continue
+        save = 1.0 - (float(gdx_total) / float(max(fa_all, 1)))
+        points.append(
+            {
+                "T": int(T),
+                "cold_t": int(cold_t * n_layers),
+                "fa_twin_nbytes": int(fa_all),
+                "gdx_cold_nbytes": int(gdx_cold),
+                "gdx_total_nbytes": int(gdx_total),
+                "save_vs_fa": float(save),
+                "payload_bpv": float(bpv_acc / max(n_pack, 1)),
+            }
+        )
+    ok, err_msg = _gate_curve_points(points, fa_bpv=fa_bpv)
+    return {
+        "schema": SCHEMA,
+        "ok": ok,
+        "source": "vendor_mla_latent",
+        "kv_source": "vendor_mla_latent",
+        "text": path.name,
+        "model_dir": path.parent.name,
+        "alphabet": "fp8",
+        "fa_bpv": fa_bpv,
+        "live_window": int(live_window),
+        "layers": int(n_layers),
+        "kv_heads": 1,
+        "head_dim": int(dim),
+        "fa_twin_mode": "mla_latent_full_sequence",
+        "sliding_window": None,
+        "n_sliding_layers": 0,
+        "n_full_layers": int(n_layers),
+        "kv_cache_dtype": str(kv_cache_dtype or "fp8_ds_mla"),
+        "points": points,
+        "error": err_msg,
+    }
+
+
 def measure_curve_from_vendor_pages(
     alphabet: str,
     *,
@@ -804,6 +961,9 @@ def render_png(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    _scripts = str(Path(__file__).resolve().parent)
+    if _scripts not in sys.path:
+        sys.path.insert(0, _scripts)
     from needle_haystack import figure_tagline
 
     pts = list(doc.get("points") or [])
@@ -999,23 +1159,45 @@ def main(argv: list[str] | None = None) -> int:
         "--vendor-pages",
         type=Path,
         default=None,
-        help="npz from gdx_kv_curve_vendor_pages.py (required for fp8/fp4)",
+        help="npz from gdx_kv_curve_vendor_pages.py (required for fp8/fp4 FA)",
+    )
+    parser.add_argument(
+        "--mla-latent",
+        type=Path,
+        default=None,
+        help="npz [L,T,D] uint8 from MLA latent capture (path_a_mla)",
     )
     parser.add_argument(
         "--kv-cache-dtype",
         default=os.environ.get("SERVE_KV_CACHE_DTYPE") or "",
-        help="Recorded vendor kv_cache_dtype (fp8 / nvfp4)",
+        help="Recorded vendor kv_cache_dtype (fp8 / nvfp4 / fp8_ds_mla)",
     )
     args = parser.parse_args(argv)
     tokens = [int(x) for x in str(args.tokens).split(",") if x.strip()]
     alphabet = str(args.alphabet)
     a_norm = alphabet.strip().lower()
     needs_vendor = a_norm in ("fp8", "fp8_e4m3", "fp4", "nvfp4", "e2m1")
-    if needs_vendor:
+    if needs_vendor and args.mla_latent is not None:
+        if not Path(args.mla_latent).is_file():
+            print(
+                f"gdx_kv_bytes_curve: FAIL error=--mla-latent missing "
+                f"({args.mla_latent})",
+                file=sys.stderr,
+            )
+            return 2
+        doc = measure_curve_from_mla_latent(
+            alphabet,
+            tokens=tokens,
+            mla_latent=Path(args.mla_latent),
+            live_window=int(args.live_window),
+            kv_cache_dtype=str(args.kv_cache_dtype or "fp8_ds_mla"),
+        )
+    elif needs_vendor:
         if args.vendor_pages is None or not Path(args.vendor_pages).is_file():
             print(
                 "gdx_kv_bytes_curve: FAIL error=--vendor-pages required for "
-                f"alphabet={alphabet!r} (vendor FA pages; no bf16 cast)",
+                f"alphabet={alphabet!r} (vendor FA pages; no bf16 cast). "
+                "For MLA use --mla-latent.",
                 file=sys.stderr,
             )
             return 2

@@ -1,0 +1,23 @@
+bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8)
+{"object":"list","data":[{"id":"/root/models/llm/fp4/GLM-5.3-Flash-NVFP4","object":"model","created":1791851189,"owned_by":"vllm","root":"/root/models/llm/fp4/GLM-5.3-Flash-NVFP4","parent":null,"max_m
+{
+  "arm": "vanilla",
+  "long_ms": 1808.9994110050611,
+  "short_chat_ttft_ms": 156.32266399916261,
+  "stream_ttft_ms": 130.5523519986309,
+  "stream_itl_p50_ms": 11.615148512646556,
+  "stream_tok_s": 60.273872119825036,
+  "gpu_kv_tokens": 2377500,
+  "long_ok": 0,
+  "niah": {
+    "niah_256_d50": 1.0,
+    "niah_1024_d50": 1.0,
+    "niah_2048_d50": 1.0,
+    "niah_4000_d0": 1.0,
+    "niah_4000_d50": 1.0,
+    "niah_8000_d50": 0.0,
+    "niah_8000_d50_err": "HTTP Error 500: Internal Server Error"
+  }
+}
+wrote /workspace/logs/vanilla_matched_scrape.json
+wrote /workspace/logs/vanilla_matched_scrape.json

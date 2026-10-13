@@ -854,6 +854,8 @@ if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
       [[ "${_gdx_curve_max_t}" -ge 512 ]] || _gdx_curve_max_t=8192
       _gdx_vendor_pages="${RUN_DIR}/gdx_vendor_fa_pages.npz"
       # Fail closed before docker when HF ABI is MLA/sparse/CSA2 (GLM/DeepSeek Flash).
+      # path_a_mla: use ISIRO_BENCH_MLA_LATENT_NPZ ([L,T,D] uint8) instead of FA dump.
+      _gdx_use_mla_latent=0
       _gdx_preflight_err="$(
         "${_gdx_host_python}" - <<PY
 from pathlib import Path
@@ -866,44 +868,55 @@ if r:
     raise SystemExit(2)
 PY
       )" || {
-        echo "gdx_kv_curve_vendor_pages: FAIL ${_gdx_preflight_err}" >&2
-        echo "gdx_kv_curve_vendor_pages: path_a FA curve only; TIC serve still uses ISIRO_GDX auto-route (unique_c). Skip meters with ISIRO_BENCH_SKIP_GDX_METERS=1 until a unique_c curve exists." >&2
-        exit 2
+        _gdx_mla_npz="${ISIRO_BENCH_MLA_LATENT_NPZ:-}"
+        if [[ -n "${_gdx_mla_npz}" && -f "${_gdx_mla_npz}" ]]; then
+          echo "gdx_kv_curve_mla_latent: FA pages unsupported (${_gdx_preflight_err}); using MLA latent ${_gdx_mla_npz}" >&2
+          _gdx_curve_extra+=(--mla-latent "${_gdx_mla_npz}")
+          _gdx_curve_extra+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE:-fp8_ds_mla}")
+          _gdx_use_mla_latent=1
+        else
+          echo "gdx_kv_curve_vendor_pages: FAIL ${_gdx_preflight_err}" >&2
+          echo "gdx_kv_curve_vendor_pages: MLA/sparse HF; set ISIRO_BENCH_MLA_LATENT_NPZ to a [L,T,D] uint8 capture (path_a_mla), or ISIRO_BENCH_SKIP_GDX_METERS=1." >&2
+          exit 2
+        fi
       }
-      echo "gdx_kv_curve_vendor_pages: capturing FA pages (kv_cache_dtype=${SERVE_KV_CACHE_DTYPE}; image=${VLLM_IMAGE}; model=${BASELINE_MODEL_DIR})" >&2
-      _gdx_vendor_mounts=(-v "${BASELINE_MODEL_DIR}:${BASELINE_MODEL_DIR}:ro")
-      _gdx_vendor_mounts+=(-v "${BENCH_ROOT}/scripts:${BENCH_ROOT}/scripts:ro")
-      _gdx_vendor_mounts+=(-v "${RUN_DIR}:${RUN_DIR}")
-      if [[ -n "${ISIRO_BENCH_GDX_TEXT_FILE:-}" && -f "${ISIRO_BENCH_GDX_TEXT_FILE}" ]]; then
-        _gdx_vendor_mounts+=(-v "${ISIRO_BENCH_GDX_TEXT_FILE}:${ISIRO_BENCH_GDX_TEXT_FILE}:ro")
+      if [[ "${_gdx_use_mla_latent}" -eq 0 ]]; then
+        echo "gdx_kv_curve_vendor_pages: capturing FA pages (kv_cache_dtype=${SERVE_KV_CACHE_DTYPE}; image=${VLLM_IMAGE}; model=${BASELINE_MODEL_DIR})" >&2
+        _gdx_vendor_mounts=(-v "${BASELINE_MODEL_DIR}:${BASELINE_MODEL_DIR}:ro")
+        _gdx_vendor_mounts+=(-v "${BENCH_ROOT}/scripts:${BENCH_ROOT}/scripts:ro")
+        _gdx_vendor_mounts+=(-v "${RUN_DIR}:${RUN_DIR}")
+        if [[ -n "${ISIRO_BENCH_GDX_TEXT_FILE:-}" && -f "${ISIRO_BENCH_GDX_TEXT_FILE}" ]]; then
+          _gdx_vendor_mounts+=(-v "${ISIRO_BENCH_GDX_TEXT_FILE}:${ISIRO_BENCH_GDX_TEXT_FILE}:ro")
+        fi
+        _gdx_fixture="${BENCH_ROOT}/fixtures/pride_and_prejudice.txt"
+        if [[ -f "${_gdx_fixture}" ]]; then
+          _gdx_vendor_mounts+=(-v "${_gdx_fixture}:${_gdx_fixture}:ro")
+        fi
+        _gdx_vendor_args=(
+          "${BENCH_ROOT}/scripts/gdx_kv_curve_vendor_pages.py"
+          --model-dir "${BASELINE_MODEL_DIR}"
+          --kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}"
+          --max-t "${_gdx_curve_max_t}"
+          --out "${_gdx_vendor_pages}"
+        )
+        if [[ -n "${ISIRO_BENCH_GDX_TEXT_FILE:-}" && -f "${ISIRO_BENCH_GDX_TEXT_FILE}" ]]; then
+          _gdx_vendor_args+=(--text-file "${ISIRO_BENCH_GDX_TEXT_FILE}")
+        fi
+        docker run --rm --gpus all \
+          -e VLLM_ENABLE_V1_MULTIPROCESSING=0 \
+          "${_gdx_vendor_mounts[@]}" \
+          --entrypoint python3 \
+          "${VLLM_IMAGE}" \
+          "${_gdx_vendor_args[@]}"
+        _gdx_curve_extra+=(--vendor-pages "${_gdx_vendor_pages}")
+        _gdx_curve_extra+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
       fi
-      _gdx_fixture="${BENCH_ROOT}/fixtures/pride_and_prejudice.txt"
-      if [[ -f "${_gdx_fixture}" ]]; then
-        _gdx_vendor_mounts+=(-v "${_gdx_fixture}:${_gdx_fixture}:ro")
-      fi
-      _gdx_vendor_args=(
-        "${BENCH_ROOT}/scripts/gdx_kv_curve_vendor_pages.py"
-        --model-dir "${BASELINE_MODEL_DIR}"
-        --kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}"
-        --max-t "${_gdx_curve_max_t}"
-        --out "${_gdx_vendor_pages}"
-      )
-      if [[ -n "${ISIRO_BENCH_GDX_TEXT_FILE:-}" && -f "${ISIRO_BENCH_GDX_TEXT_FILE}" ]]; then
-        _gdx_vendor_args+=(--text-file "${ISIRO_BENCH_GDX_TEXT_FILE}")
-      fi
-      docker run --rm --gpus all \
-        -e VLLM_ENABLE_V1_MULTIPROCESSING=0 \
-        "${_gdx_vendor_mounts[@]}" \
-        --entrypoint python3 \
-        "${VLLM_IMAGE}" \
-        "${_gdx_vendor_args[@]}"
-      _gdx_curve_extra+=(--vendor-pages "${_gdx_vendor_pages}")
-      _gdx_curve_extra+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
       ;;
     bf16)
       _gdx_curve_model_dir="${ISIRO_BENCH_GDX_MODEL_DIR:-${BASELINE_MODEL_DIR}}"
       ;;
   esac
+  _gdx_live_window="${ISIRO_GDX_LIVE_WINDOW:-512}"
   "${_gdx_host_python}" "${BENCH_ROOT}/scripts/gdx_kv_bytes_curve.py" \
     --alphabet "${ISIRO_BENCH_GDX}" \
     --out-json "${RUN_DIR}/gdx_kv_bytes_curve.json" \
@@ -914,6 +927,7 @@ PY
     --gpu-count "${_gdx_gpu_count}" \
     --weight-precision "${PRECISION}" \
     --kv-precision "${ISIRO_BENCH_GDX}" \
+    --live-window "${_gdx_live_window}" \
     "${_gdx_curve_extra[@]}"
   echo "gdx_kv_bytes_curve: PASS" >&2
 elif [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 1 ]]; then

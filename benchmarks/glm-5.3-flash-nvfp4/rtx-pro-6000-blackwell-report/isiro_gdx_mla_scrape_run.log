@@ -1,0 +1,27 @@
+{"object":"list","data":[{"id":"zai-org/GLM-5.3-Flash","object":"model","created":1791849852,"owned_by":"isiro","root":"/root/models/llm/fp4/GLM-5.3-Flash-NVFP4-TIC","max_model_len":8192,"permission":
+{
+  "arm": "gdx",
+  "recipe": "GDX=fp8 COLD_READY=1",
+  "long_ms": 995.5898830085061,
+  "short_chat_ttft_ms": 766.4764820365235,
+  "stream_ttft_ms": 125.00888702925295,
+  "stream_itl_p50_ms": 86.78499251254834,
+  "stream_tok_s": 11.305305622173085,
+  "gpu_kv_tokens": 2273735,
+  "long_ok": 0,
+  "n_live_persist": 1,
+  "f_cold": 1.0,
+  "save_vs_all_fa": 0.9742647058823529,
+  "attend_class": "a",
+  "niah": {
+    "niah_256_d50": 1.0,
+    "niah_1024_d50": 1.0,
+    "niah_2048_d50": 1.0,
+    "niah_4000_d0": 1.0,
+    "niah_4000_d50": 1.0,
+    "niah_8000_d50": 1.0
+  }
+}
+wrote /workspace/logs/isiro_gdx_mla_scrape.json
+wrote /workspace/logs/isiro_gdx_mla_scrape.json
+SCRAPE_ISIRO_DONE=0
