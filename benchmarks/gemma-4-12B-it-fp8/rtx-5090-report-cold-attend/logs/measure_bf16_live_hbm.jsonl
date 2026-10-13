@@ -1,0 +1,1 @@
+{'go': True, 'cold_t': 256, 'freed_fa_nbytes': 131072.0, 'twin': 131072, 'slab_payload_nbytes': 18527.0, 'slab_nbytes': 18527.0, 'save_vs_all_fa': 0.8586502075195312, 'f_cold': 1.0, 'fa_bpv': 16.0}

@@ -1,0 +1,39 @@
+{
+  "stamp": "NO GO",
+  "residency_go": false,
+  "latency_go": false,
+  "latency_vs_published": false,
+  "latency_reasons": [
+    "itl_p99 regress (isiro=14.096 baseline=13.448)"
+  ],
+  "published_reasons": [
+    "tok/s lose or missing (isiro=2620.7604 baseline=2650.3)",
+    "itl_p99 regress (isiro=14.096 baseline=13.42)",
+    "ttft_p95 regress (isiro=154.909 baseline=143.84)",
+    "ttft_p99 regress (isiro=154.974 baseline=144.06)"
+  ],
+  "isiro": {
+    "tok_s": 2620.7604,
+    "itl_p50": 11.495,
+    "itl_p95": 12.917,
+    "itl_p99": 14.096,
+    "tpot_p50": 11.647,
+    "tpot_p95": 11.714,
+    "tpot_p99": 11.734,
+    "ttft_p50": 100.51,
+    "ttft_p95": 154.909,
+    "ttft_p99": 154.974
+  },
+  "baseline": {
+    "tok_s": 1959.386,
+    "itl_p50": 11.593,
+    "itl_p95": 12.937,
+    "itl_p99": 13.448,
+    "tpot_p50": 11.638,
+    "tpot_p95": 11.705,
+    "tpot_p99": 11.706,
+    "ttft_p50": 1205.509,
+    "ttft_p95": 1227.209,
+    "ttft_p99": 1227.288
+  }
+}

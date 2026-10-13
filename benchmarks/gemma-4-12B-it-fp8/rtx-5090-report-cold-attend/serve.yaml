@@ -1,0 +1,9 @@
+# Matched to published rtx-5090-report lean GDX bf16 remeter.
+vllm:
+  serve:
+    max_model_len: 8192
+    tensor_parallel_size: 1
+    gpu_memory_utilization: 0.90
+    kv_cache_dtype: bfloat16
+    enable_prefix_caching: false
+    max_num_seqs: 32

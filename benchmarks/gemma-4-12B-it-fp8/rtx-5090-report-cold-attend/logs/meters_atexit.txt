@@ -1,0 +1,1 @@
+gdx_kv_o1 meter={'n_attach': 96, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}

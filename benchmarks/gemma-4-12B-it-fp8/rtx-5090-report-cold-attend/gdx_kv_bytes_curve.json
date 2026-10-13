@@ -1,0 +1,70 @@
+{
+  "alphabet": "bf16",
+  "error": null,
+  "fa_bpv": 16.0,
+  "fa_twin_mode": "vendor_layer_caps",
+  "head_dim": 256,
+  "kv_heads": 8,
+  "kv_precision": "bf16",
+  "kv_source": "hf_bf16_kv",
+  "layers": 48,
+  "live_window": 512,
+  "model_dir": "gemma-4-12B-it",
+  "n_full_layers": 8,
+  "n_sliding_layers": 40,
+  "ok": true,
+  "points": [
+    {
+      "T": 512,
+      "cold_t": 0,
+      "fa_twin_nbytes": 176160768,
+      "gdx_cold_nbytes": 0,
+      "gdx_total_nbytes": 176160768,
+      "payload_bpv": null,
+      "save_vs_fa": 0.0
+    },
+    {
+      "T": 1024,
+      "cold_t": 24536,
+      "fa_twin_nbytes": 351993856,
+      "gdx_cold_nbytes": 136507986,
+      "gdx_total_nbytes": 312668754,
+      "payload_bpv": 12.934808500903301,
+      "save_vs_fa": 0.11172098981182221
+    },
+    {
+      "T": 2048,
+      "cold_t": 32728,
+      "fa_twin_nbytes": 368771072,
+      "gdx_cold_nbytes": 147682507,
+      "gdx_total_nbytes": 323843275,
+      "payload_bpv": 12.282240213583691,
+      "save_vs_fa": 0.12183113159157999
+    },
+    {
+      "T": 4096,
+      "cold_t": 49112,
+      "fa_twin_nbytes": 402325504,
+      "gdx_cold_nbytes": 169824005,
+      "gdx_total_nbytes": 345984773,
+      "payload_bpv": 12.086366922810273,
+      "save_vs_fa": 0.14003768202574596
+    },
+    {
+      "T": 8192,
+      "cold_t": 81880,
+      "fa_twin_nbytes": 469434368,
+      "gdx_cold_nbytes": 213948114,
+      "gdx_total_nbytes": 390108882,
+      "payload_bpv": 12.004650352031772,
+      "save_vs_fa": 0.1689809937392569
+    }
+  ],
+  "schema": "isiro-benchmark-gdx-kv-bytes-curve-v3",
+  "sliding_window": 1024,
+  "source": "real_model_kv",
+  "text": "pride_and_prejudice.txt",
+  "weight_precision": "fp8",
+  "baseline_weight_bytes": 13690208256,
+  "isiro_weight_bytes": 12981538652
+}

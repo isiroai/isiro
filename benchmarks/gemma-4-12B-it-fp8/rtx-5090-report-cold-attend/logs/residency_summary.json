@@ -1,0 +1,52 @@
+{
+  "route": "path_a",
+  "payload": "fa-kv",
+  "not_mla_proxy": true,
+  "dual_hold": false,
+  "f_cold": null,
+  "save_vs_all_fa": null,
+  "live_fa_nbytes": null,
+  "freed_fa_nbytes": null,
+  "n_live_persist": 0,
+  "n_deposit": 0,
+  "attend_class": "a",
+  "gpu_kv_tokens": 61527,
+  "long_ok": 1,
+  "niah": {
+    "niah_256_d50": 1.0,
+    "niah_1024_d50": 1.0,
+    "niah_2048_d50": 1.0,
+    "niah_4000_d0": 1.0,
+    "niah_4000_d50": 1.0,
+    "niah_8000_d50": 1.0
+  },
+  "niah_all_pass": true,
+  "serve_atexit_meter": {
+    "n_attach": 96,
+    "attend_class": "a",
+    "deposit_alphabet": "bf16",
+    "live_hbm": true,
+    "n_live_persist": 0,
+    "n_deposit": 0,
+    "f_cold": null,
+    "save_vs_all_fa": null,
+    "live_fa_nbytes": null,
+    "freed_fa_nbytes": null,
+    "dual_hold": false
+  },
+  "sandbox_free_fa": {
+    "go": true,
+    "cold_t": 256,
+    "freed_fa_nbytes": 131072.0,
+    "twin": 131072,
+    "slab_nbytes": 18527.0,
+    "save_vs_all_fa": 0.8586502075195312,
+    "f_cold": 1.0,
+    "fa_bpv": 16.0,
+    "source": "measure_gdx_bf16_live_hbm.py"
+  },
+  "ledger_twin_free": false,
+  "physical_reclaim_armed": false,
+  "residency_go": false,
+  "note": "Serve path_a attached (n_attach=96, fa_wrap=0 host-hook mode) and NIAH passed, but atexit meter after 4k+ token prefill showed n_deposit=0 / no f_cold (Attention.forward hooks did not bump deposit or skip counters). Sandbox measure_gdx_bf16_live_hbm.py still proves free_fa twin+slab save save_vs_all_fa=0.859 f_cold=1. Reserved KV pool remains vendor admission slots."
+}
