@@ -4,9 +4,9 @@
   <a href="https://isiro.ai">ISIRO Runtime</a>
 </h1>
 
-<h3 align="center">Lossless inference layer for self-hosted AI</h3>
+<h3 align="center">More capacity on GPUs</h3>
 
-<p align="center">Smaller weights · More KV cache · No quantization</p>
+<p align="center">More KV cache memory · 100% model accuracy</p>
 
 <p align="center">
   <a href="#quick-start">Quick start</a> •
@@ -24,8 +24,8 @@
 
 Compile your model once into a lossless, compact [`.tic`](https://isiro.ai/docs/tic) bundle. Weights are bit-exact and are verified with a cryptographic hash manifest. Serve with ISIRO Runtime, which integrates your existing stack.
 
-*Supported today: BF16 with vLLM on NVIDIA GPUs.*  
-*More precisions, runtime targets, and platforms are in progress.*
+*BF16 is in general release with vLLM on NVIDIA GPUs.*  
+*FP8 and FP4 (with bit-exact KV cache compression) are available for pilots. More runtime targets and platforms are in progress.*
 
 ## Quick start
 
