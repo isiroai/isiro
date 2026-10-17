@@ -1,0 +1,27 @@
+# ISIRO bundle serve config
+# Two RTX PRO 6000 cards. Utilization stays 0.95.
+# The fit is the 11.1% TIC weights plus one GDX latent split across the cards.
+# Runtime docker.tag policy: isiro status --compat
+# GLM Flash sm120 twin: chriswritescode-dev/glm-5.3-flash-sm120 vendor knobs
+# (see benchmarks/v0_1_1/NOTE_lode_gdx_latency.md). Remeter cube max_model_len
+# stays 8192 (chris product long is 524288). Concurrency 10 + MTP 5 keeps
+# decode under FlashInfer SM120 specialized-kernel cap (10*(5+1)=60 < 64).
+schema: serve/v1
+
+host: 0.0.0.0
+port: 8000
+
+targets:
+  vllm:
+    docker:
+      tag: v0.31.0
+    tensor_parallel_size: 2
+    max_model_len: 8192
+    max_num_seqs: 10
+    max_cudagraph_capture_size: 16
+    max_num_batched_tokens: 8192
+    gpu_memory_utilization: 0.95
+    kv_cache_dtype: fp8
+    enable_flashinfer_autotune: false
+    no_enable_prefix_caching: true
+    # BOOT_PROVE_DISABLED speculative_config: '{"method":"mtp","num_speculative_tokens":5}'
