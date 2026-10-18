@@ -4,6 +4,13 @@
 
 This note is the two-card twin of `rtx-pro-6000-blackwell-report`. TTFT, ITL, and NIAH are not measured yet. Fill them from the SSH run. Do not treat the fit arithmetic below as a meter reading.
 
+Compared:
+
+- **Baseline:** stock `vllm serve` on the Hub weights (`GLM-5.3-Flash-NVFP4`). Keep that tree after the TIC compile. The A/B needs both trees on disk.
+- **Isiro:** `GLM-5.3-Flash-NVFP4-TIC`.
+
+Vanilla is not expected to fit on these two cards. Attempt the boot anyway and record it here. Do not delete the Hub weights to make room.
+
 ## Fit
 
 Each card is 94.97 GiB. `gpu_memory_utilization: 0.95` is a 90.22 GiB budget. That number stays 0.95.
@@ -31,6 +38,7 @@ Model: `GLM-5.3-Flash-NVFP4-TIC`.
 
 | Metric | Result |
 | --- | --- |
+| Vanilla boot on two cards | Failed, 2026-10-17. Weights loaded at 89.54 GiB per card in 626 seconds (4-card run: 45.54 GiB in about 100 seconds). Then `CUDA_ERROR_OUT_OF_MEMORY` in the memory profile (`mhc_fused_tilelang_kernel`). Engine did not start. Hub weights stay on disk. |
 | NIAH | not measured |
 | Weight integrity | not measured on these two cards |
 

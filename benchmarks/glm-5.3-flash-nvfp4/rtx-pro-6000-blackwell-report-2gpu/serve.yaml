@@ -16,6 +16,7 @@ targets:
     docker:
       tag: v0.31.0
     tensor_parallel_size: 2
+    disable_custom_all_reduce: true
     max_model_len: 8192
     max_num_seqs: 10
     max_cudagraph_capture_size: 16
