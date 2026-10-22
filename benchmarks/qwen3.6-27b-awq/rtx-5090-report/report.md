@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-22 19:15 UTC
+`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-22 19:42 UTC
 
 Tooling:
 
@@ -27,13 +27,13 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights.
 
 | Metric | Baseline | Isiro | Savings % |
 |--------|----------|-------|-----------|
-| GPU memory for loaded weights | 19.92 GiB | **18.73 GiB** | **5.97%** |
+| GPU memory for loaded weights | 19.92 GiB | **16.81 GiB** | **15.61%** |
 
 ### KV cache
 
 | Metric | Baseline default fill | Isiro reserved KV |
 |--------|-----------------------|-------------------|
-| GPU memory reserved for KV | 4.47 GiB (54418 tokens) | 3.30 GiB (39789 tokens)† |
+| GPU memory reserved for KV | 4.47 GiB (54418 tokens) | 4.10 GiB (49737 tokens)† |
 
 † Reserved pool on the GPU at vendor KV bytes/token. Token counts are pool admission slots (same bpv as the vendor dtype), not GDX-coded cold capacity. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
 
@@ -46,7 +46,7 @@ Concurrent requests are the serve max concurrent sequences (`max_num_seqs`); the
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
 | Concurrent requests | 8 | 8 |
-| KV token capacity | 54418 (4.47 GiB KV) | 39789 (3.30 GiB KV)† |
+| KV token capacity | 54418 (4.47 GiB KV) | 49737 (4.10 GiB KV)† |
 
 ### Generation (recall-matched KV, input 32 / output 256)
 
@@ -54,10 +54,10 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 524.40 | 496.18 |
-| ITL (ms) p50 / p95 / p99 | 14.80 / 15.23 / 15.43 | 15.62 / 15.96 / 16.31 |
-| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.92 | 15.59 / 15.63 / 15.64 |
-| TTFT (ms) p50 / p95 / p99 | 129.37 / 129.64 / 129.64 | 151.10 / 151.75 / 151.75 |
+| Output tok/s | 524.61 | 490.35 |
+| ITL (ms) p50 / p95 / p99 | 14.80 / 15.19 / 15.36 | 15.69 / 16.71 / 17.25 |
+| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.93 | 15.76 / 15.79 / 15.81 |
+| TTFT (ms) p50 / p95 / p99 | 128.01 / 128.29 / 128.31 | 157.76 / 158.14 / 158.14 |
 
 ## Config
 
@@ -72,8 +72,7 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 | vLLM | 0.31.0 |
 | GPU | NVIDIA GeForce RTX 5090 x 1 |
 | Driver / CUDA | 590.44.01 / 13.1 |
-| Baseline reused from | `20261022T190350Z-rtx-5090` |
 | Isiro attention | `FLASH_ATTN` (`ISIRO_ATTN` unset) |
 | Baseline attention | `FLASH_ATTN` |
 
-Fairness check: **FAIL**.
+Fairness check: **PASS**.
