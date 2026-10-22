@@ -1182,17 +1182,24 @@ if str(max_batched).strip():
             "\"benchmark_combo_kernel\":true}}'"
         )
         text = upsert(text, "compilation_config", cc)
+        text = upsert(text, "max_cudagraph_capture_size", "64")
     elif enforce_eager == "true":
         text = drop_key(text, "compilation_config")
+        text = drop_key(text, "max_cudagraph_capture_size")
     else:
         text = upsert(text, "compilation_config", _path_a_cc)
+        # Path_a compile without ISIRO_GDX still needs stock capture 64;
+        # lean admit-align(max_num_seqs=8) → 8 collapses TTFT vs Hub.
+        text = upsert(text, "max_cudagraph_capture_size", "64")
 else:
     # Equal-batch / non-capacity: drop batched overlay; keep compile parity.
     text = drop_key(text, "max_num_batched_tokens")
     if enforce_eager == "true":
         text = drop_key(text, "compilation_config")
+        text = drop_key(text, "max_cudagraph_capture_size")
     else:
         text = upsert(text, "compilation_config", _path_a_cc)
+        text = upsert(text, "max_cudagraph_capture_size", "64")
 if docker_tag:
     # targets.vllm.docker.tag - keep indent under docker:
     text = upsert(text, "tag", docker_tag)
