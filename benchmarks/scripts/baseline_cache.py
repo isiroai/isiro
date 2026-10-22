@@ -146,7 +146,7 @@ def main() -> int:
     write.add_argument(
         "--precision",
         default="bf16",
-        choices=("bf16", "fp8"),
+        choices=("bf16", "fp8", "awq"),
         help="Matched A/B weight precision (fingerprint key).",
     )
     write.add_argument("--baseline-model", type=Path, required=True)

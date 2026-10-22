@@ -129,9 +129,9 @@ if [[ "${BENCH_MAX_CONCURRENCY}" -gt "${SERVE_MAX_NUM_SEQS}" ]]; then
 fi
 PRECISION="${PRECISION:-bf16}"
 case "${PRECISION}" in
-  bf16|fp8) ;;
+  bf16|fp8|awq) ;;
   *)
-    echo "PRECISION must be bf16 or fp8 (got ${PRECISION})" >&2
+    echo "PRECISION must be bf16, fp8, or awq (got ${PRECISION})" >&2
     exit 2
     ;;
 esac
@@ -185,6 +185,7 @@ echo "versions: compiler=${ISIRO_FORMAT} runtime=${ISIRO_RUNTIME}" >&2
 CONFIG_BASENAME="$(basename "${CONFIG}")"
 case "${CONFIG_BASENAME}" in
   *.fp8) CONFIG_PRECISION="fp8" ;;
+  *.awq) CONFIG_PRECISION="awq" ;;
   *)     CONFIG_PRECISION="bf16" ;;
 esac
 if [[ "${CONFIG_PRECISION}" != "${PRECISION}" ]]; then
@@ -384,6 +385,7 @@ fi
 
 # Precision/path guard: refuse mismatched Hub quant configs.
 # FP8: modelopt, compressed-tensors, or native Hub quant_method=fp8.
+# AWQ: Hub quant_method=awq / awq_marlin.
 FP8_BASELINE_QUANT=""
 if [[ "${PRECISION}" == "fp8" ]]; then
   FP8_BASELINE_QUANT="$(
@@ -403,6 +405,18 @@ PY
     echo "PRECISION=fp8 baseline quant resolve failed" >&2
     exit 2
   }
+elif [[ "${PRECISION}" == "awq" ]]; then
+  if ! PYTHONPATH="${BENCH_ROOT}/scripts${PYTHONPATH:+:${PYTHONPATH}}" python3 - \
+    "${BASELINE_MODEL_DIR}/config.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+method = str((doc.get("quantization_config") or {}).get("quant_method") or "").lower()
+raise SystemExit(0 if method in ("awq", "awq_marlin") else 1)
+PY
+  then
+    echo "PRECISION=awq but baseline is not Hub AWQ (quant_method awq/awq_marlin)" >&2
+    exit 2
+  fi
 elif [[ -f "${BASELINE_MODEL_DIR}/hf_quant_config.json" ]]; then
   echo "PRECISION=bf16 but baseline has hf_quant_config.json; use PRECISION=fp8 / common.env.fp8" >&2
   exit 2
@@ -420,6 +434,17 @@ raise SystemExit(
 PY
   then
     echo "PRECISION=bf16 but baseline is Hub FP8; use PRECISION=fp8 / common.env.fp8" >&2
+    exit 2
+  fi
+  if PYTHONPATH="${BENCH_ROOT}/scripts${PYTHONPATH:+:${PYTHONPATH}}" python3 - \
+    "${BASELINE_MODEL_DIR}/config.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+method = str((doc.get("quantization_config") or {}).get("quant_method") or "").lower()
+raise SystemExit(0 if method in ("awq", "awq_marlin") else 1)
+PY
+  then
+    echo "PRECISION=bf16 but baseline is Hub AWQ; use PRECISION=awq / common.env.awq" >&2
     exit 2
   fi
 fi
@@ -441,6 +466,9 @@ build_baseline_serve() {
   if [[ "${PRECISION}" == "fp8" ]]; then
     # Hub FP8 (modelopt or compressed-tensors): do not force --dtype bfloat16.
     BASELINE_SERVE+=(--quantization "${FP8_BASELINE_QUANT}")
+  elif [[ "${PRECISION}" == "awq" ]]; then
+    # Hub AWQ: Marlin W4A16 path under vLLM; match TIC bf16 activations.
+    BASELINE_SERVE+=(--quantization awq --dtype bfloat16)
   else
     BASELINE_SERVE+=(--dtype bfloat16)
   fi
@@ -589,6 +617,8 @@ baseline = [
 if precision == "fp8":
     quant = fp8_quant or resolve_fp8_baseline_quantization(baseline_model)
     baseline.extend(["--quantization", quant])
+elif precision == "awq":
+    baseline.extend(["--quantization", "awq", "--dtype", "bfloat16"])
 else:
     baseline.extend(["--dtype", "bfloat16"])
 baseline.extend([
@@ -628,6 +658,8 @@ if precision == "fp8":
     doc["fp8_baseline_quantization"] = (
         fp8_quant or resolve_fp8_baseline_quantization(baseline_model)
     )
+if precision == "awq":
+    doc["awq_baseline_quantization"] = "awq"
 if gdx_kv:
     doc["tic_serve_env"] = {
         "ISIRO_GDX": gdx_kv,
@@ -754,6 +786,42 @@ Path(sys.argv[1]).write_text(
 PY
 else
 if [[ "${VERIFY_REFERENCE}" -eq 1 ]]; then
+  # Host-RAM hazard: verify -r decodes every TIC tensor vs Hub (27B AWQ
+  # ~21+18 GiB on disk; peak host RSS can OOM a desktop session). Refuse
+  # large AWQ / large on-disk pairs unless explicitly forced.
+  _FORCE_VR="$(_bench_env_truthy "${ISIRO_BENCH_FORCE_VERIFY_R:-}" && echo 1 || echo 0)"
+  _ONDISK_GIB="$(
+    python3 - "${BASELINE_MODEL_DIR}" "${TIC_MODEL_DIR}" <<'PY'
+import sys
+from pathlib import Path
+
+def gib(p: Path) -> float:
+    total = 0
+    if p.is_file():
+        return p.stat().st_size / (1024**3)
+    for f in p.rglob("*"):
+        if f.is_file():
+            try:
+                total += f.stat().st_size
+            except OSError:
+                pass
+    return total / (1024**3)
+
+print(f"{gib(Path(sys.argv[1])) + gib(Path(sys.argv[2])):.1f}")
+PY
+  )"
+  if [[ "${_FORCE_VR}" != "1" ]]; then
+    if [[ "${PRECISION}" == "awq" ]] || python3 -c "import sys; sys.exit(0 if float('${_ONDISK_GIB}') >= 24.0 else 1)"; then
+      echo "verify: refusing ISIRO_VERIFY_REFERENCE=1 (bit-exact -r) for this A/B." >&2
+      echo "  on-disk baseline+tic ≈ ${_ONDISK_GIB} GiB; PRECISION=${PRECISION}" >&2
+      echo "  verify -r can peak host RAM enough to OOM / log out a desktop session." >&2
+      echo "  Use integrity-only (unset ISIRO_VERIFY_REFERENCE) for publish A/B." >&2
+      echo "  Lab override only: ISIRO_BENCH_FORCE_VERIFY_R=1" >&2
+      exit 2
+    fi
+  else
+    echo "verify: ISIRO_BENCH_FORCE_VERIFY_R=1 (bit-exact -r allowed; watch host RAM)" >&2
+  fi
   echo "verify: bit-exact isiro verify -r" >&2
   echo "verify: checking compiler access..." >&2
   # Capture status text first. Do not pipe into grep -q under pipefail:

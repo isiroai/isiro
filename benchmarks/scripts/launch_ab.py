@@ -86,6 +86,19 @@ def peek_config_system_id(config: Path | None) -> str | None:
     return None
 
 
+def peek_config_value(config: Path | None, key: str) -> str | None:
+    """Return KEY=value from an env-style config (first non-comment hit)."""
+    if config is None or not config.is_file():
+        return None
+    prefix = f"{key}="
+    for raw in config.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line.startswith("#") or not line.startswith(prefix):
+            continue
+        return line.split("=", 1)[1].strip().strip("\"'") or None
+    return None
+
+
 def peek_config_truthy(config: Path | None, key: str) -> bool:
     """True when KEY=1/true/yes/on appears in the env-style config file."""
     if config is None or not config.is_file():
@@ -295,8 +308,18 @@ def main(argv: list[str] | None = None) -> int:
     child_env["ISIRO_BENCH_CONFIG"] = str(config)
     child_env["MODEL_DIR"] = str(model_dir.resolve())
     child_env["MODEL_SLUG"] = model
-    # Defaults match published Graph ON report quality.
-    child_env.setdefault("ISIRO_VERIFY_REFERENCE", "1")
+    # Defaults match published Graph ON report quality for bf16/fp8.
+    # AWQ 27B+ bit-exact -r peaks host RAM (Hub+TIC+dense) and has OOM'd
+    # desktop sessions; leave integrity-only unless the env opts in.
+    _precision = (
+        child_env.get("PRECISION")
+        or peek_config_value(config, "PRECISION")
+        or ""
+    ).strip().lower()
+    if _precision == "awq" or config.name.endswith(".awq"):
+        child_env.setdefault("ISIRO_VERIFY_REFERENCE", "0")
+    else:
+        child_env.setdefault("ISIRO_VERIFY_REFERENCE", "1")
     # Skip-baseline remeters: do not append equal-batch transparency (that
     # cold-starts another baseline/Isiro serve after capacity and hides the
     # unlock signal for tens of minutes).
