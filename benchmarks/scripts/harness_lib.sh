@@ -1258,6 +1258,63 @@ wait_ready() {
   return 1
 }
 
+# Fail closed before equalize / scrape / profiles when Model loading took already
+# shows TIC weights heavier than baseline (e.g. leftover densify-at-attach).
+assert_tic_weight_hbm_win() {
+  local tic_log="${1:?tic serve log}"
+  local baseline_env="${RUN_DIR}/baseline_environment.json"
+  if [[ ! -f "${baseline_env}" ]]; then
+    echo "assert_tic_weight_hbm_win: missing ${baseline_env}; skip" >&2
+    return 0
+  fi
+  if [[ ! -f "${tic_log}" ]]; then
+    echo "assert_tic_weight_hbm_win: missing ${tic_log}" >&2
+    return 1
+  fi
+  python3 - "${baseline_env}" "${tic_log}" <<'PY'
+import json, re, sys
+
+baseline_path, tic_log = sys.argv[1], sys.argv[2]
+doc = json.load(open(baseline_path, encoding="utf-8"))
+base = doc.get("model_loading_bytes_reported")
+if base is None:
+    print(
+        "assert_tic_weight_hbm_win: baseline model_loading_bytes_reported "
+        "missing; skip",
+        file=sys.stderr,
+    )
+    raise SystemExit(0)
+text = open(tic_log, encoding="utf-8", errors="replace").read()
+m = re.search(r"Model loading took\s*([0-9.]+)\s*GiB", text)
+if not m:
+    print(
+        "assert_tic_weight_hbm_win: TIC Model loading took missing in "
+        f"{tic_log}; refuse to continue",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+gib = 1024 ** 3
+tic = round(float(m.group(1)) * gib)
+base_gib = base / gib
+tic_gib = tic / gib
+savings = (1.0 - (tic / base)) * 100.0
+print(
+    f"weight HBM check: baseline={base_gib:.2f} GiB "
+    f"tic={tic_gib:.2f} GiB savings={savings:.2f}%",
+    file=sys.stderr,
+)
+if tic >= base:
+    print(
+        "NO GO: TIC Model loading took is not a weight win "
+        f"({tic_gib:.2f} GiB >= baseline {base_gib:.2f} GiB). "
+        "Abort before equalize/profiles. Fix resident compressed leftovers "
+        "(see NOTE_awq_leftover_dense / NOTE_raw_f8_fuse).",
+        file=sys.stderr,
+    )
+    raise SystemExit(3)
+PY
+}
+
 equalize_warmup() {
   variant="$1"
   local eq_prompts="${EQUALIZE_PROMPTS}"
@@ -2287,6 +2344,11 @@ PY
   # Serve now reclaims warm scratch before READY; this should track TIC load.
   GPU_PROCESS_BYTES_AFTER_READY="$(gpu_process_bytes)"
   export GPU_PROCESS_BYTES_AFTER_READY
+  assert_tic_weight_hbm_win "${LOG_DIR}/isiro-serve.log" || {
+    kill "${TIC_PID}" 2>/dev/null || true
+    wait "${TIC_PID}" 2>/dev/null || true
+    exit 3
+  }
   write_effective_config isiro "${TIC_BENCH_BUNDLE}/serve.yaml"
   equalize_warmup isiro
   # Arm CUDA-thread post-equalize reclaim on the next TIC forward.
@@ -2561,6 +2623,12 @@ PY
         "${RUN_DIR}/equal_batch/isiro_serve_config.capacity.json"
     fi
     cp -f "${LOG_DIR}/equal-batch-isiro-serve.log" "${LOG_DIR}/isiro-serve.log"
+    assert_tic_weight_hbm_win "${LOG_DIR}/equal-batch-isiro-serve.log" || {
+      kill "${TIC_PID}" 2>/dev/null || true
+      wait "${TIC_PID}" 2>/dev/null || true
+      TIC_PID=""
+      exit 3
+    }
     write_effective_config isiro "${TIC_BENCH_BUNDLE}/serve.yaml"
     cp -f "${RUN_DIR}/isiro_serve_config.json" \
       "${RUN_DIR}/equal_batch/isiro_serve_config.json"

@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-22 18:32 UTC
+`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-22 19:15 UTC
 
 Tooling:
 
@@ -27,7 +27,7 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights.
 
 | Metric | Baseline | Isiro | Savings % |
 |--------|----------|-------|-----------|
-| GPU memory for loaded weights | 19.92 GiB | 21.10 GiB | -5.92% |
+| GPU memory for loaded weights | 19.92 GiB | **18.73 GiB** | **5.97%** |
 
 ### KV cache
 
@@ -54,10 +54,10 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 524.35 | 492.79 |
-| ITL (ms) p50 / p95 / p99 | 14.81 / 15.17 / 15.35 | 15.62 / 16.66 / 17.33 |
-| TPOT (ms) p50 / p95 / p99 | 14.79 / 14.88 / 14.92 | 15.71 / 15.74 / 15.76 |
-| TTFT (ms) p50 / p95 / p99 | 132.15 / 132.66 / 132.66 | 149.54 / 149.75 / 149.77 |
+| Output tok/s | 524.40 | 496.18 |
+| ITL (ms) p50 / p95 / p99 | 14.80 / 15.23 / 15.43 | 15.62 / 15.96 / 16.31 |
+| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.92 | 15.59 / 15.63 / 15.64 |
+| TTFT (ms) p50 / p95 / p99 | 129.37 / 129.64 / 129.64 | 151.10 / 151.75 / 151.75 |
 
 ## Config
 
@@ -72,7 +72,8 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 | vLLM | 0.31.0 |
 | GPU | NVIDIA GeForce RTX 5090 x 1 |
 | Driver / CUDA | 590.44.01 / 13.1 |
+| Baseline reused from | `20261022T190350Z-rtx-5090` |
 | Isiro attention | `FLASH_ATTN` (`ISIRO_ATTN` unset) |
 | Baseline attention | `FLASH_ATTN` |
 
-Fairness check: **PASS**.
+Fairness check: **FAIL**.

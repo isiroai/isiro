@@ -143,7 +143,8 @@ def _run(cmd: list[str], *, dry_run: bool = False) -> None:
     print("+", " ".join(cmd), file=sys.stderr)
     if dry_run:
         return
-    subprocess.run(cmd, check=True)
+    # Pip progress goes to stdout; harness captures stdout for --print-python.
+    subprocess.run(cmd, check=True, stdout=sys.stderr)
 
 
 def ensure_venv(venv: Path, *, dry_run: bool = False) -> Path:
