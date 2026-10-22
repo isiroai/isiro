@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-22 20:31 UTC
+`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-22 23:13 UTC
 
 Tooling:
 
@@ -61,10 +61,10 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 526.35 | 519.40 |
-| ITL (ms) p50 / p95 / p99 | 14.75 / 15.18 / 15.37 | 14.95 / 15.31 / 15.57 |
-| TPOT (ms) p50 / p95 / p99 | 14.75 / 14.84 / 14.87 | 14.96 / 15.00 / 15.02 |
-| TTFT (ms) p50 / p95 / p99 | 128.39 / 128.60 / 128.60 | 127.04 / 127.43 / 127.44 |
+| Output tok/s | 524.19 | 520.28 |
+| ITL (ms) p50 / p95 / p99 | 14.79 / 15.18 / 15.43 | 14.91 / 15.41 / 29.91 |
+| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.93 | 14.91 / 14.96 / 14.98 |
+| TTFT (ms) p50 / p95 / p99 | 132.20 / 132.41 / 132.42 | 131.69 / 132.05 / 132.05 |
 
 ## Config
 

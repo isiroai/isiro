@@ -1879,6 +1879,52 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("KV (GiB)", src)
         self.assertIn("2, 1", src)  # 2x1 subplot layout
 
+    def test_bench_sse_patch_has_no_chunk_strip(self) -> None:
+        patch = SCRIPTS / "patches" / "endpoint_request_func.py"
+        self.assertTrue(patch.is_file(), patch)
+        body = patch.read_text(encoding="utf-8")
+        self.assertIn("ISIRO patch", body)
+        self.assertNotIn("chunk_bytes.strip()", body)
+
+    def test_run_bench_dry_run_mounts_sse_patch(self) -> None:
+        from run_bench import _SSE_PATCH, _VLLM_SSE_IN_IMAGE, bench_command
+
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / "raw"
+            raw.mkdir()
+            serve = Path(temp) / "serve.json"
+            serve.write_text("{}", encoding="utf-8")
+            out = Path(temp) / "out.json"
+            args = __import__("argparse").Namespace(
+                variant="isiro",
+                profile="ttft-2048",
+                run_id="t",
+                model="m",
+                tokenizer=None,
+                api_url="http://127.0.0.1:8000",
+                backend="openai-chat",
+                endpoint="/chat/completions",
+                input_tokens=2048,
+                output_tokens=64,
+                num_prompts=8,
+                num_warmups=0,
+                max_concurrency=8,
+                seed=17,
+                replicates=1,
+                serve_config=serve,
+                raw_dir=raw,
+                out=out,
+                vllm_image="vllm/vllm-openai:v0.31.0",
+                dry_run=True,
+                raw_input=[],
+                extra_body='{"chat_template_kwargs":{"enable_thinking":false}}',
+            )
+            cmd = bench_command(args, raw / "isiro-ttft-2048-r1.json")
+            joined = " ".join(cmd)
+            self.assertIn(str(_SSE_PATCH.resolve()), joined)
+            self.assertIn(_VLLM_SSE_IN_IMAGE, joined)
+            self.assertIn("--extra-body", cmd)
+
 
 class ResolveFp8BaselineQuantizationTests(unittest.TestCase):
     def test_compressed_tensors_from_config_json(self) -> None:

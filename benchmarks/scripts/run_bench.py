@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,17 @@ from benchmark_lib import (
     write_json,
 )
 
+# vllm 0.31 bench client strips each iter_any() SSE chunk; that drops framing
+# under concurrent chat and yields intermittent "Never received a valid chunk"
+# (load_errors). Overlay the patched module in docker bench runs.
+_SSE_PATCH = (
+    Path(__file__).resolve().parent / "patches" / "endpoint_request_func.py"
+)
+_VLLM_SSE_IN_IMAGE = (
+    "/usr/local/lib/python3.12/dist-packages/vllm/benchmarks/lib/"
+    "endpoint_request_func.py"
+)
+
 
 def bench_prefix(
     *,
@@ -29,7 +41,9 @@ def bench_prefix(
 ) -> list[str]:
     """Host `vllm` if present; else `docker run … --entrypoint vllm <VLLM_IMAGE>`."""
     binary = shutil.which("vllm")
-    if binary:
+    # Prefer docker when an image is set so the SSE client patch mounts.
+    # Host `vllm` skips the overlay and can still hit load_errors under load.
+    if binary and not vllm_image:
         return [binary]
     if not vllm_image:
         raise RuntimeError(
@@ -48,15 +62,16 @@ def bench_prefix(
         "-w",
         str(mount),
     ]
+    if _SSE_PATCH.is_file():
+        cmd.extend(["-v", f"{_SSE_PATCH.resolve()}:{_VLLM_SSE_IN_IMAGE}:ro"])
     for extra in extra_mounts or []:
         resolved = extra.resolve()
-        if resolved.is_dir():
+        if resolved.is_dir() or resolved.is_file():
             cmd.extend(["-v", f"{resolved}:{resolved}:ro"])
     # Prefer --tokenizer on a local dir (see BENCH_TOKENIZER). Do not pass Hub
     # tokens on the docker argv (dry-run / logs would echo them).
     cmd.extend(["--entrypoint", "vllm", vllm_image])
     return cmd
-
 
 def executable() -> list[str]:
     """Backward-compatible helper for tests; prefer bench_prefix in new code."""
@@ -124,6 +139,14 @@ def bench_command(args: argparse.Namespace, result_path: Path) -> list[str]:
             f"profile={args.profile}",
         ]
     )
+    # Optional JSON body merge for chat (e.g. Qwen3 thinking off). Same for
+    # baseline and TIC so A/B stays fair. Env: ISIRO_BENCH_EXTRA_BODY.
+    extra = (getattr(args, "extra_body", None) or "").strip() or (
+        os.environ.get("ISIRO_BENCH_EXTRA_BODY") or ""
+    ).strip()
+    if extra:
+        json.loads(extra)  # fail closed on bad JSON before docker
+        cmd.extend(["--extra-body", extra])
     return cmd
 
 
@@ -176,6 +199,15 @@ def main() -> int:
         action="append",
         default=[],
         help="Normalize existing vLLM JSON instead of invoking vLLM",
+    )
+    parser.add_argument(
+        "--extra-body",
+        default=None,
+        help=(
+            "JSON object passed to vllm bench --extra-body (or set "
+            "ISIRO_BENCH_EXTRA_BODY). Example: "
+            '\'{"chat_template_kwargs":{"enable_thinking":false}}\''
+        ),
     )
     args = parser.parse_args()
 

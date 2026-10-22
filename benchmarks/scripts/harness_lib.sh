@@ -227,6 +227,10 @@ echo "  GRAPH_MODE        = ${GRAPH_MODE} (enforce_eager=${SERVE_ENFORCE_EAGER})
 echo "  EXPERIMENT_KIND   = ${EXPERIMENT_KIND}" >&2
 echo "  SERVE_KV_CACHE_DTYPE = ${SERVE_KV_CACHE_DTYPE:-unset}" >&2
 echo "  ISIRO_BENCH_GDX      = ${ISIRO_BENCH_GDX:-off}" >&2
+if [[ -n "${ISIRO_BENCH_EXTRA_BODY:-}" ]]; then
+  export ISIRO_BENCH_EXTRA_BODY
+  echo "  ISIRO_BENCH_EXTRA_BODY = ${ISIRO_BENCH_EXTRA_BODY}" >&2
+fi
 # Isiro-first: timed Isiro arm before cold baseline (GDX publish default on).
 ISIRO_FIRST=0
 _ISIRO_FIRST_RAW="${ISIRO_BENCH_ISIRO_FIRST-}"
@@ -552,6 +556,13 @@ start_tic_serve() {
     if [[ -n "${ISIRO_GDX_FP8_KV_SCALES_OK:-}" ]]; then
       export ISIRO_GDX_FP8_KV_SCALES_OK
     fi
+    # Cold-arm window + verbose deposit meter (opt-in for long/armed A/Bs).
+    if [[ -n "${ISIRO_GDX_LIVE_WINDOW:-}" ]]; then
+      export ISIRO_GDX_LIVE_WINDOW
+    fi
+    if [[ -n "${ISIRO_GDX_METER:-}" ]]; then
+      export ISIRO_GDX_METER
+    fi
   else
     unset ISIRO_GDX || true
   fi
@@ -671,6 +682,12 @@ if gdx_kv:
     scales_ok = os.environ.get("ISIRO_GDX_FP8_KV_SCALES_OK", "").strip()
     if scales_ok:
         doc["tic_serve_env"]["ISIRO_GDX_FP8_KV_SCALES_OK"] = scales_ok
+    live_w = os.environ.get("ISIRO_GDX_LIVE_WINDOW", "").strip()
+    if live_w:
+        doc["tic_serve_env"]["ISIRO_GDX_LIVE_WINDOW"] = live_w
+    gdx_meter = os.environ.get("ISIRO_GDX_METER", "").strip()
+    if gdx_meter:
+        doc["tic_serve_env"]["ISIRO_GDX_METER"] = gdx_meter
 if reused_from:
     doc["baseline_reused_from"] = reused_from
 json.dump(doc, open(out, "w", encoding="utf-8"), indent=2, sort_keys=True)
