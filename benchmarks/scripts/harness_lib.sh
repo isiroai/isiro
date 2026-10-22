@@ -243,9 +243,11 @@ _bench_env_truthy() {
 }
 SKIP_VERIFY=0
 SKIP_GDX_METERS=0
+SKIP_GDX_CURVE=0
 SKIP_BASELINE=0
 if _bench_env_truthy "${ISIRO_BENCH_SKIP_VERIFY:-}"; then SKIP_VERIFY=1; fi
 if _bench_env_truthy "${ISIRO_BENCH_SKIP_GDX_METERS:-}"; then SKIP_GDX_METERS=1; fi
+if _bench_env_truthy "${ISIRO_BENCH_SKIP_GDX_CURVE:-}"; then SKIP_GDX_CURVE=1; fi
 if _bench_env_truthy "${ISIRO_BENCH_SKIP_BASELINE:-}"; then SKIP_BASELINE=1; fi
 
 # GDX cold meters use host Python (serve stays in pinned VLLM_IMAGE). Remotes
@@ -363,6 +365,7 @@ echo "  PROFILES          = ${SELECTED_PROFILES[*]}" >&2
 echo "  BASELINE_REUSE    = ${REUSE_BASELINE}" >&2
 echo "  SKIP_VERIFY       = ${SKIP_VERIFY}" >&2
 echo "  SKIP_GDX_METERS   = ${SKIP_GDX_METERS}" >&2
+echo "  SKIP_GDX_CURVE    = ${SKIP_GDX_CURVE}" >&2
 echo "  SKIP_BASELINE     = ${SKIP_BASELINE}" >&2
 echo "==========================" >&2
 
@@ -895,6 +898,9 @@ if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
     --alphabet "${ISIRO_BENCH_GDX}" \
     --out "${RUN_DIR}/gdx_kv_bitexact.json"
   echo "gdx_kv_bitexact: PASS" >&2
+  if [[ "${SKIP_GDX_CURVE}" -eq 1 ]]; then
+    echo "gdx_kv_bytes_curve: SKIP (ISIRO_BENCH_SKIP_GDX_CURVE=1; no kv-bytes-vs-context.png until a fitting twin or vendor-page curve)" >&2
+  else
   echo "gdx_kv_bytes_curve: measuring cold vs FA twin (alphabet=${ISIRO_BENCH_GDX}; python=${_gdx_host_python})" >&2
   _gdx_gpu_model="${ISIRO_BENCH_GPU_MODEL:-}"
   _gdx_gpu_count="${ISIRO_BENCH_GPU_COUNT:-0}"
@@ -998,6 +1004,7 @@ PY
     --live-window "${_gdx_live_window}" \
     "${_gdx_curve_extra[@]}"
   echo "gdx_kv_bytes_curve: PASS" >&2
+  fi  # SKIP_GDX_CURVE
 elif [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 1 ]]; then
   echo "gdx_kv_meters: SKIP (ISIRO_BENCH_SKIP_GDX_METERS=1)" >&2
   # compare_ab requires gdx_kv_bitexact.json when ISIRO_GDX is set; reuse ref.
@@ -1145,6 +1152,16 @@ text = upsert(text, "gpu_memory_utilization", gpu_util)
 text = upsert(text, "tensor_parallel_size", tp)
 text = upsert(text, "max_num_seqs", max_seqs)
 text = upsert(text, "no_enable_prefix_caching", "true")
+# Baseline Hub graphs-on uses VLLM_COMPILE + FULL_AND_PIECEWISE. Lean TIC
+# default (DYNAMO_TRACE_ONCE + FULL_DECODE_ONLY) loses TTFT vs Hub. Pin
+# path_a parity whenever graphs are on so A/B is fair (same as
+# _SERVE_CUDAGRAPH_COMPILATION_CONFIG_PATH_A). Quote as a YAML string:
+# unquoted {...} becomes a mapping and breaks CLI.
+_path_a_cc = (
+    "'{\"mode\":3,\"cudagraph_mode\":\"FULL_AND_PIECEWISE\","
+    "\"inductor_compile_config\":{\"combo_kernels\":true,"
+    "\"benchmark_combo_kernel\":true}}'"
+)
 if str(max_batched).strip():
     text = upsert(text, "max_num_batched_tokens", str(max_batched).strip())
     # Domino: equal-batch hybrid win sits on vendor compile [(1,2048)]
@@ -1153,7 +1170,6 @@ if str(max_batched).strip():
     # endpoints to [2048] alone still grows a second range from batched
     # tokens (225810). Dual-range [2048,N] is the least-bad capacity
     # compile shape (~141 best). Keep path_a mode/cudagraph fields.
-    # Quote as a YAML string: unquoted {...} becomes a mapping and breaks CLI.
     try:
         mb = int(str(max_batched).strip())
     except ValueError:
@@ -1166,12 +1182,17 @@ if str(max_batched).strip():
             "\"benchmark_combo_kernel\":true}}'"
         )
         text = upsert(text, "compilation_config", cc)
-    else:
+    elif enforce_eager == "true":
         text = drop_key(text, "compilation_config")
+    else:
+        text = upsert(text, "compilation_config", _path_a_cc)
 else:
-    # Equal-batch / non-capacity: do not leave a capacity overlay behind.
+    # Equal-batch / non-capacity: drop batched overlay; keep compile parity.
     text = drop_key(text, "max_num_batched_tokens")
-    text = drop_key(text, "compilation_config")
+    if enforce_eager == "true":
+        text = drop_key(text, "compilation_config")
+    else:
+        text = upsert(text, "compilation_config", _path_a_cc)
 if docker_tag:
     # targets.vllm.docker.tag - keep indent under docker:
     text = upsert(text, "tag", docker_tag)
@@ -1434,6 +1455,23 @@ elif re.search(r"CUDAGraphs? (is |are )?enabled", text):
     doc["enforce_eager"] = False
     doc["sources"]["enforce_eager"] = "server_log_graph_hint"
 
+# Compile / cudagraph mode (fairness vs Hub FULL_AND_PIECEWISE).
+# Logs look like: cudagraph_mode': <CUDAGraphMode.FULL_AND_PIECEWISE: (2, 1)>
+# or cudagraph_mode=<CUDAGraphMode.FULL_DECODE_ONLY: (2, 0)>
+cg_mode = flag(
+    r"cudagraph_mode['\"]?\s*[:=]\s*<CUDAGraphMode\.([A-Z_]+)"
+) or flag(r"cudagraph_mode=<CUDAGraphMode\.([A-Z_]+)")
+if cg_mode is not None:
+    doc["cudagraph_mode"] = str(cg_mode)
+    doc["sources"]["cudagraph_mode"] = "server_log"
+# CompilationMode.VLLM_COMPILE: 3  or  mode': <CompilationMode.DYNAMO_TRACE_ONCE: 2>
+comp_mode = flag(
+    r"CompilationMode\.([A-Z_]+)\s*:\s*[0-9]+"
+) or flag(r"'mode':\s*<CompilationMode\.([A-Z_]+)")
+if comp_mode is not None:
+    doc["compilation_mode"] = str(comp_mode)
+    doc["sources"]["compilation_mode"] = "server_log"
+
 tr_flag = flag(r"trust_remote_code=(True|False)")
 if tr_flag is not None:
     doc["trust_remote_code"] = as_bool(tr_flag)
@@ -1464,6 +1502,8 @@ for key in (
     "enforce_eager",
     "trust_remote_code",
     "flashinfer_autotune",
+    "cudagraph_mode",
+    "compilation_mode",
 ):
     if doc.get(key) is not None and key not in doc["sources"]:
         doc["sources"][key] = "server_log"

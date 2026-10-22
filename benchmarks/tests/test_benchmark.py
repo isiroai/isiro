@@ -412,6 +412,28 @@ class BenchmarkTests(unittest.TestCase):
         }
         self.assertEqual(fairness_mismatches(baseline, tic, env, env), [])
 
+    def test_fairness_rejects_cudagraph_compile_mismatch(self) -> None:
+        baseline = profile("baseline", "generation-32-256", 32, 256)
+        tic = profile("isiro", "generation-32-256", 32, 256)
+        baseline["serve_config"]["cudagraph_mode"] = "FULL_AND_PIECEWISE"
+        baseline["serve_config"]["compilation_mode"] = "VLLM_COMPILE"
+        tic["serve_config"]["cudagraph_mode"] = "FULL_DECODE_ONLY"
+        tic["serve_config"]["compilation_mode"] = "DYNAMO_TRACE_ONCE"
+        env = {
+            "gpu_model": "RTX 5090",
+            "gpu_count": 1,
+            "driver_version": "1",
+            "cuda_version": "1",
+            "vllm_version": "0.31.0",
+        }
+        mismatches = fairness_mismatches(baseline, tic, env, env)
+        self.assertTrue(any("cudagraph_mode" in m for m in mismatches))
+        self.assertTrue(any("compilation_mode" in m for m in mismatches))
+        # Missing on one side: do not fail (older logs).
+        del tic["serve_config"]["cudagraph_mode"]
+        del tic["serve_config"]["compilation_mode"]
+        self.assertEqual(fairness_mismatches(baseline, tic, env, env), [])
+
     def test_parse_serve_attention(self) -> None:
         parsed = parse_serve_attention(
             "Using AttentionBackendEnum.CUSTOM\n"

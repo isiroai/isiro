@@ -265,6 +265,19 @@ def fairness_mismatches(
             mismatches.append(
                 f"environment.{key}: baseline={left!r}, tic={right!r}"
             )
+    # Graphs-on A/B: Hub stock is VLLM_COMPILE + FULL_AND_PIECEWISE. Lean TIC
+    # FULL_DECODE_ONLY / DYNAMO_TRACE_ONCE is an unfair TTFT band (AWQ 27B).
+    # Compare only when both sides scraped the mode (missing = older logs).
+    for key in ("cudagraph_mode", "compilation_mode"):
+        left = (baseline.get("serve_config") or {}).get(key)
+        right = (tic.get("serve_config") or {}).get(key)
+        if left is None or right is None:
+            continue
+        if left != right:
+            mismatches.append(
+                f"serve_config.{key}: baseline={left!r}, tic={right!r} "
+                "(graphs-on A/B requires compile/cudagraph parity vs Hub)"
+            )
     # Equal-batch latency wins must be same-run. Reused baseline artifacts
     # (e.g. path-a TTFT 159ms) inflate Isiro deltas (97 vs 159) and hide the
     # real matched win (~120 vs ~152 at prompts=conc=32).

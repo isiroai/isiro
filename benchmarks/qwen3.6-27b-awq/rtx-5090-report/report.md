@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-22 19:42 UTC
+`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-22 20:02 UTC
 
 Tooling:
 
@@ -8,8 +8,10 @@ Tooling:
 
 Compared:
 
-- **Baseline:** vLLM (`vllm serve` / Docker `vllm/vllm-openai`)
-- **Isiro:** `isiro serve … --target vllm` (TIC weights; same vLLM version)
+- **Baseline:** vLLM (`vllm serve` / Docker `vllm/vllm-openai`) with `--kv-cache-dtype bfloat16`
+- **Isiro:** `isiro serve … --target vllm` with TIC weights and `ISIRO_GDX=bf16` (same vLLM version; cold KV compress on vendor attention pages)
+
+GDX cold coding-rate vs naive vendor KV bits (estimate): bf16 ~29-31% vs 16 bpv; fp8 ~19-25% vs 8 bpv. Section A GPU memory is the reserved vendor KV pool, not coded cold bytes.
 
 ## Correctness
 
@@ -17,6 +19,7 @@ Compared:
 |--------|----------|-------|
 | On-disk model size | 21.85 GB | **18.50 GB** (**15.35% smaller**) |
 | Integrity | baseline weights | **PASS** (`isiro verify`) |
+| KV bit-exactness | vendor KV pages | **PASS** (GDX `bf16` cold roundtrip) |
 | Serve output match | - | **PASS** (4/4 prompts, temp=0, token IDs equal) |
 
 ## A. GPU memory
@@ -33,9 +36,13 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights.
 
 | Metric | Baseline default fill | Isiro reserved KV |
 |--------|-----------------------|-------------------|
-| GPU memory reserved for KV | 4.47 GiB (54418 tokens) | 4.10 GiB (49737 tokens)† |
+| GPU memory reserved for KV | 4.47 GiB (54418 tokens) | 3.99 GiB (48566 tokens)† |
 
 † Reserved pool on the GPU at vendor KV bytes/token. Token counts are pool admission slots (same bpv as the vendor dtype), not GDX-coded cold capacity. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
+
+### KV vs context
+
+`ISIRO_GDX=bf16` is on for serve. kv-bytes-vs-context.png omitted: no fitting dense HF twin for the curve on this GPU (set ISIRO_BENCH_GDX_MODEL_DIR or unset ISIRO_BENCH_SKIP_GDX_CURVE when a twin fits).
 
 ## C. Capacity
 
@@ -46,7 +53,7 @@ Concurrent requests are the serve max concurrent sequences (`max_num_seqs`); the
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
 | Concurrent requests | 8 | 8 |
-| KV token capacity | 54418 (4.47 GiB KV) | 49737 (4.10 GiB KV)† |
+| KV token capacity | 54418 (4.47 GiB KV) | 48566 (3.99 GiB KV)† |
 
 ### Generation (recall-matched KV, input 32 / output 256)
 
@@ -54,10 +61,10 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 524.61 | 490.35 |
-| ITL (ms) p50 / p95 / p99 | 14.80 / 15.19 / 15.36 | 15.69 / 16.71 / 17.25 |
-| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.93 | 15.76 / 15.79 / 15.81 |
-| TTFT (ms) p50 / p95 / p99 | 128.01 / 128.29 / 128.31 | 157.76 / 158.14 / 158.14 |
+| Output tok/s | 524.48 | 519.48 |
+| ITL (ms) p50 / p95 / p99 | 14.80 / 15.12 / 15.35 | 14.95 / 15.41 / 15.59 |
+| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.88 / 14.92 | 14.95 / 14.99 / 15.01 |
+| TTFT (ms) p50 / p95 / p99 | 130.64 / 130.97 / 131.00 | 128.07 / 128.53 / 128.56 |
 
 ## Config
 
@@ -66,12 +73,13 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 | System | `rtx-5090` |
 | CUDA graphs | on (eager prefill, graph decode) |
 | Weights | `awq` |
-| KV cache | product KV cache size |
+| KV cache | dtype `bfloat16`; `ISIRO_GDX=bf16` on Isiro |
 | Compiler | `v0.1.1` |
 | Runtime | `v0.1.1` |
 | vLLM | 0.31.0 |
 | GPU | NVIDIA GeForce RTX 5090 x 1 |
 | Driver / CUDA | 590.44.01 / 13.1 |
+| ISIRO_GDX | `bf16` |
 | Isiro attention | `FLASH_ATTN` (`ISIRO_ATTN` unset) |
 | Baseline attention | `FLASH_ATTN` |
 

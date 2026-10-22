@@ -719,6 +719,23 @@ def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
     """KV vs Baseline FA twin curve (plus weights+KV panel when available)."""
     gdx = summary.get("gdx_kv_bytes")
     if not isinstance(gdx, dict) or not gdx.get("image"):
+        # GDX serve without curve (e.g. 27B bf16 twin OOMs): explicit omit.
+        corr = summary.get("correctness") if isinstance(
+            summary.get("correctness"), dict
+        ) else {}
+        alph = corr.get("kv_bit_exact_alphabet")
+        if alph and corr.get("kv_bit_exact_ok"):
+            return [
+                "### KV vs context",
+                "",
+                (
+                    f"`ISIRO_GDX={alph}` is on for serve. "
+                    "kv-bytes-vs-context.png omitted: no fitting dense HF twin "
+                    "for the curve on this GPU (set ISIRO_BENCH_GDX_MODEL_DIR "
+                    "or unset ISIRO_BENCH_SKIP_GDX_CURVE when a twin fits)."
+                ),
+                "",
+            ]
         return []
     alphabet = gdx.get("alphabet") or "bf16"
     max_t = gdx.get("max_t")
