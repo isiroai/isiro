@@ -1857,6 +1857,17 @@ class BenchmarkTests(unittest.TestCase):
         self.assertLess(float(cold[-1]["payload_bpv"]), 16.0)
         self.assertGreater(float(cold[-1]["save_vs_fa"]), 0.0)
 
+    def test_gdx_kv_bytes_curve_skips_empty_hybrid_cache_layers(self) -> None:
+        """Qwen3.5 GDN / linear_attention leave empty DynamicCache slots."""
+        src = (SCRIPTS / "gdx_kv_bytes_curve.py").read_text(encoding="utf-8")
+        self.assertIn("Hybrid stacks", src)
+        self.assertIn("no FA past_key_values layers with keys/values", src)
+        self.assertIn("hf_fa_layers", src)
+        self.assertNotIn(
+            '"DynamicCache layer missing keys/values"',
+            src,
+        )
+
     def test_gdx_kv_bytes_curve_legend_has_no_gdx_and_weights_panel(self) -> None:
         from pathlib import Path
 

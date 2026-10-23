@@ -730,9 +730,10 @@ def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
                 "",
                 (
                     f"`ISIRO_GDX={alph}` is on for serve. "
-                    "kv-bytes-vs-context.png omitted: no fitting dense HF twin "
-                    "for the curve on this GPU (set ISIRO_BENCH_GDX_MODEL_DIR "
-                    "or unset ISIRO_BENCH_SKIP_GDX_CURVE when a twin fits)."
+                    "kv-bytes-vs-context.png omitted: curve did not run "
+                    "(unset ISIRO_BENCH_SKIP_GDX_CURVE; for AWQ/quant baselines "
+                    "ensure gptqmodel in the GDX meter venv, or set "
+                    "ISIRO_BENCH_GDX_MODEL_DIR to a fitting HF twin)."
                 ),
                 "",
             ]

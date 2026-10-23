@@ -830,26 +830,38 @@ def measure_curve(
             "points": [],
         }
     # HF Cache: prefer DynamicCache.layers; legacy (k,v) tuples as fallback.
+    # Hybrid stacks (Qwen3.5 GDN / linear_attention) leave empty cache layers;
+    # meter packed FA layers only (same FA twin as vendor page dumps).
     layers_kv: list[tuple[Any, Any]] = []
     if hasattr(pkv, "layers") and pkv.layers:
         for layer in pkv.layers:
             k_t = getattr(layer, "keys", None)
             v_t = getattr(layer, "values", None)
             if k_t is None or v_t is None:
-                return {
-                    "schema": SCHEMA,
-                    "ok": False,
-                    "error": "DynamicCache layer missing keys/values",
-                    "points": [],
-                }
+                continue
             layers_kv.append((k_t, v_t))
     elif hasattr(pkv, "to_legacy_cache"):
         legacy = pkv.to_legacy_cache()
         for entry in legacy:
+            if entry is None or len(entry) < 2:
+                continue
+            if entry[0] is None or entry[1] is None:
+                continue
             layers_kv.append((entry[0], entry[1]))
     else:
         for entry in list(pkv):
+            if entry is None or len(entry) < 2:
+                continue
+            if entry[0] is None or entry[1] is None:
+                continue
             layers_kv.append((entry[0], entry[1]))
+    if not layers_kv:
+        return {
+            "schema": SCHEMA,
+            "ok": False,
+            "error": "no FA past_key_values layers with keys/values",
+            "points": [],
+        }
     n_layers = len(layers_kv)
     k0 = layers_kv[0][0]
     # [B, H, T, D]
@@ -858,10 +870,25 @@ def measure_curve(
     fa_bpv = _fa_bpv(alphabet)
     a = alphabet.strip().lower()
     layer_caps, cap_meta = _layer_caps_from_config(model_path)
-    if len(layer_caps) < n_layers:
+    fa_caps = _fa_dump_layer_caps(model_path, layer_caps)
+    if len(fa_caps) == n_layers:
+        layer_caps = fa_caps
+        cap_meta = {
+            **cap_meta,
+            "fa_twin_mode": "hf_fa_layers",
+            "n_full": sum(1 for c in layer_caps if c is None),
+            "n_sliding": sum(1 for c in layer_caps if c is not None),
+        }
+    elif len(layer_caps) < n_layers:
         layer_caps = list(layer_caps) + [None] * (n_layers - len(layer_caps))
     elif len(layer_caps) > n_layers:
-        layer_caps = layer_caps[:n_layers]
+        layer_caps = [None] * n_layers
+        cap_meta = {
+            **cap_meta,
+            "fa_twin_mode": "hf_fa_layers",
+            "n_full": n_layers,
+            "n_sliding": 0,
+        }
     points: list[dict[str, Any]] = []
     for T in tok_list:
         fa_hot = 0

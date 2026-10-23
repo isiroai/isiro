@@ -10,6 +10,9 @@ numpy>=1.26,<3
 transformers>=4.51,<6
 # transformers finegrained Hub FP8 (quant_method=fp8) needs this band.
 kernels>=0.17.0,<0.18.0
+# AWQ checkpoints (e.g. Qwen3.6-27B-AWQ): transformers AWQ quantizer imports
+# gptqmodel; needed for the bf16 GDX KV-bytes HF curve on AWQ baselines.
+gptqmodel>=2
 accelerate>=0.33
 safetensors>=0.4
 sentencepiece>=0.2

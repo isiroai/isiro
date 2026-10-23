@@ -42,7 +42,11 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights.
 
 ### KV vs context
 
-`ISIRO_GDX=bf16` is on for serve. kv-bytes-vs-context.png omitted: no fitting dense HF twin for the curve on this GPU (set ISIRO_BENCH_GDX_MODEL_DIR or unset ISIRO_BENCH_SKIP_GDX_CURVE when a twin fits).
+`ISIRO_GDX=bf16` on KV from a Project Gutenberg text forward. At T=8192: Baseline KV 0.50 GiB, Isiro KV 0.34 GiB; save 0.16 GiB (31.1%). Bottom panel adds loaded weights (Baseline 19.92 GiB, Isiro 16.81 GiB): at T=8192, Baseline 20.42 GiB vs Isiro 17.15 GiB (weights + KV).
+
+Figure. Weights and KV vs 1-user context.
+
+![Weights and KV vs 1-user context](kv-bytes-vs-context.png)
 
 ## C. Capacity
 
