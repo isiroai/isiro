@@ -300,12 +300,13 @@ def _section_intro(
         "",
     ]
     if gdx_kv:
+        # Do not quote synthetic bitexact bpv or stale coding-rate ranges here.
+        # Measured cold vs FA twin (when present) lives under KV vs context.
         lines.extend(
             [
-                "GDX cold coding-rate vs naive vendor KV bits (estimate): "
-                "bf16 ~29-31% vs 16 bpv; fp8 ~19-25% vs 8 bpv. "
                 "Section A GPU memory is the reserved vendor KV pool, not "
-                "coded cold bytes.",
+                "coded cold bytes. Measured GDX cold vs FA twin bytes (when "
+                "the curve ran) are under KV vs context.",
                 "",
             ]
         )

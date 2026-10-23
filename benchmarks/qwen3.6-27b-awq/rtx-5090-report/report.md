@@ -11,7 +11,7 @@ Compared:
 - **Baseline:** vLLM (`vllm serve` / Docker `vllm/vllm-openai`) with `--kv-cache-dtype bfloat16`
 - **Isiro:** `isiro serve … --target vllm` with TIC weights and `ISIRO_GDX=bf16` (same vLLM version; cold KV compress on vendor attention pages)
 
-GDX cold coding-rate vs naive vendor KV bits (estimate): bf16 ~29-31% vs 16 bpv; fp8 ~19-25% vs 8 bpv. Section A GPU memory is the reserved vendor KV pool, not coded cold bytes.
+Section A GPU memory is the reserved vendor KV pool, not coded cold bytes. Measured GDX cold vs FA twin bytes (when the curve ran) are under KV vs context.
 
 ## Correctness
 
