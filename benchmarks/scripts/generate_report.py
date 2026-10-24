@@ -96,7 +96,18 @@ def tokens_with_pool(
     *,
     extra: str = "",
     dagger: bool = False,
+    gib_only: bool = False,
 ) -> str:
+    """Format reserved pool for the report.
+
+    Under GDX, vendor token slots are not effective cold capacity; prefer
+    GiB-only so Capacity does not read like a pre-GDX token ceiling.
+    """
+    if gib_only and gib is not None:
+        text = f"{gib:.2f} GiB"
+        if dagger:
+            text += "†"
+        return text
     parts = [number(tokens, 0)]
     bits: list[str] = []
     if gib is not None:
@@ -441,7 +452,11 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
     ]
 
 
-def _section_kv_reservation(kv: dict[str, Any]) -> list[str]:
+def _section_kv_reservation(
+    kv: dict[str, Any],
+    *,
+    gib_only: bool = False,
+) -> list[str]:
     """Reserved GPU KV vs Baseline default fill (no Savings %; pool size is not a win)."""
     b_tokens = kv.get("baseline_tokens_measured")
     t_tokens = kv.get("tic_tokens_measured")
@@ -451,9 +466,14 @@ def _section_kv_reservation(kv: dict[str, Any]) -> list[str]:
     t_gib = pool_gib(t_bytes, t_tokens, peer_bytes=b_bytes, peer_tokens=b_tokens)
     if b_gib is None or t_gib is None:
         return []
-    b_tok = number(b_tokens, 0) if b_tokens is not None else "null"
-    t_tok = number(t_tokens, 0) if t_tokens is not None else "null"
-    tic_cell = f"{t_gib:.2f} GiB ({t_tok} tokens)†"
+    if gib_only:
+        base_cell = f"{b_gib:.2f} GiB"
+        tic_cell = f"{t_gib:.2f} GiB†"
+    else:
+        b_tok = number(b_tokens, 0) if b_tokens is not None else "null"
+        t_tok = number(t_tokens, 0) if t_tokens is not None else "null"
+        base_cell = f"{b_gib:.2f} GiB ({b_tok} tokens)"
+        tic_cell = f"{t_gib:.2f} GiB ({t_tok} tokens)†"
     from needle_haystack import kv_overflow_footnote_lines
 
     arm = _arm_col()
@@ -464,11 +484,11 @@ def _section_kv_reservation(kv: dict[str, Any]) -> list[str]:
         "|--------|-----------------------|-------------------|",
         (
             "| GPU memory reserved for KV | "
-            f"{b_gib:.2f} GiB ({b_tok} tokens) | "
+            f"{base_cell} | "
             f"{tic_cell} |"
         ),
         "",
-        *kv_overflow_footnote_lines(),
+        *kv_overflow_footnote_lines(gib_only=gib_only),
     ]
 
 
@@ -478,6 +498,7 @@ def _section_c(
     *,
     prefix: str = "1",
     overflow_note: bool = False,
+    gib_only: bool = False,
 ) -> list[str]:
     b_seqs = (capacity.get("baseline") or {}).get("max_num_seqs")
     t_seqs = (capacity.get("tic") or {}).get("max_num_seqs")
@@ -535,28 +556,42 @@ def _section_c(
         peer_bytes=kv.get("baseline_memory_bytes_measured"),
         peer_tokens=b_tokens,
     )
-    tokens_base = tokens_with_pool(b_tokens, b_gib)
+    tokens_base = tokens_with_pool(b_tokens, b_gib, gib_only=gib_only)
     tokens_tic = bold_win(
-        tokens_with_pool(t_tokens, t_gib, dagger=True),
-        win=kv_token_win,
+        tokens_with_pool(t_tokens, t_gib, dagger=True, gib_only=gib_only),
+        win=(kv_token_win if not gib_only else (
+            isinstance(t_gib, float)
+            and isinstance(b_gib, float)
+            and float(t_gib) > float(b_gib)
+        )),
     )
     if str(capacity.get("kv_measured_source") or "") == "timed_asymmetric":
         tokens_tic = f"{tokens_tic}; asymmetric timed seqs"
     letter = str(prefix) if prefix in ("C", "D") else "D"
+    kv_row_label = "KV pool" if gib_only else "KV token capacity"
+    kv_blurb = (
+        "KV pool is the reserved vendor GPU KV GiB (same util target as "
+        "Baseline). Under GDX, vendor token slots are not effective cold "
+        "capacity; GiB is the fair A/B meter."
+        if gib_only
+        else (
+            "KV token capacity is reserved pool slots when Isiro printed KV "
+            "pool, else vLLM GPU tokens in this serve's reserved GPU pool."
+        )
+    )
     lines = [
         f"## {letter}. Capacity",
         "",
         scale_blurb,
         "",
         "Concurrent requests are the serve max concurrent sequences "
-        "(`max_num_seqs`); the bench load matches that ceiling in this A/B. "
-        "KV token capacity is reserved pool slots when Isiro printed KV pool, "
-        "else vLLM GPU tokens in this serve's reserved GPU pool.",
+        f"(`max_num_seqs`); the bench load matches that ceiling in this A/B. "
+        f"{kv_blurb}",
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
         f"| Concurrent requests | {number(b_seqs, 0)} | {seqs_tic} |",
-        f"| KV token capacity | {tokens_base} | {tokens_tic} |",
+        f"| {kv_row_label} | {tokens_base} | {tokens_tic} |",
         "",
     ]
     if overflow_note:
@@ -798,7 +833,10 @@ def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _mode_sections(summary: dict[str, Any]) -> list[str]:
+def _mode_sections(
+    summary: dict[str, Any],
+    commands: dict[str, Any] | None = None,
+) -> list[str]:
     footprint = summary.get("footprint") or {}
     kv = summary.get("kv_cache") or {}
     capacity = (
@@ -813,9 +851,16 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
     )
     decode_rows = _decode_rows(summary)
     experiment_kind = str(summary.get("experiment_kind") or "equal-batch")
+    cmds = commands if isinstance(commands, dict) else {}
+    if not cmds and isinstance(summary.get("commands"), dict):
+        cmds = summary["commands"]
+    gdx_doc = summary.get("gdx_kv_bytes") if isinstance(summary.get("gdx_kv_bytes"), dict) else {}
+    gdx_on = bool(str(cmds.get("isiro_gdx_kv") or "").strip()) or bool(
+        gdx_doc.get("image") or gdx_doc.get("alphabet")
+    )
     lines: list[str] = []
     lines.extend(_section_gpu_excluding_kv(footprint))
-    lines.extend(_section_kv_reservation(kv))
+    lines.extend(_section_kv_reservation(kv, gib_only=gdx_on))
     lines.extend(_section_gdx_kv_bytes(summary))
     reserved_gib = pool_gib(
         kv.get("tic_memory_bytes_measured"),
@@ -860,6 +905,7 @@ def _mode_sections(summary: dict[str, Any]) -> list[str]:
                 kv,
                 prefix=cap_letter,
                 overflow_note=False,
+                gib_only=gdx_on,
             )
         )
         lines.extend(
@@ -973,7 +1019,7 @@ def render(run_dir: Path) -> str:
     graph_mode = _graph_mode(commands)
     lines = _section_intro(summary, commands)
     lines.extend(_section_a(footprint, correctness))
-    lines.extend(_mode_sections(summary))
+    lines.extend(_mode_sections(summary, commands))
     story_path = run_dir / "stock_vllm_story.json"
     if story_path.is_file():
         from stock_vllm_story import render_story_markdown

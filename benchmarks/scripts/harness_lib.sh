@@ -1179,6 +1179,15 @@ _path_a_cc = (
     "\"inductor_compile_config\":{\"combo_kernels\":true,"
     "\"benchmark_combo_kernel\":true}}'"
 )
+# Hub admit-align(max_num_seqs=8) lands on max_cudagraph_capture_size=16.
+# Pinning TIC to 64 grew estimate-capture HBM and shrank Available KV vs Hub
+# (AWQ 4.12 vs 4.47 GiB). Floor 16 avoids the admit-align=8 TTFT cliff without
+# overshooting Hub; raise with max_num_seqs when capacity scales past 16.
+try:
+    _ms = int(str(max_seqs).strip())
+except ValueError:
+    _ms = 0
+_capture_size = str(max(16, _ms) if _ms > 0 else 16)
 if str(max_batched).strip():
     text = upsert(text, "max_num_batched_tokens", str(max_batched).strip())
     # Domino: equal-batch hybrid win sits on vendor compile [(1,2048)]
@@ -1199,15 +1208,13 @@ if str(max_batched).strip():
             "\"benchmark_combo_kernel\":true}}'"
         )
         text = upsert(text, "compilation_config", cc)
-        text = upsert(text, "max_cudagraph_capture_size", "64")
+        text = upsert(text, "max_cudagraph_capture_size", _capture_size)
     elif enforce_eager == "true":
         text = drop_key(text, "compilation_config")
         text = drop_key(text, "max_cudagraph_capture_size")
     else:
         text = upsert(text, "compilation_config", _path_a_cc)
-        # Path_a compile without ISIRO_GDX still needs stock capture 64;
-        # lean admit-align(max_num_seqs=8) → 8 collapses TTFT vs Hub.
-        text = upsert(text, "max_cudagraph_capture_size", "64")
+        text = upsert(text, "max_cudagraph_capture_size", _capture_size)
 else:
     # Equal-batch / non-capacity: drop batched overlay; keep compile parity.
     text = drop_key(text, "max_num_batched_tokens")
@@ -1216,7 +1223,7 @@ else:
         text = drop_key(text, "max_cudagraph_capture_size")
     else:
         text = upsert(text, "compilation_config", _path_a_cc)
-        text = upsert(text, "max_cudagraph_capture_size", "64")
+        text = upsert(text, "max_cudagraph_capture_size", _capture_size)
 if docker_tag:
     # targets.vllm.docker.tag - keep indent under docker:
     text = upsert(text, "tag", docker_tag)

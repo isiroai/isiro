@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-22 23:13 UTC
+`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-24 02:34 UTC
 
 Tooling:
 
@@ -30,19 +30,19 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights.
 
 | Metric | Baseline | Isiro | Savings % |
 |--------|----------|-------|-----------|
-| GPU memory for loaded weights | 19.92 GiB | **16.81 GiB** | **15.61%** |
+| GPU memory for loaded weights | 19.92 GiB | **14.44 GiB** | **27.51%** |
 
 ### KV cache
 
 | Metric | Baseline default fill | Isiro reserved KV |
 |--------|-----------------------|-------------------|
-| GPU memory reserved for KV | 4.47 GiB (54418 tokens) | 4.12 GiB (50322 tokens)† |
+| GPU memory reserved for KV | 4.47 GiB | 4.18 GiB† |
 
-† Reserved pool on the GPU at vendor KV bytes/token. Token counts are pool admission slots (same bpv as the vendor dtype), not GDX-coded cold capacity. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
+† Reserved vendor GPU KV pool GiB (same util target as Baseline). Under GDX this is not coded cold capacity; longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
 
 ### KV vs context
 
-`ISIRO_GDX=bf16` on KV from a Project Gutenberg text forward. At T=8192: Baseline KV 0.50 GiB, Isiro KV 0.34 GiB; save 0.16 GiB (31.1%). Bottom panel adds loaded weights (Baseline 19.92 GiB, Isiro 16.81 GiB): at T=8192, Baseline 20.42 GiB vs Isiro 17.15 GiB (weights + KV).
+`ISIRO_GDX=bf16` on KV from a Project Gutenberg text forward. At T=8192: Baseline KV 0.50 GiB, Isiro KV 0.34 GiB; save 0.16 GiB (31.1%). Bottom panel adds loaded weights (Baseline 19.92 GiB, Isiro 14.44 GiB): at T=8192, Baseline 20.42 GiB vs Isiro 14.78 GiB (weights + KV).
 
 Figure. Weights and KV vs 1-user context.
 
@@ -52,12 +52,12 @@ Figure. Weights and KV vs 1-user context.
 
 Concurrent requests are 8 on both sides. Not scaled from KV token capacity.
 
-Concurrent requests are the serve max concurrent sequences (`max_num_seqs`); the bench load matches that ceiling in this A/B. KV token capacity is reserved pool slots when Isiro printed KV pool, else vLLM GPU tokens in this serve's reserved GPU pool.
+Concurrent requests are the serve max concurrent sequences (`max_num_seqs`); the bench load matches that ceiling in this A/B. KV pool is the reserved vendor GPU KV GiB (same util target as Baseline). Under GDX, vendor token slots are not effective cold capacity; GiB is the fair A/B meter.
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
 | Concurrent requests | 8 | 8 |
-| KV token capacity | 54418 (4.47 GiB KV) | 50322 (4.12 GiB KV)† |
+| KV pool | 4.47 GiB | 4.18 GiB† |
 
 ### Generation (recall-matched KV, input 32 / output 256)
 
@@ -65,10 +65,10 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 524.19 | 520.28 |
-| ITL (ms) p50 / p95 / p99 | 14.79 / 15.18 / 15.43 | 14.91 / 15.41 / 29.91 |
-| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.93 | 14.91 / 14.96 / 14.98 |
-| TTFT (ms) p50 / p95 / p99 | 132.20 / 132.41 / 132.42 | 131.69 / 132.05 / 132.05 |
+| Output tok/s | 524.05 | 514.75 |
+| ITL (ms) p50 / p95 / p99 | 14.79 / 15.17 / 15.40 | 14.98 / 15.71 / 16.37 |
+| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.93 | 14.97 / 15.04 / 15.07 |
+| TTFT (ms) p50 / p95 / p99 | 132.70 / 132.94 / 132.94 | 159.55 / 159.77 / 159.78 |
 
 ## Config
 

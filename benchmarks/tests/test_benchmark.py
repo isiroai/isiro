@@ -1577,6 +1577,15 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("GDX `bf16` cold roundtrip", report)
             self.assertIn("reserved vendor KV pool", report)
             self.assertIn("KV vs context", report)
+            # GDX: reserved pool as GiB only (vendor token slots ≠ cold capacity).
+            self.assertRegex(
+                report,
+                r"GPU memory reserved for KV \| [0-9.]+ GiB \|",
+            )
+            self.assertNotRegex(
+                report,
+                r"GPU memory reserved for KV \| [0-9.]+ GiB \([0-9]+ tokens\)",
+            )
             self.assertNotIn("coding-rate", report)
             self.assertNotIn("~29-31%", report)
             self.assertNotIn("ISIRO_GDX_C=fp8", report)
