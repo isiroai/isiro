@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-24 02:34 UTC
+`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-10-25 02:21 UTC
 
 Tooling:
 
@@ -42,11 +42,7 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights.
 
 ### KV vs context
 
-`ISIRO_GDX=bf16` on KV from a Project Gutenberg text forward. At T=8192: Baseline KV 0.50 GiB, Isiro KV 0.34 GiB; save 0.16 GiB (31.1%). Bottom panel adds loaded weights (Baseline 19.92 GiB, Isiro 14.44 GiB): at T=8192, Baseline 20.42 GiB vs Isiro 14.78 GiB (weights + KV).
-
-Figure. Weights and KV vs 1-user context.
-
-![Weights and KV vs 1-user context](kv-bytes-vs-context.png)
+`ISIRO_GDX=bf16` is on for serve. kv-bytes-vs-context.png omitted: curve did not run (unset ISIRO_BENCH_SKIP_GDX_CURVE; for AWQ/quant baselines ensure gptqmodel in the GDX meter venv, or set ISIRO_BENCH_GDX_MODEL_DIR to a fitting HF twin).
 
 ## C. Capacity
 
@@ -65,10 +61,10 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 524.05 | 514.75 |
-| ITL (ms) p50 / p95 / p99 | 14.79 / 15.17 / 15.40 | 14.98 / 15.71 / 16.37 |
-| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.93 | 14.97 / 15.04 / 15.07 |
-| TTFT (ms) p50 / p95 / p99 | 132.70 / 132.94 / 132.94 | 159.55 / 159.77 / 159.78 |
+| Output tok/s | 523.79 | 515.07 |
+| ITL (ms) p50 / p95 / p99 | 14.80 / 15.16 / 15.34 | 14.98 / 15.43 / 30.03 |
+| TPOT (ms) p50 / p95 / p99 | 14.81 / 14.90 / 14.94 | 14.96 / 15.00 / 15.02 |
+| TTFT (ms) p50 / p95 / p99 | 133.01 / 133.55 / 133.62 | 161.33 / 161.66 / 161.66 |
 
 ## Config
 
