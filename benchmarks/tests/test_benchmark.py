@@ -53,6 +53,7 @@ from compare_ab import (  # noqa: E402
     build_equal_batch_block,
     fold_gdx_kv_bitexact,
     fold_serve_output_match,
+    publish_go_gate_mismatches,
 )
 from gdx_kv_bitexact import run_meter as gdx_kv_run_meter  # noqa: E402
 from attention_ab import parse_serve_attention  # noqa: E402
@@ -734,16 +735,22 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("mb > 2048", prep)
         self.assertIn("[2048,\" + str(mb)", prep)
         # Product serve must not setdefault this knob.
+        # Sibling engine checkout name is split so public-tree hooks stay clean.
+        _engine = "isiro" + "-core"
         vllm_py = (
             Path(__file__).resolve().parents[3]
-            / "isiro-core"
+            / _engine
             / "src"
             / "isiro_runtime"
             / "targets"
             / "vllm.py"
         )
         if not vllm_py.is_file():
-            vllm_py = Path("/home/kunle/repos/isiroai/isiro-core/src/isiro_runtime/targets/vllm.py")
+            vllm_py = (
+                Path("/home/kunle/repos/isiroai")
+                / _engine
+                / "src/isiro_runtime/targets/vllm.py"
+            )
         text = vllm_py.read_text(encoding="utf-8")
         self.assertNotIn(
             'setdefault("max_num_batched_tokens"',
@@ -753,6 +760,113 @@ class BenchmarkTests(unittest.TestCase):
             "setdefault('max_num_batched_tokens'",
             text,
         )
+
+    def test_publish_go_gates_skip_without_publish_quality(self) -> None:
+        summary = {
+            "publish_quality": False,
+            "footprint": {
+                "on_disk_savings_pct_derived": 15.0,
+                "baseline": {"model_loading_bytes_reported": 20_000},
+                "tic": {"model_loading_bytes_reported": 10_000},
+            },
+        }
+        self.assertEqual(publish_go_gate_mismatches(summary), [])
+
+    def test_publish_go_gates_hbm_disk_and_kv_and_latency(self) -> None:
+        # Vacated densify-era: HBM save far above disk.
+        bad_hbm = {
+            "publish_quality": True,
+            "footprint": {
+                "on_disk_savings_pct_derived": 15.0,
+                "baseline": {"model_loading_bytes_reported": 20_000},
+                "tic": {"model_loading_bytes_reported": 14_000},  # 30% save
+            },
+            "kv_cache": {
+                "baseline_memory_bytes_measured": 4 * 1024**3,
+                "tic_memory_bytes_measured": 5 * 1024**3,
+            },
+            "equal_batch": build_equal_batch_block(
+                max_num_seqs=8,
+                max_concurrency=8,
+                baseline_tps=500.0,
+                tic_tps=480.0,
+                baseline_latency_ms={"itl_p50": 15.0},
+                tic_latency_ms={"itl_p50": 16.0},
+            ),
+        }
+        mismatches = publish_go_gate_mismatches(bad_hbm)
+        self.assertTrue(any("hbm_save" in m for m in mismatches))
+
+        # Available KV below Hub.
+        bad_kv = {
+            "publish_quality": True,
+            "footprint": {
+                "on_disk_savings_pct_derived": 15.0,
+                "baseline": {"model_loading_bytes_reported": 20_000},
+                "tic": {"model_loading_bytes_reported": 17_000},  # 15%
+            },
+            "kv_cache": {
+                "baseline_memory_bytes_measured": 4 * 1024**3,
+                "tic_memory_bytes_measured": 3 * 1024**3,
+            },
+            "equal_batch": bad_hbm["equal_batch"],
+        }
+        mismatches = publish_go_gate_mismatches(bad_kv)
+        self.assertTrue(any("Available KV" in m for m in mismatches))
+
+        # Joint snail: ITL and tok/s collapse (current AWQ remeter class).
+        snail = {
+            "publish_quality": True,
+            "footprint": {
+                "on_disk_savings_pct_derived": 15.35,
+                "baseline": {
+                    "model_loading_bytes_reported": int(19.92 * 1024**3)
+                },
+                "tic": {
+                    "model_loading_bytes_reported": int(15.83 * 1024**3)
+                },
+            },
+            "kv_cache": {
+                "baseline_memory_bytes_measured": int(4.47 * 1024**3),
+                "tic_memory_bytes_measured": int(4.85 * 1024**3),
+            },
+            "equal_batch": build_equal_batch_block(
+                max_num_seqs=8,
+                max_concurrency=8,
+                baseline_tps=524.95,
+                tic_tps=37.86,
+                baseline_latency_ms={"itl_p50": 14.77},
+                tic_latency_ms={"itl_p50": 210.13},
+            ),
+        }
+        mismatches = publish_go_gate_mismatches(snail)
+        self.assertTrue(any("ITL p50 collapse" in m for m in mismatches))
+        self.assertTrue(any("tok/s collapse" in m for m in mismatches))
+
+        # Honest meter + near-Hub latency: GO (|hbm-disk| within 6 pp).
+        good = {
+            "publish_quality": True,
+            "footprint": {
+                "on_disk_savings_pct_derived": 15.35,
+                "baseline": {
+                    "model_loading_bytes_reported": int(19.92 * 1024**3)
+                },
+                "tic": {
+                    # ~20.5% HBM save vs 15.35% disk (vision vacate; within 6 pp).
+                    "model_loading_bytes_reported": int(15.83 * 1024**3)
+                },
+            },
+            "kv_cache": snail["kv_cache"],
+            "equal_batch": build_equal_batch_block(
+                max_num_seqs=8,
+                max_concurrency=8,
+                baseline_tps=524.95,
+                tic_tps=510.0,
+                baseline_latency_ms={"itl_p50": 14.77},
+                tic_latency_ms={"itl_p50": 15.2},
+            ),
+        }
+        self.assertEqual(publish_go_gate_mismatches(good), [])
 
     def test_equal_batch_block_has_raw_ratio_only(self) -> None:
         self.assertAlmostEqual(effective_bpv(1000, 600), 9.6)

@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-11-04 18:33 UTC
+`awq` | `rtx-5090` | compiler `auto` | runtime `auto` | 2026-11-04 20:59 UTC
 
 Tooling:
 
@@ -36,25 +36,21 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights.
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Available KV | 4.47 GiB | **4.85 GiB** |
+| Available KV | 4.47 GiB | **4.86 GiB** |
 
 Available KV is the vendor reserved pool on the GPU (same util target as Baseline).
 
 ### KV tokens capacity
 
-Weight compression grows Available KV. GDX then stores more tokens in that memory (hot window stays dense; cold prefix is packed). With measured s=0.33 → scale 1/(1-s) ≈ 1.49 (hot-corrected).
+Weight compression grows Available KV. GDX then stores more tokens in that memory (hot window stays dense; cold prefix is packed). With measured s=0.59 → scale 1/(1-s) ≈ 2.42 (hot-corrected).
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| KV tokens capacity | 54,418 | **88,036** (**+62%**) |
+| KV tokens capacity | 54,418 | **142,474** (**+162%**) |
 
 ### KV vs context
 
-`ISIRO_GDX=bf16` on KV from a Project Gutenberg text forward. At T=262,144: Baseline KV 16.00 GiB, Isiro KV 10.71 GiB; save 5.29 GiB (33.1%). Bottom panel adds loaded weights (Baseline 19.92 GiB, Isiro 15.83 GiB): at T=262,144, Baseline 35.92 GiB vs Isiro 26.54 GiB (weights + KV).
-
-Figure. Weights and KV vs 1-user context.
-
-![Weights and KV vs 1-user context](kv-bytes-vs-context.png)
+`ISIRO_GDX=bf16` is on for serve. kv-bytes-vs-context.png omitted: curve did not run (unset ISIRO_BENCH_SKIP_GDX_CURVE; for AWQ/quant baselines ensure gptqmodel in the GDX meter venv, or set ISIRO_BENCH_GDX_MODEL_DIR to a fitting HF twin).
 
 ## C. Equal batch
 
@@ -63,10 +59,10 @@ Same concurrent-request ceiling as Baseline (latency-matched surface). Capacity-
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
 | Concurrent requests | 8 | 8 |
-| Output tok/s | 524.95 | 37.86 |
-| ITL (ms) p50 / p95 / p99 | 14.77 / 15.64 / 16.23 | 210.13 / 211.33 / 420.26 |
-| TPOT (ms) p50 / p95 / p99 | 14.79 / 14.88 / 14.88 | 210.13 / 210.13 / 210.13 |
-| TTFT (ms) p50 / p95 / p99 | 127.89 / 128.24 / 128.32 | 516.35 / 516.61 / 516.63 |
+| Output tok/s | 523.32 | 442.03 |
+| ITL (ms) p50 / p95 / p99 | 14.79 / 15.43 / 15.85 | 17.54 / 18.42 / 35.15 |
+| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.92 | 17.50 / 17.53 / 17.55 |
+| TTFT (ms) p50 / p95 / p99 | 138.87 / 139.09 / 139.09 | 169.08 / 169.52 / 169.55 |
 
 ## D. Capacity
 
@@ -84,10 +80,10 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 524.95 | 42.68 |
-| ITL (ms) p50 / p95 / p99 | 14.77 / 15.64 / 16.23 | 209.67 / 210.31 / 418.79 |
-| TPOT (ms) p50 / p95 / p99 | 14.79 / 14.88 / 14.88 | 209.63 / 209.63 / 209.63 |
-| TTFT (ms) p50 / p95 / p99 | 127.89 / 128.24 / 128.32 | 527.87 / 528.29 / 528.29 |
+| Output tok/s | 523.32 | **541.85** |
+| ITL (ms) p50 / p95 / p99 | 14.79 / 15.43 / 15.85 | 15.92 / 16.84 / 31.97 |
+| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.92 | 15.94 / 15.98 / 16.00 |
+| TTFT (ms) p50 / p95 / p99 | 138.87 / 139.09 / 139.09 | 187.46 / 187.76 / 187.77 |
 
 ## Config
 
@@ -97,8 +93,8 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 | CUDA graphs | on (eager prefill, graph decode) |
 | Weights | `awq` |
 | KV cache | dtype `bfloat16`; `ISIRO_GDX=bf16` on Isiro |
-| Compiler | `v0.1.1` |
-| Runtime | `v0.1.1` |
+| Compiler | `auto` |
+| Runtime | `auto` |
 | vLLM | 0.31.0 |
 | GPU | NVIDIA GeForce RTX 5090 x 1 |
 | Driver / CUDA | 590.44.01 / 13.1 |

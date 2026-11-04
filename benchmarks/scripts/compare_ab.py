@@ -136,6 +136,121 @@ def percent_savings(baseline: int | None, tic: int | None) -> float | None:
     return round((1.0 - tic / baseline) * 100.0, 3)
 
 
+# Publish fail-closed: meter-only remeters must not stamp when latency collapses
+# (AWQ joint_pf snail) or when densify fakes the weight/Available KV story.
+# Multimodal AWQ vision vacate through Model loading took can add ~5 pp vs
+# disk without the text densify-era fraud (~12+ pp). Keep this below that.
+_PUBLISH_HBM_DISK_GAP_PP = 6.0
+_PUBLISH_ITL_MAX_RATIO = 1.5
+_PUBLISH_TPS_MIN_RATIO = 0.7
+
+
+def publish_go_gate_mismatches(summary: dict[str, Any]) -> list[str]:
+    """Fail publish when HBM/KV meter wins or equal-batch latency collapse.
+
+    Gates (publish_quality runs only):
+    - ``|hbm_save% - disk_save%| > 6`` pp (vacated densify-era meter)
+    - Available KV GiB below Hub
+    - Equal-batch (else capacity decode): ITL p50 > 1.5× Hub or tok/s < 0.7× Hub
+    """
+    if not bool(summary.get("publish_quality")):
+        return []
+    errors: list[str] = []
+    fp = summary.get("footprint") if isinstance(summary.get("footprint"), dict) else {}
+    disk = fp.get("on_disk_savings_pct_derived")
+    b_load = (fp.get("baseline") or {}).get("model_loading_bytes_reported")
+    t_load = (fp.get("tic") or {}).get("model_loading_bytes_reported")
+    hbm = percent_savings(
+        int(b_load) if isinstance(b_load, (int, float)) else None,
+        int(t_load) if isinstance(t_load, (int, float)) else None,
+    )
+    if isinstance(disk, (int, float)) and isinstance(hbm, (int, float)):
+        gap = abs(float(hbm) - float(disk))
+        if gap > _PUBLISH_HBM_DISK_GAP_PP:
+            errors.append(
+                f"publish GO: |hbm_save%-disk_save%|={gap:.2f} pp "
+                f"(hbm={hbm:.2f} disk={disk:.2f}; max {_PUBLISH_HBM_DISK_GAP_PP})"
+            )
+    kv = summary.get("kv_cache") if isinstance(summary.get("kv_cache"), dict) else {}
+    b_kv = kv.get("baseline_memory_bytes_measured")
+    t_kv = kv.get("tic_memory_bytes_measured")
+    if (
+        isinstance(b_kv, (int, float))
+        and isinstance(t_kv, (int, float))
+        and float(b_kv) > 0
+        and float(t_kv) < float(b_kv)
+    ):
+        errors.append(
+            "publish GO: Available KV below Hub "
+            f"(tic={float(t_kv) / 1024**3:.2f} GiB "
+            f"< baseline={float(b_kv) / 1024**3:.2f} GiB)"
+        )
+
+    def _latency_pair(
+        block: dict[str, Any] | None,
+    ) -> tuple[float | None, float | None, float | None, float | None]:
+        if not isinstance(block, dict):
+            return None, None, None, None
+        tps = block.get("decode_output_tokens_per_sec") or {}
+        lat = block.get("latency_ms") or {}
+        b_tps = tps.get("baseline")
+        t_tps = tps.get("tic")
+        b_itl = lat.get("baseline", {}).get("itl_p50") if isinstance(
+            lat.get("baseline"), dict
+        ) else lat.get("itl_p50")
+        t_itl = lat.get("tic", {}).get("itl_p50") if isinstance(
+            lat.get("tic"), dict
+        ) else None
+        # equal_batch nests baseline/tic under latency_ms differently
+        if t_itl is None and isinstance(lat.get("tic"), dict):
+            t_itl = lat["tic"].get("itl_p50")
+        if b_itl is None and isinstance(block.get("baseline"), dict):
+            b_itl = (block["baseline"].get("latency_ms") or {}).get("itl_p50")
+        if t_itl is None and isinstance(block.get("tic"), dict):
+            t_itl = (block["tic"].get("latency_ms") or {}).get("itl_p50")
+        return (
+            float(b_tps) if isinstance(b_tps, (int, float)) else None,
+            float(t_tps) if isinstance(t_tps, (int, float)) else None,
+            float(b_itl) if isinstance(b_itl, (int, float)) else None,
+            float(t_itl) if isinstance(t_itl, (int, float)) else None,
+        )
+
+    eb = summary.get("equal_batch")
+    cap = summary.get("capacity")
+    b_tps, t_tps, b_itl, t_itl = _latency_pair(
+        eb if isinstance(eb, dict) else None
+    )
+    label = "equal_batch"
+    if b_tps is None:
+        b_tps, t_tps, b_itl, t_itl = _latency_pair(
+            cap if isinstance(cap, dict) else None
+        )
+        label = "capacity"
+    if (
+        isinstance(b_itl, float)
+        and isinstance(t_itl, float)
+        and b_itl > 0
+        and t_itl > _PUBLISH_ITL_MAX_RATIO * b_itl
+    ):
+        errors.append(
+            f"publish GO: {label} ITL p50 collapse "
+            f"(tic={t_itl:.2f} ms > {_PUBLISH_ITL_MAX_RATIO}× "
+            f"baseline={b_itl:.2f} ms)"
+        )
+    if (
+        isinstance(b_tps, float)
+        and isinstance(t_tps, float)
+        and b_tps > 0
+        and t_tps < _PUBLISH_TPS_MIN_RATIO * b_tps
+    ):
+        errors.append(
+            f"publish GO: {label} tok/s collapse "
+            f"(tic={t_tps:.2f} < {_PUBLISH_TPS_MIN_RATIO}× "
+            f"baseline={b_tps:.2f})"
+        )
+    return errors
+
+
 def _decode_tps_pair(
     baseline_doc: dict[str, Any], tic_doc: dict[str, Any]
 ) -> tuple[float, float]:
@@ -607,6 +722,7 @@ def main() -> int:
     if attention:
         summary["attention"] = attention
 
+    errors.extend(publish_go_gate_mismatches(summary))
     summary["fairness"] = {"passed": not errors, "mismatches": errors}
     environment = dict(baseline_env)
     environment["variant_runtime"] = {
