@@ -1008,6 +1008,47 @@ PY
       ;;
   esac
   _gdx_live_window="${ISIRO_GDX_LIVE_WINDOW:-512}"
+  # Token grid: explicit ISIRO_BENCH_GDX_CURVE_TOKENS, else geometric to HF
+  # max_position_embeddings (model max context), else serve max_model_len.
+  if [[ -z "${ISIRO_BENCH_GDX_CURVE_TOKENS:-}" ]]; then
+    ISIRO_BENCH_GDX_CURVE_TOKENS="$(
+      "${_gdx_host_python}" - "${_gdx_curve_model_dir}" "${SERVE_MAX_MODEL_LEN:-8192}" <<'PY'
+import json, sys
+from pathlib import Path
+
+model = Path(sys.argv[1])
+serve = int(sys.argv[2])
+max_t = serve
+cfg = model / "config.json"
+if cfg.is_file():
+    try:
+        doc = json.loads(cfg.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        doc = {}
+    for node in (doc, doc.get("text_config") or {}, doc.get("llm_config") or {}):
+        if not isinstance(node, dict):
+            continue
+        raw = node.get("max_position_embeddings")
+        if isinstance(raw, (int, float)) and int(raw) > 0:
+            max_t = max(max_t, int(raw))
+            break
+grid = []
+t = 512
+while t < max_t:
+    grid.append(t)
+    t *= 2
+if not grid or grid[-1] != max_t:
+    grid.append(max_t)
+print(",".join(str(x) for x in grid))
+PY
+    )"
+    export ISIRO_BENCH_GDX_CURVE_TOKENS
+    echo "gdx_kv_bytes_curve: tokens=${ISIRO_BENCH_GDX_CURVE_TOKENS}" >&2
+  fi
+  _gdx_curve_extra+=(--tokens "${ISIRO_BENCH_GDX_CURVE_TOKENS}")
+  if [[ -n "${ISIRO_BENCH_GDX_CURVE_CAPTURE_T:-}" ]]; then
+    _gdx_curve_extra+=(--capture-t "${ISIRO_BENCH_GDX_CURVE_CAPTURE_T}")
+  fi
   "${_gdx_host_python}" "${BENCH_ROOT}/scripts/gdx_kv_bytes_curve.py" \
     --alphabet "${ISIRO_BENCH_GDX}" \
     --out-json "${RUN_DIR}/gdx_kv_bytes_curve.json" \
@@ -2310,6 +2351,27 @@ scrape_baseline_environment_for_scale() {
       "${RUN_DIR}/baseline_environment.json"
     echo "isiro-first: reused baseline_environment.json from ${ISIRO_BENCH_BASELINE_REF} (no scrape)" >&2
     return 0
+  fi
+  # --reuse-baseline: copy env only from a fingerprint-complete cache hit.
+  # Do not call try_reuse_baseline here (that also copies timed profiles and
+  # would make the later timed-arm reuse see hit==RUN_DIR and cold-start).
+  if [[ "${REUSE_BASELINE}" -eq 1 ]]; then
+    write_baseline_fingerprint >/dev/null
+    _env_hit="$(
+      python3 "${BENCH_ROOT}/scripts/baseline_cache.py" find \
+        --scratch-root "${SCRATCH_ROOT}" \
+        --fingerprint-file "${RUN_DIR}/baseline_fingerprint.json" \
+        2>/dev/null || true
+    )"
+    if [[ -n "${_env_hit}" && "${_env_hit}" != "${RUN_DIR}" && \
+          -f "${_env_hit}/baseline_environment.json" ]]; then
+      cp -a "${_env_hit}/baseline_environment.json" \
+        "${RUN_DIR}/baseline_environment.json"
+      echo "isiro-first: reused baseline_environment.json from $(basename "${_env_hit}") (no scrape)" >&2
+      unset _env_hit
+      return 0
+    fi
+    unset _env_hit
   fi
   SERVE_MAX_NUM_SEQS="${BASELINE_CAPACITY_SEQS}"
   build_baseline_serve

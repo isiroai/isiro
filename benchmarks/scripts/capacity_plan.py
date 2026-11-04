@@ -190,6 +190,57 @@ def kv_scale_ratio_measured(
     return kv_t / kv_b
 
 
+def gdx_cold_savings_from_bpv(avg_bpv: float, fa_bpv: float) -> float:
+    """Cold savings ``s = 1 - avg_bpv/fa_bpv`` (bitexact or curve payload)."""
+    fa = float(fa_bpv)
+    avg = float(avg_bpv)
+    if fa <= 0:
+        raise ValueError("fa_bpv must be positive")
+    if avg < 0:
+        raise ValueError("avg_bpv must be non-negative")
+    return max(0.0, min(1.0 - 1e-12, 1.0 - (avg / fa)))
+
+
+def coded_kv_token_capacity(
+    admission_tokens: int | float,
+    *,
+    savings_s: float,
+    live_window: int = 512,
+    apply_gdx: bool = True,
+) -> int:
+    """Tokens that fit in the same Available KV GiB under GDX hot/cold.
+
+    Vendor admission ``T_adm`` fills budget ``B = T_adm * b_fa``. With live
+    window ``W`` staying FA and cold packed at rate ``(1-s)``:
+
+    ``T_coded = (T_adm - W*s) / (1-s)`` for ``T > W`` (and ``apply_gdx``).
+
+    Baseline (no GDX): returns ``round(T_adm)``.
+    """
+    t_adm = float(admission_tokens)
+    if t_adm < 0:
+        raise ValueError("admission_tokens must be non-negative")
+    if not apply_gdx:
+        return int(round(t_adm))
+    s = float(savings_s)
+    if s < 0.0 or s >= 1.0:
+        raise ValueError("savings_s must be in [0, 1)")
+    w = max(0, int(live_window))
+    if s <= 0.0:
+        return int(round(t_adm))
+    # Hot-corrected invert of B = (T-W)*b_fa*(1-s) + W*b_fa.
+    coded = (t_adm - (float(w) * s)) / (1.0 - s)
+    return int(round(max(t_adm, coded)))
+
+
+def gdx_capacity_scale(savings_s: float) -> float:
+    """Asymptotic capacity scale ``1/(1-s)`` (ignore hot window)."""
+    s = float(savings_s)
+    if s < 0.0 or s >= 1.0:
+        raise ValueError("savings_s must be in [0, 1)")
+    return 1.0 / (1.0 - s)
+
+
 def next_probe(lo: int, hi: int) -> int:
     """Midpoint for binary search (inclusive lo/hi)."""
     if lo > hi:

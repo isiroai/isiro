@@ -43,7 +43,15 @@ def _human_recorded_at(value: Any) -> str:
 
 
 def number(value: Any, digits: int = 2) -> str:
-    return "null" if value is None else f"{float(value):.{digits}f}"
+    """Format a numeric report cell.
+
+    Integer cells (``digits=0``) use thousands separators (``54,418``).
+    """
+    if value is None:
+        return "null"
+    if int(digits) == 0:
+        return f"{int(round(float(value))):,}"
+    return f"{float(value):,.{int(digits)}f}"
 
 
 def bytes_gb(value: Any) -> str:
@@ -85,6 +93,16 @@ def pct_of_baseline(ratio: Any) -> str:
     return f"{round(float(ratio) * 100):.0f}% of Baseline"
 
 
+def pct_gain_from_ratio(ratio: Any) -> str:
+    """``Isiro/Baseline - 1`` as a signed percent gain (e.g. 1.12 → ``+12%``)."""
+    if not isinstance(ratio, (int, float)):
+        return ""
+    gain = round((float(ratio) - 1.0) * 100.0)
+    if gain > 0:
+        return f"+{gain}%"
+    return f"{gain}%"
+
+
 def _arm_col() -> str:
     """Customer product arm column label (TIC weights + optional GDX)."""
     return "Isiro"
@@ -100,14 +118,12 @@ def tokens_with_pool(
 ) -> str:
     """Format reserved pool for the report.
 
-    Under GDX, vendor token slots are not effective cold capacity; prefer
-    GiB-only so Capacity does not read like a pre-GDX token ceiling.
+    Always show vendor pool token slots plus GiB. Under GDX those tokens are
+    admission slots at vendor bpv (not GDX-coded cold capacity); the †
+    footnote says so. ``gib_only`` is retained for callers but no longer
+    strips tokens (customer Capacity matches the bf16 report shape).
     """
-    if gib_only and gib is not None:
-        text = f"{gib:.2f} GiB"
-        if dagger:
-            text += "†"
-        return text
+    del gib_only  # tokens always shown; footnote covers GDX semantics
     parts = [number(tokens, 0)]
     bits: list[str] = []
     if gib is not None:
@@ -311,13 +327,14 @@ def _section_intro(
         "",
     ]
     if gdx_kv:
-        # Do not quote synthetic bitexact bpv or stale coding-rate ranges here.
         # Measured cold vs FA twin (when present) lives under KV vs context.
+        # Coded token capacity (1/(1-s), hot-corrected) is under Section A.
         lines.extend(
             [
-                "Section A GPU memory is the reserved vendor KV pool, not "
-                "coded cold bytes. Measured GDX cold vs FA twin bytes (when "
-                "the curve ran) are under KV vs context.",
+                "Section A Available KV is the vendor reserved pool (GiB). "
+                "KV tokens capacity applies GDX cold packing on that budget. "
+                "Measured cold vs FA twin bytes (when the curve ran) are under "
+                "KV vs context.",
                 "",
             ]
         )
@@ -452,12 +469,69 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
     ]
 
 
+def _fold_coded_kv_capacity(summary: dict[str, Any]) -> dict[str, Any]:
+    """Attach hot/cold GDX coded token capacity onto ``kv_cache`` in-place."""
+    from capacity_plan import (
+        coded_kv_token_capacity,
+        gdx_capacity_scale,
+        gdx_cold_savings_from_bpv,
+    )
+
+    kv = summary.get("kv_cache")
+    if not isinstance(kv, dict):
+        return summary
+    b_adm = kv.get("baseline_tokens_measured")
+    t_adm = kv.get("tic_tokens_measured")
+    if not isinstance(b_adm, (int, float)) or not isinstance(t_adm, (int, float)):
+        return summary
+
+    s: float | None = None
+    w = 512
+    gdx = summary.get("gdx_kv_bytes")
+    if isinstance(gdx, dict):
+        raw_s = gdx.get("save_at_max_t")
+        if isinstance(raw_s, (int, float)) and 0.0 < float(raw_s) < 1.0:
+            s = float(raw_s)
+        raw_w = gdx.get("live_window")
+        if isinstance(raw_w, (int, float)) and int(raw_w) > 0:
+            w = int(raw_w)
+    if s is None:
+        corr = summary.get("correctness")
+        if isinstance(corr, dict):
+            avg = corr.get("kv_bit_exact_avg_bpv")
+            fa = corr.get("kv_bit_exact_fa_bpv")
+            if isinstance(avg, (int, float)) and isinstance(fa, (int, float)):
+                try:
+                    s = gdx_cold_savings_from_bpv(float(avg), float(fa))
+                except ValueError:
+                    s = None
+    if s is None or s <= 0.0:
+        # No GDX meter: coded == vendor admission on both arms.
+        kv["baseline_tokens_coded"] = int(round(float(b_adm)))
+        kv["tic_tokens_coded"] = int(round(float(t_adm)))
+        return summary
+
+    scale = gdx_capacity_scale(s)
+    b_coded = coded_kv_token_capacity(
+        b_adm, savings_s=s, live_window=w, apply_gdx=False
+    )
+    t_coded = coded_kv_token_capacity(
+        t_adm, savings_s=s, live_window=w, apply_gdx=True
+    )
+    kv["baseline_tokens_coded"] = int(b_coded)
+    kv["tic_tokens_coded"] = int(t_coded)
+    kv["gdx_capacity_s"] = float(s)
+    kv["gdx_capacity_scale"] = float(scale)
+    kv["gdx_live_window"] = int(w)
+    return summary
+
+
 def _section_kv_reservation(
     kv: dict[str, Any],
     *,
     gib_only: bool = False,
 ) -> list[str]:
-    """Reserved GPU KV vs Baseline default fill (no Savings %; pool size is not a win)."""
+    """Available KV GiB, then GDX-coded KV tokens capacity when metered."""
     b_tokens = kv.get("baseline_tokens_measured")
     t_tokens = kv.get("tic_tokens_measured")
     b_bytes = kv.get("baseline_memory_bytes_measured")
@@ -466,30 +540,93 @@ def _section_kv_reservation(
     t_gib = pool_gib(t_bytes, t_tokens, peer_bytes=b_bytes, peer_tokens=b_tokens)
     if b_gib is None or t_gib is None:
         return []
-    if gib_only:
-        base_cell = f"{b_gib:.2f} GiB"
-        tic_cell = f"{t_gib:.2f} GiB†"
-    else:
-        b_tok = number(b_tokens, 0) if b_tokens is not None else "null"
-        t_tok = number(t_tokens, 0) if t_tokens is not None else "null"
-        base_cell = f"{b_gib:.2f} GiB ({b_tok} tokens)"
-        tic_cell = f"{t_gib:.2f} GiB ({t_tok} tokens)†"
-    from needle_haystack import kv_overflow_footnote_lines
-
     arm = _arm_col()
-    return [
-        "### KV cache",
+    gib_win = float(t_gib) > float(b_gib)
+    lines = [
+        "### Available KV",
         "",
-        f"| Metric | Baseline default fill | {arm} reserved KV |",
-        "|--------|-----------------------|-------------------|",
+        f"| Metric | Baseline | {arm} |",
+        "|--------|----------|-------|",
         (
-            "| GPU memory reserved for KV | "
-            f"{base_cell} | "
-            f"{tic_cell} |"
+            f"| Available KV | {b_gib:.2f} GiB | "
+            f"{bold_win(f'{t_gib:.2f} GiB', win=gib_win)} |"
         ),
         "",
-        *kv_overflow_footnote_lines(gib_only=gib_only),
     ]
+    # Pilot surface: GiB-only Available KV. Optional short honesty note.
+    if gib_only or kv.get("gdx_capacity_s") is not None:
+        lines.extend(
+            [
+                "Available KV is the vendor reserved pool on the GPU "
+                "(same util target as Baseline).",
+                "",
+            ]
+        )
+
+    b_coded = kv.get("baseline_tokens_coded")
+    t_coded = kv.get("tic_tokens_coded")
+    s = kv.get("gdx_capacity_s")
+    scale = kv.get("gdx_capacity_scale")
+    if (
+        isinstance(b_coded, (int, float))
+        and isinstance(t_coded, (int, float))
+        and isinstance(s, (int, float))
+        and float(s) > 0.0
+    ):
+        coded_win = float(t_coded) > float(b_coded)
+        ratio = float(t_coded) / float(b_coded) if float(b_coded) > 0 else None
+        tic_cell = bold_win(number(t_coded, 0), win=coded_win)
+        if isinstance(ratio, float) and ratio != 1.0:
+            gain = pct_gain_from_ratio(ratio)
+            if gain:
+                tic_cell = f"{tic_cell} ({bold_win(gain, win=coded_win)})"
+        scale_txt = (
+            number(scale)
+            if isinstance(scale, (int, float))
+            else number(1.0 / (1.0 - float(s)))
+        )
+        lines.extend(
+            [
+                "### KV tokens capacity",
+                "",
+                "Weight compression grows Available KV. GDX then stores more "
+                "tokens in that memory (hot window stays dense; cold prefix "
+                f"is packed). With measured s={number(s)} → scale 1/(1-s) ≈ "
+                f"{scale_txt} (hot-corrected).",
+                "",
+                f"| Metric | Baseline | {arm} |",
+                "|--------|----------|-------|",
+                (
+                    f"| KV tokens capacity | {number(b_coded, 0)} | "
+                    f"{tic_cell} |"
+                ),
+                "",
+            ]
+        )
+    elif not gib_only:
+        # Legacy non-GDX: keep vendor admission tokens next to GiB for honesty.
+        b_tok = number(b_tokens, 0) if b_tokens is not None else "null"
+        t_tok = number(t_tokens, 0) if t_tokens is not None else "null"
+        tok_win = (
+            isinstance(t_tokens, (int, float))
+            and isinstance(b_tokens, (int, float))
+            and float(t_tokens) > float(b_tokens)
+        )
+        lines.extend(
+            [
+                "### KV tokens capacity",
+                "",
+                f"| Metric | Baseline | {arm} |",
+                "|--------|----------|-------|",
+                (
+                    f"| KV tokens capacity | {b_tok} | "
+                    f"{bold_win(t_tok, win=tok_win)} |"
+                ),
+                "",
+            ]
+        )
+    _ = gib_only
+    return lines
 
 
 def _section_c(
@@ -533,71 +670,39 @@ def _section_c(
             f"{arm} concurrent requests match the configured Baseline "
             "concurrent-request ceiling."
         )
-    batch_ratio = f"{number(capacity.get('batch_ratio_derived'))}x"
-    kv_token_ratio_val = capacity.get("kv_token_capacity_ratio_measured")
-    kv_token_win = (
-        isinstance(kv_token_ratio_val, (int, float))
-        and float(kv_token_ratio_val) > 1.0
-    )
+    batch_ratio_val = capacity.get("batch_ratio_derived")
+    if (
+        not isinstance(batch_ratio_val, (int, float))
+        and isinstance(t_seqs, (int, float))
+        and isinstance(b_seqs, (int, float))
+        and float(b_seqs) > 0
+    ):
+        batch_ratio_val = float(t_seqs) / float(b_seqs)
+    batch_gain = pct_gain_from_ratio(batch_ratio_val)
     seqs_win = (
         isinstance(t_seqs, (int, float))
         and isinstance(b_seqs, (int, float))
         and int(t_seqs) > int(b_seqs)
     )
     seqs_tic = bold_win(number(t_seqs, 0), win=seqs_win)
-    if not seqs_matched:
-        seqs_tic = f"{seqs_tic} ({bold_win(batch_ratio, win=seqs_win)})"
-    b_tokens = kv.get("baseline_tokens_measured")
-    t_tokens = kv.get("tic_tokens_measured")
-    b_gib = pool_gib(kv.get("baseline_memory_bytes_measured"), b_tokens)
-    t_gib = pool_gib(
-        kv.get("tic_memory_bytes_measured"),
-        t_tokens,
-        peer_bytes=kv.get("baseline_memory_bytes_measured"),
-        peer_tokens=b_tokens,
-    )
-    tokens_base = tokens_with_pool(b_tokens, b_gib, gib_only=gib_only)
-    tokens_tic = bold_win(
-        tokens_with_pool(t_tokens, t_gib, dagger=True, gib_only=gib_only),
-        win=(kv_token_win if not gib_only else (
-            isinstance(t_gib, float)
-            and isinstance(b_gib, float)
-            and float(t_gib) > float(b_gib)
-        )),
-    )
-    if str(capacity.get("kv_measured_source") or "") == "timed_asymmetric":
-        tokens_tic = f"{tokens_tic}; asymmetric timed seqs"
+    if not seqs_matched and batch_gain:
+        seqs_tic = f"{seqs_tic} ({bold_win(batch_gain, win=seqs_win)})"
     letter = str(prefix) if prefix in ("C", "D") else "D"
-    kv_row_label = "KV pool" if gib_only else "KV token capacity"
-    kv_blurb = (
-        "KV pool is the reserved vendor GPU KV GiB (same util target as "
-        "Baseline). Under GDX, vendor token slots are not effective cold "
-        "capacity; GiB is the fair A/B meter."
-        if gib_only
-        else (
-            "KV token capacity is reserved pool slots when Isiro printed KV "
-            "pool, else vLLM GPU tokens in this serve's reserved GPU pool."
-        )
-    )
+    # KV tokens capacity lives under Section A (coded when GDX is on).
+    _ = (gib_only, kv, overflow_note)
     lines = [
         f"## {letter}. Capacity",
         "",
         scale_blurb,
         "",
         "Concurrent requests are the serve max concurrent sequences "
-        f"(`max_num_seqs`); the bench load matches that ceiling in this A/B. "
-        f"{kv_blurb}",
+        f"(`max_num_seqs`); the bench load matches that ceiling in this A/B.",
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
         f"| Concurrent requests | {number(b_seqs, 0)} | {seqs_tic} |",
-        f"| {kv_row_label} | {tokens_base} | {tokens_tic} |",
         "",
     ]
-    if overflow_note:
-        from needle_haystack import kv_overflow_footnote_lines
-
-        lines.extend(kv_overflow_footnote_lines())
     return lines
 
 
@@ -641,9 +746,8 @@ def _section_generation(
         "Per-request decode rate is reflected by ITL/TPOT. Concurrent "
         "requests are in Capacity."
         f"{equal_note} Latency-matched wins live in Equal batch (same conc as "
-        "Baseline, vendor compile band). Higher Capacity concurrency raises "
-        "aggregate tok/s and can move TTFT/ITL; the harness may raise "
-        "max_num_batched_tokens for one prefill wave (not an ISIRO invent lock).",
+        "Baseline). Higher Capacity concurrency raises aggregate tok/s and "
+        "can move TTFT/ITL.",
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
@@ -694,9 +798,8 @@ def _section_equal_batch(equal_batch: dict[str, Any]) -> list[str]:
         "",
         (
             "Same concurrent-request ceiling as Baseline (latency-matched "
-            "surface: vendor compile band, hybrid dens~1). Capacity-matched "
-            "generation in D raises concurrency for aggregate tok/s; ITL/TTFT "
-            "there are not the equal-batch claim."
+            "surface). Capacity-matched generation in D raises concurrency for "
+            "aggregate tok/s; ITL/TTFT there are not the equal-batch claim."
         ),
         "",
         f"| Metric | Baseline | {arm} |",
@@ -1012,6 +1115,8 @@ def _section_g(
 
 def render(run_dir: Path) -> str:
     summary = load_json(run_dir / "summary.json")
+    # Prefer curve save_vs_fa; else bitexact avg_bpv/fa_bpv from correctness.
+    _fold_coded_kv_capacity(summary)
     environment = load_json(run_dir / "environment.json")
     commands = load_json(run_dir / "commands.json")
     footprint = summary["footprint"]

@@ -1849,21 +1849,13 @@ def kv_sweep_table_lines(
 
 
 def kv_overflow_footnote_lines(*, gib_only: bool = False) -> list[str]:
-    if gib_only:
-        body = (
-            "† Reserved vendor GPU KV pool GiB (same util target as Baseline). "
-            "Under GDX this is not coded cold capacity; longer context uses "
-            "persist after vendor reclaim of prefix blocks (TokenIDs plus "
-            "archived K,V). Not a second vendor KV cache on the host."
-        )
-    else:
-        body = (
-            "† Reserved pool on the GPU at vendor KV bytes/token. "
-            "Token counts are pool admission slots (same bpv as the vendor "
-            "dtype), not GDX-coded cold capacity. Longer context uses persist "
-            "after vendor reclaim of prefix blocks (TokenIDs plus archived "
-            "K,V). Not a second vendor KV cache on the host."
-        )
+    """Short honesty note when a dagger is still used (legacy callers)."""
+    _ = gib_only
+    body = (
+        "† Available KV is the vendor reserved pool (GiB). KV tokens capacity "
+        "uses GDX cold packing on that budget: scale 1/(1-s) with a dense hot "
+        "window. Example: s=0.42 → 1/0.58 ≈ 1.72 → +72% tokens."
+    )
     return [body, ""]
 
 

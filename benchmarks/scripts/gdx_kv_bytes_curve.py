@@ -711,6 +711,14 @@ def measure_curve_from_vendor_pages(
     }
 
 
+def _default_bf16_capture_t() -> int:
+    raw = os.environ.get("ISIRO_BENCH_GDX_CURVE_CAPTURE_T") or "8192"
+    try:
+        return max(512, int(raw))
+    except ValueError:
+        return 8192
+
+
 def measure_curve(
     alphabet: str,
     *,
@@ -719,8 +727,15 @@ def measure_curve(
     text_file: Path | None = None,
     live_window: int = _DEFAULT_W,
     cache_dir: Path | None = None,
+    capture_t: int | None = None,
 ) -> dict[str, Any]:
-    """Real-KV curve (bf16 alphabet): one HF forward, slice per T, pack cold."""
+    """Real-KV curve (bf16 alphabet): one HF forward, slice per T, pack cold.
+
+    When ``max(tokens)`` exceeds the capture budget (default 8192, override
+    ``capture_t`` / ``ISIRO_BENCH_GDX_CURVE_CAPTURE_T``), forward only at the
+    capture length and tile packed cold nbytes for larger T (same idea as MLA
+    latent tiling). Hot window stays FA on every point.
+    """
     a0 = alphabet.strip().lower()
     if a0 in ("fp8", "fp8_e4m3", "fp4", "nvfp4", "e2m1"):
         return {
@@ -769,6 +784,9 @@ def measure_curve(
             "points": [],
         }
     max_t = int(tok_list[-1])
+    cap_budget = int(capture_t) if capture_t is not None else _default_bf16_capture_t()
+    forward_t = min(max_t, max(512, cap_budget))
+    tiled = bool(max_t > forward_t)
     cache = cache_dir or (Path.cwd() / ".gdx_kv_curve_cache")
     try:
         text = _load_real_text(text_file=text_file, cache_dir=cache)
@@ -783,14 +801,14 @@ def measure_curve(
     tokenizer = AutoTokenizer.from_pretrained(str(model_path), trust_remote_code=True)
     # Cap the text we feed the tokenizer; repeat after encode if still short.
     # (~4 chars/token is enough headroom for English prose.)
-    chunk = text[: max(max_t * 8, 50_000)]
+    chunk = text[: max(forward_t * 8, 50_000)]
     encoded = tokenizer(chunk, return_tensors="pt", add_special_tokens=True)
     ids = encoded["input_ids"]
-    if int(ids.shape[-1]) < max_t:
-        # Repeat the real document until we cover max_t (still real tokens).
-        reps = (max_t // int(ids.shape[-1])) + 2
+    if int(ids.shape[-1]) < forward_t:
+        # Repeat the real document until we cover forward_t (still real tokens).
+        reps = (forward_t // int(ids.shape[-1])) + 2
         ids = ids.repeat(1, reps)
-    ids = ids[:, :max_t].contiguous().cuda()
+    ids = ids[:, :forward_t].contiguous().cuda()
 
     # Prefer checkpoint dtype (Hub FP8 stays float8). Forcing bf16 breaks
     # compressed-tensors weight/activation pairs.
@@ -889,6 +907,86 @@ def measure_curve(
             "n_full": n_layers,
             "n_sliding": 0,
         }
+    # Per-layer cold pages at capture for tile-beyond-capture packs.
+    # Shape after convert: [1, T_cold, H, D] uint16/uint8 codes.
+    capture_cold_kv: list[tuple[Any, Any] | None] = [None] * n_layers
+    pack_len_cache: dict[tuple[int, int], tuple[int, float]] = {}
+
+    def _pack_layer_cold(li: int, need_t: int) -> tuple[int, float]:
+        need_t = int(need_t)
+        key = (int(li), need_t)
+        if key in pack_len_cache:
+            return pack_len_cache[key]
+        pair = capture_cold_kv[li] if li < len(capture_cold_kv) else None
+        if pair is None or need_t < 1:
+            out = (0, float(fa_bpv))
+            pack_len_cache[key] = out
+            return out
+        k_page, v_page = pair
+        t_cap = int(k_page.shape[1])
+        if t_cap < 1:
+            out = (0, float(fa_bpv))
+            pack_len_cache[key] = out
+            return out
+        gdx = 0
+        bpv_acc = 0.0
+        n_pack = 0
+
+        def _pack_slice(t_len: int) -> None:
+            nonlocal gdx, bpv_acc, n_pack
+            t_len = min(int(t_len), t_cap)
+            if t_len < 1:
+                return
+            for page in (k_page[:, :t_len, :, :], v_page[:, :t_len, :, :]):
+                packed, bpv = _pack_codes_nbytes(a, page)
+                gdx += int(packed)
+                bpv_acc += float(bpv)
+                n_pack += 1
+
+        if need_t <= t_cap:
+            _pack_slice(need_t)
+            out = (int(gdx), float(bpv_acc / max(n_pack, 1)))
+            pack_len_cache[key] = out
+            return out
+        n_full, rem = divmod(need_t, t_cap)
+        full_nb, full_bpv = _pack_layer_cold(li, t_cap)
+        gdx = int(n_full) * int(full_nb)
+        bpv_w = float(full_bpv) * float(n_full) * float(t_cap)
+        denom = float(n_full) * float(t_cap)
+        if rem > 0:
+            rem_nb, rem_bpv = _pack_layer_cold(li, rem)
+            gdx += int(rem_nb)
+            bpv_w += float(rem_bpv) * float(rem)
+            denom += float(rem)
+        out = (int(gdx), float(bpv_w / max(denom, 1.0)))
+        pack_len_cache[key] = out
+        return out
+
+    # Fill capture cold pages once (from forward_t prefix).
+    for li, (k_t, v_t) in enumerate(layers_kv):
+        cap = layer_caps[li] if li < len(layer_caps) else None
+        theo_eff = _vendor_eff_t(int(forward_t), cap)
+        cache_t = int(k_t.shape[2])
+        if cache_t >= int(forward_t):
+            t_end = int(forward_t)
+            t_start = t_end - theo_eff
+            k_vis = k_t[:, :, t_start:t_end, :]
+            v_vis = v_t[:, :, t_start:t_end, :]
+            eff_t = theo_eff
+        else:
+            eff_t = min(theo_eff, cache_t)
+            if eff_t < 1:
+                continue
+            k_vis = k_t[:, :, cache_t - eff_t : cache_t, :]
+            v_vis = v_t[:, :, cache_t - eff_t : cache_t, :]
+        cold_cap = max(0, int(eff_t) - int(live_window))
+        if cold_cap < 1:
+            continue
+        capture_cold_kv[li] = (
+            _kv_layer_to_lthd(k_vis[:, :, :cold_cap, :]),
+            _kv_layer_to_lthd(v_vis[:, :, :cold_cap, :]),
+        )
+
     points: list[dict[str, Any]] = []
     for T in tok_list:
         fa_hot = 0
@@ -900,29 +998,10 @@ def measure_curve(
         for li, (k_t, v_t) in enumerate(layers_kv):
             cap = layer_caps[li] if li < len(layer_caps) else None
             theo_eff = _vendor_eff_t(int(T), cap)
-            cache_t = int(k_t.shape[2])
-            # From a max-T forward: prefer the logical prefix [:T]. Sliding
-            # layers keep the last theo_eff tokens of that prefix; full
-            # layers keep the whole prefix. If HF already windowed the
-            # layer (cache_t < T), fall back to the tail of what remains.
-            if cache_t >= int(T):
-                t_end = int(T)
-                t_start = t_end - theo_eff
-                k_vis = k_t[:, :, t_start:t_end, :]
-                v_vis = v_t[:, :, t_start:t_end, :]
-                eff_t = theo_eff
-            else:
-                eff_t = min(theo_eff, cache_t)
-                if eff_t < 1:
-                    continue
-                k_vis = k_t[:, :, cache_t - eff_t : cache_t, :]
-                v_vis = v_t[:, :, cache_t - eff_t : cache_t, :]
-            if eff_t < 1:
-                continue
-            lh = int(k_vis.shape[1])
-            ld = int(k_vis.shape[-1])
-            hot_t = min(eff_t, int(live_window))
-            cold_t_layer = max(0, eff_t - int(live_window))
+            lh = int(k_t.shape[1])
+            ld = int(k_t.shape[-1])
+            hot_t = min(theo_eff, int(live_window))
+            cold_t_layer = max(0, theo_eff - int(live_window))
             fa_hot += _layer_fa_nbytes(
                 eff_t=hot_t, kv_heads=lh, head_dim=ld, fa_bpv=fa_bpv
             )
@@ -932,11 +1011,32 @@ def measure_curve(
             cold_tokens += int(cold_t_layer)
             if cold_t_layer < 1:
                 continue
-            # Cold = older side of the vendor-visible window.
-            k_page = _kv_layer_to_lthd(k_vis[:, :, :cold_t_layer, :])
-            v_page = _kv_layer_to_lthd(v_vis[:, :, :cold_t_layer, :])
-            for page in (k_page, v_page):
-                packed, bpv = _pack_codes_nbytes(a, page)
+            if int(T) <= int(forward_t):
+                # Exact slice from the capture forward (same as pre-tile path).
+                cache_t = int(k_t.shape[2])
+                if cache_t >= int(T):
+                    t_end = int(T)
+                    t_start = t_end - theo_eff
+                    k_vis = k_t[:, :, t_start:t_end, :]
+                    v_vis = v_t[:, :, t_start:t_end, :]
+                else:
+                    eff_t = min(theo_eff, cache_t)
+                    if eff_t < 1:
+                        continue
+                    k_vis = k_t[:, :, cache_t - eff_t : cache_t, :]
+                    v_vis = v_t[:, :, cache_t - eff_t : cache_t, :]
+                    cold_t_layer = max(0, eff_t - int(live_window))
+                    if cold_t_layer < 1:
+                        continue
+                k_page = _kv_layer_to_lthd(k_vis[:, :, :cold_t_layer, :])
+                v_page = _kv_layer_to_lthd(v_vis[:, :, :cold_t_layer, :])
+                for page in (k_page, v_page):
+                    packed, bpv = _pack_codes_nbytes(a, page)
+                    gdx_cold += int(packed)
+                    bpv_acc += float(bpv)
+                    n_pack += 1
+            else:
+                packed, bpv = _pack_layer_cold(li, cold_t_layer)
                 gdx_cold += int(packed)
                 bpv_acc += float(bpv)
                 n_pack += 1
@@ -972,6 +1072,9 @@ def measure_curve(
     torch.cuda.empty_cache()
 
     ok, err_msg = _gate_curve_points(points, fa_bpv=fa_bpv)
+    twin_mode = cap_meta.get("fa_twin_mode")
+    if tiled:
+        twin_mode = f"{twin_mode or 'hf_bf16'}_tiled_sequence"
     return {
         "schema": SCHEMA,
         "ok": ok,
@@ -990,7 +1093,9 @@ def measure_curve(
         "layers": int(n_layers),
         "kv_heads": int(kv_heads),
         "head_dim": int(head_dim),
-        "fa_twin_mode": cap_meta.get("fa_twin_mode"),
+        "fa_twin_mode": twin_mode,
+        "capture_t": int(forward_t),
+        "tiled_beyond_capture": bool(tiled),
         "sliding_window": cap_meta.get("sliding_window"),
         "n_sliding_layers": cap_meta.get("n_sliding"),
         "n_full_layers": cap_meta.get("n_full"),
@@ -1148,10 +1253,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-png", type=Path, required=True)
     parser.add_argument(
         "--tokens",
-        default="512,1024,2048,4096,8192",
-        help="Comma-separated context lengths",
+        default=os.environ.get("ISIRO_BENCH_GDX_CURVE_TOKENS")
+        or "512,1024,2048,4096,8192",
+        help="Comma-separated context lengths (or ISIRO_BENCH_GDX_CURVE_TOKENS)",
     )
     parser.add_argument("--live-window", type=int, default=_DEFAULT_W)
+    parser.add_argument(
+        "--capture-t",
+        type=int,
+        default=None,
+        help=(
+            "HF forward capture length for bf16; larger --tokens tile beyond "
+            "this (default ISIRO_BENCH_GDX_CURVE_CAPTURE_T or 8192)"
+        ),
+    )
     parser.add_argument(
         "--model-dir",
         type=Path,
@@ -1289,6 +1404,9 @@ def main(argv: list[str] | None = None) -> int:
             text_file=args.text_file,
             live_window=int(args.live_window),
             cache_dir=args.out_json.parent / ".gdx_kv_curve_cache",
+            capture_t=(
+                int(args.capture_t) if args.capture_t is not None else None
+            ),
         )
     b_w = int(args.baseline_weight_bytes or 0)
     t_w = int(args.isiro_weight_bytes or 0)

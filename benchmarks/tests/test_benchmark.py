@@ -39,8 +39,11 @@ from benchmark_lib import (  # noqa: E402
 from capacity_plan import (  # noqa: E402
     align_seqs_to_cudagraph_stride,
     build_capacity_doc,
+    coded_kv_token_capacity,
     concurrency_for_seqs,
     default_scale_hi,
+    gdx_capacity_scale,
+    gdx_cold_savings_from_bpv,
     scale_seqs_from_kv_estimate,
     scale_seqs_from_kv_measured,
     search_max,
@@ -631,6 +634,34 @@ class BenchmarkTests(unittest.TestCase):
             scale_seqs_from_kv_estimate(32, kv_b, w_b, w_t, 32), 32
         )
 
+    def test_coded_kv_token_capacity_hot_cold(self) -> None:
+        # Asymptotic: s=0.42 → 1/0.58 ≈ 1.724; with W=0 equals raw scale.
+        self.assertAlmostEqual(gdx_capacity_scale(0.42), 1.0 / 0.58, places=6)
+        self.assertEqual(
+            coded_kv_token_capacity(10000, savings_s=0.42, live_window=0),
+            round(10000 / 0.58),
+        )
+        # Hot correction: T_coded = (T_adm - W*s)/(1-s) < T_adm/(1-s).
+        raw = coded_kv_token_capacity(10000, savings_s=0.42, live_window=0)
+        hot = coded_kv_token_capacity(10000, savings_s=0.42, live_window=512)
+        self.assertLess(hot, raw)
+        self.assertEqual(
+            hot,
+            round((10000 - 512 * 0.42) / 0.58),
+        )
+        # Baseline arm: no GDX.
+        self.assertEqual(
+            coded_kv_token_capacity(
+                47396, savings_s=0.42, live_window=512, apply_gdx=False
+            ),
+            47396,
+        )
+        self.assertAlmostEqual(
+            gdx_cold_savings_from_bpv(6.603098788094933, 16.0),
+            1.0 - 6.603098788094933 / 16.0,
+            places=9,
+        )
+
     def test_scale_seqs_from_kv_measured(self) -> None:
         # Remeter sample: 238064 → 265872 ≈ 1.12x → 36, align up to stride-8 (40)
         self.assertEqual(
@@ -921,18 +952,13 @@ class BenchmarkTests(unittest.TestCase):
                 "Isiro concurrent requests = round(Baseline × estimated KV",
                 report,
             )
-            self.assertIn(
-                "KV token capacity is reserved pool slots",
-                report,
-            )
-            self.assertIn("reserved GPU pool", report)
-            self.assertIn("persist after vendor reclaim", report)
-            self.assertIn("GiB KV", report)
+            self.assertIn("### Available KV", report)
+            self.assertIn("| Available KV |", report)
+            self.assertIn("### KV tokens capacity", report)
+            self.assertIn("| KV tokens capacity |", report)
             self.assertNotIn("% of Baseline", report)
-            self.assertIn("### KV cache", report)
-            self.assertIn("| GPU memory reserved for KV |", report)
-            self.assertIn("Baseline default fill", report)
-            self.assertIn("Isiro reserved KV", report)
+            self.assertNotIn("### KV cache", report)
+            self.assertNotIn("| GPU memory reserved for KV |", report)
             self.assertNotIn("weight-estimate KV-scaled timed point", report)
             self.assertNotIn("TIC concurrency scale", report)
             self.assertNotIn("SKU / `system_id`", report)
@@ -949,7 +975,7 @@ class BenchmarkTests(unittest.TestCase):
                 "Savings % uses `1 - Isiro/Baseline` for loaded weights.",
                 report,
             )
-            self.assertIn(
+            self.assertNotIn(
                 "For KV it uses `Isiro/Baseline - 1` as a % gain",
                 report,
             )
@@ -969,7 +995,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("KV cache dtype", report)
             self.assertNotIn("KV element bpv", report)
             self.assertNotIn("† KV element bytes ratio", report)
-            self.assertIn("**1.31x**", report)  # batch_ratio 42/32
+            self.assertIn("**+31%**", report)  # batch_ratio 42/32 → +31%
             self.assertNotIn("† tok/s per Non-KV GB", report)
             self.assertNotIn("† tok/s per weight GB", report)
             self.assertNotIn("† tok/s per KV GB", report)
@@ -1554,9 +1580,20 @@ class BenchmarkTests(unittest.TestCase):
     def test_report_gdx_kv_bitexact_and_lean_intro(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             run = Path(temp)
-            summary = _sample_summary(ttft_tic_slower=True)
+            summary = _sample_summary(
+                ttft_tic_slower=True, experiment_kind="capacity"
+            )
             summary["correctness"]["kv_bit_exact_ok"] = True
             summary["correctness"]["kv_bit_exact_alphabet"] = "bf16"
+            # Bitexact bpv → coded capacity fold (no curve needed).
+            summary["correctness"]["kv_bit_exact_avg_bpv"] = 6.603098788094933
+            summary["correctness"]["kv_bit_exact_fa_bpv"] = 16.0
+            summary["footprint"]["baseline"]["model_loading_bytes_reported"] = (
+                19 * 1024**3
+            )
+            summary["footprint"]["tic"]["model_loading_bytes_reported"] = (
+                15 * 1024**3
+            )
             _write_run(run, summary)
             (run / "commands.json").write_text(
                 json.dumps(
@@ -1575,22 +1612,34 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("`ISIRO_GDX=bf16`", report)
             self.assertIn("KV bit-exactness", report)
             self.assertIn("GDX `bf16` cold roundtrip", report)
-            self.assertIn("reserved vendor KV pool", report)
+            self.assertIn("Available KV", report)
+            self.assertIn("KV tokens capacity", report)
             self.assertIn("KV vs context", report)
-            # GDX: reserved pool as GiB only (vendor token slots ≠ cold capacity).
+            # Available KV is GiB-only (no parenthetical vendor slots).
             self.assertRegex(
                 report,
-                r"GPU memory reserved for KV \| [0-9.]+ GiB \|",
+                r"\| Available KV \| [0-9.]+ GiB \|",
             )
             self.assertNotRegex(
                 report,
-                r"GPU memory reserved for KV \| [0-9.]+ GiB \([0-9]+ tokens\)",
+                r"\| Available KV \| [0-9.]+ GiB \([0-9]+ tokens\) \|",
             )
+            self.assertIn("scale 1/(1-s)", report)
+            self.assertIn("hot-corrected", report)
             self.assertNotIn("coding-rate", report)
             self.assertNotIn("~29-31%", report)
             self.assertNotIn("ISIRO_GDX_C=fp8", report)
             self.assertNotIn("TIC + KV compress", report)
+            self.assertNotIn("ISIRO invent lock", report)
             self.assertNotIn("| Metric | Baseline | TIC |", report)
+            # Capacity section no longer duplicates vendor-slot KV tokens row.
+            self.assertIn("## D. Capacity", report)
+            cap = report.split("## D. Capacity", 1)[1]
+            cap_head = cap.split("### Generation", 1)[0]
+            self.assertIn("Concurrent requests", cap_head)
+            self.assertNotIn("| KV tokens capacity |", cap_head)
+            # Coded capacity lives under Section A.
+            self.assertIn("### KV tokens capacity", report.split("## D. Capacity")[0])
 
     def test_fold_gdx_kv_bitexact_required(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1605,6 +1654,8 @@ class BenchmarkTests(unittest.TestCase):
                         "alphabet": "bf16",
                         "kv_bit_exact_ok": True,
                         "n_values": 64,
+                        "avg_bpv": 6.5,
+                        "fa_bpv": 16.0,
                         "error": None,
                     }
                 ),
@@ -1614,6 +1665,8 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(
                 fold_gdx_kv_bitexact(run, correctness, required=True), []
             )
+            self.assertEqual(correctness.get("kv_bit_exact_avg_bpv"), 6.5)
+            self.assertEqual(correctness.get("kv_bit_exact_fa_bpv"), 16.0)
             self.assertTrue(correctness["kv_bit_exact_ok"])
             self.assertEqual(correctness["kv_bit_exact_alphabet"], "bf16")
 

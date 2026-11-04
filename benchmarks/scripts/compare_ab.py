@@ -78,6 +78,12 @@ def fold_gdx_kv_bitexact(
     alphabet = doc.get("alphabet")
     if alphabet:
         correctness["kv_bit_exact_alphabet"] = str(alphabet)
+    avg_bpv = doc.get("avg_bpv")
+    fa_bpv = doc.get("fa_bpv")
+    if isinstance(avg_bpv, (int, float)):
+        correctness["kv_bit_exact_avg_bpv"] = float(avg_bpv)
+    if isinstance(fa_bpv, (int, float)):
+        correctness["kv_bit_exact_fa_bpv"] = float(fa_bpv)
     if required and not ok:
         detail = doc.get("error") or "roundtrip mismatch"
         errors.append(f"kv_bit_exact_ok must be true ({detail})")
