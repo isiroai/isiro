@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `auto` | runtime `auto` | 2026-11-04 20:59 UTC
+`awq` | `rtx-5090` | compiler `v0.1.1` | runtime `v0.1.1` | 2026-11-05 04:44 UTC
 
 Tooling:
 
@@ -42,15 +42,19 @@ Available KV is the vendor reserved pool on the GPU (same util target as Baselin
 
 ### KV tokens capacity
 
-Weight compression grows Available KV. GDX then stores more tokens in that memory (hot window stays dense; cold prefix is packed). With measured s=0.59 → scale 1/(1-s) ≈ 2.42 (hot-corrected).
+Weight compression grows Available KV. GDX then stores more tokens in that memory (hot window stays dense; cold prefix is packed). With measured s=0.33 → scale 1/(1-s) ≈ 1.49 (hot-corrected).
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| KV tokens capacity | 54,418 | **142,474** (**+162%**) |
+| KV tokens capacity | 54,418 | **88,036** (**+62%**) |
 
 ### KV vs context
 
-`ISIRO_GDX=bf16` is on for serve. kv-bytes-vs-context.png omitted: curve did not run (unset ISIRO_BENCH_SKIP_GDX_CURVE; for AWQ/quant baselines ensure gptqmodel in the GDX meter venv, or set ISIRO_BENCH_GDX_MODEL_DIR to a fitting HF twin).
+`ISIRO_GDX=bf16` on KV from a Project Gutenberg text forward. At T=262,144: Baseline KV 16.00 GiB, Isiro KV 10.71 GiB; save 5.29 GiB (33.1%). Bottom panel adds loaded weights (Baseline 19.92 GiB, Isiro 15.83 GiB): at T=262,144, Baseline 35.92 GiB vs Isiro 26.54 GiB (weights + KV).
+
+Figure. Weights and KV vs 1-user context.
+
+![Weights and KV vs 1-user context](kv-bytes-vs-context.png)
 
 ## C. Equal batch
 
@@ -59,20 +63,20 @@ Same concurrent-request ceiling as Baseline (latency-matched surface). Capacity-
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
 | Concurrent requests | 8 | 8 |
-| Output tok/s | 523.32 | 442.03 |
-| ITL (ms) p50 / p95 / p99 | 14.79 / 15.43 / 15.85 | 17.54 / 18.42 / 35.15 |
-| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.92 | 17.50 / 17.53 / 17.55 |
-| TTFT (ms) p50 / p95 / p99 | 138.87 / 139.09 / 139.09 | 169.08 / 169.52 / 169.55 |
+| Output tok/s | 522.69 | 442.27 |
+| ITL (ms) p50 / p95 / p99 | 14.74 / 16.09 / 16.44 | 17.48 / 18.61 / 34.89 |
+| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.93 | 17.44 / 17.46 / 17.47 |
+| TTFT (ms) p50 / p95 / p99 | 141.79 / 142.11 / 142.12 | 181.45 / 181.89 / 181.89 |
 
 ## D. Capacity
 
-Isiro concurrent requests = round(Baseline × Isiro/Baseline KV token capacity) from a matched vLLM KV measurement, then rounded up onto the vLLM CUDA-graph capture stride (multiples of 8) so FULL decode graphs cover concurrency.
+Concurrent requests are 8 on both sides. Not scaled from KV token capacity.
 
 Concurrent requests are the serve max concurrent sequences (`max_num_seqs`); the bench load matches that ceiling in this A/B.
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Concurrent requests | 8 | **9** (**+12%**) |
+| Concurrent requests | 8 | 8 |
 
 ### Generation (recall-matched KV, input 32 / output 256)
 
@@ -80,10 +84,10 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 523.32 | **541.85** |
-| ITL (ms) p50 / p95 / p99 | 14.79 / 15.43 / 15.85 | 15.92 / 16.84 / 31.97 |
-| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.92 | 15.94 / 15.98 / 16.00 |
-| TTFT (ms) p50 / p95 / p99 | 138.87 / 139.09 / 139.09 | 187.46 / 187.76 / 187.77 |
+| Output tok/s | 522.69 | 442.27 |
+| ITL (ms) p50 / p95 / p99 | 14.74 / 16.09 / 16.44 | 17.48 / 18.61 / 34.89 |
+| TPOT (ms) p50 / p95 / p99 | 14.80 / 14.89 / 14.93 | 17.44 / 17.46 / 17.47 |
+| TTFT (ms) p50 / p95 / p99 | 141.79 / 142.11 / 142.12 | 181.45 / 181.89 / 181.89 |
 
 ## Config
 
@@ -93,8 +97,8 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 | CUDA graphs | on (eager prefill, graph decode) |
 | Weights | `awq` |
 | KV cache | dtype `bfloat16`; `ISIRO_GDX=bf16` on Isiro |
-| Compiler | `auto` |
-| Runtime | `auto` |
+| Compiler | `v0.1.1` |
+| Runtime | `v0.1.1` |
 | vLLM | 0.31.0 |
 | GPU | NVIDIA GeForce RTX 5090 x 1 |
 | Driver / CUDA | 590.44.01 / 13.1 |

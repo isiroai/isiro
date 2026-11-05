@@ -681,8 +681,9 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(align_seqs_to_cudagraph_stride(39, 45), 40)
         self.assertEqual(align_seqs_to_cudagraph_stride(36, 45), 40)
         self.assertEqual(align_seqs_to_cudagraph_stride(40, 45), 40)
-        # Cannot grow past scale_hi: leave off-stride (product serve also aligns).
-        self.assertEqual(align_seqs_to_cudagraph_stride(39, 39), 39)
+        # Cannot grow past scale_hi: snap down onto stride (FULL graphs).
+        self.assertEqual(align_seqs_to_cudagraph_stride(39, 39), 32)
+        self.assertEqual(align_seqs_to_cudagraph_stride(9, 9), 8)
 
     def test_prefill_wave_cliff_under_vendor_2048(self) -> None:
         """Capacity TTFT cliff: fair-share 2048/n < prompt → second prefill wave."""

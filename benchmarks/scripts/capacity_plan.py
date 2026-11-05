@@ -59,16 +59,29 @@ _PROMPT_TOKEN_PAD = 30
 
 
 def align_seqs_to_cudagraph_stride(seqs: int, scale_hi: int) -> int:
-    """Round ``seqs`` up onto the vLLM capture stride when it still fits ``hi``."""
+    """Snap ``seqs`` onto the vLLM FULL capture stride without exceeding ``hi``.
+
+    Capture sizes are 1,2,4 then multiples of 8. Off-stride concurrency
+    (e.g. 9 with FULL only at 8/16) misses FULL decode graphs and taxes
+    ITL/tok/s. Prefer rounding up when ``hi`` allows; otherwise snap down
+    to the largest on-stride value ``<= seqs`` (not the raw off-stride).
+    """
     if seqs < 1:
         raise ValueError("seqs must be >= 1")
     if scale_hi < seqs:
         raise ValueError("scale_hi must be >= seqs")
     stride = int(_CUDAGRAPH_CAPTURE_STRIDE)
-    aligned = ((int(seqs) + stride - 1) // stride) * stride
-    if aligned > scale_hi:
-        return int(seqs)
-    return aligned
+    n = int(seqs)
+    if n < stride:
+        # 1/2/4 are on the capture grid; leave them.
+        return n
+    aligned_up = ((n + stride - 1) // stride) * stride
+    if aligned_up <= scale_hi:
+        return aligned_up
+    aligned_down = (n // stride) * stride
+    if aligned_down >= stride:
+        return aligned_down
+    return n
 
 
 def one_wave_batched_tokens(

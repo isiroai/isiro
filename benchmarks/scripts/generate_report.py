@@ -827,31 +827,14 @@ def _equal_batch_redundant(
     equal_batch: dict[str, Any],
     decode_rows: list[dict[str, Any]],
 ) -> bool:
-    """True when Equal batch repeats Generation numbers (matched batch)."""
-    eq_tps = equal_batch.get("decode_output_tokens_per_sec") or {}
-    cap_tps = (capacity or {}).get("decode_output_tokens_per_sec") or {}
-    if not eq_tps:
-        return False
-    if cap_tps:
-        for side in ("baseline", "tic"):
-            a = cap_tps.get(side)
-            b = eq_tps.get(side)
-            if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
-                return False
-            if abs(float(a) - float(b)) > 1e-6:
-                return False
-        return True
-    if not decode_rows:
-        return False
-    row = decode_rows[0]
-    for side in ("baseline", "tic"):
-        a = row[side]["throughput"]["output_tokens_per_sec"]
-        b = eq_tps.get(side)
-        if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
-            return False
-        if abs(float(a) - float(b)) > 1e-6:
-            return False
-    return True
+    """Whether to omit Equal batch when it matches Capacity generation.
+
+    Always keep Equal batch (C) in the customer report, even when Capacity
+    concurrency snaps onto Baseline (matched seqs, same tok/s). Omitting it
+    made AWQ matched-8 reports look like Capacity tok/s disappeared.
+    """
+    del capacity, equal_batch, decode_rows
+    return False
 
 
 def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
