@@ -203,7 +203,7 @@ def kv_scale_ratio_measured(
     return kv_t / kv_b
 
 
-def gdx_cold_savings_from_bpv(avg_bpv: float, fa_bpv: float) -> float:
+def isiro_kv_cold_savings_from_bpv(avg_bpv: float, fa_bpv: float) -> float:
     """Cold savings ``s = 1 - avg_bpv/fa_bpv`` (bitexact or curve payload)."""
     fa = float(fa_bpv)
     avg = float(avg_bpv)
@@ -219,21 +219,21 @@ def coded_kv_token_capacity(
     *,
     savings_s: float,
     live_window: int = 512,
-    apply_gdx: bool = True,
+    apply_isiro_kv: bool = True,
 ) -> int:
-    """Tokens that fit in the same Available KV GiB under GDX hot/cold.
+    """Tokens that fit in the same Available KV GiB under Isiro KV hot/cold.
 
     Vendor admission ``T_adm`` fills budget ``B = T_adm * b_fa``. With live
     window ``W`` staying FA and cold packed at rate ``(1-s)``:
 
-    ``T_coded = (T_adm - W*s) / (1-s)`` for ``T > W`` (and ``apply_gdx``).
+    ``T_coded = (T_adm - W*s) / (1-s)`` for ``T > W`` (and ``apply_isiro_kv``).
 
-    Baseline (no GDX): returns ``round(T_adm)``.
+    Baseline (no Isiro KV): returns ``round(T_adm)``.
     """
     t_adm = float(admission_tokens)
     if t_adm < 0:
         raise ValueError("admission_tokens must be non-negative")
-    if not apply_gdx:
+    if not apply_isiro_kv:
         return int(round(t_adm))
     s = float(savings_s)
     if s < 0.0 or s >= 1.0:
@@ -246,7 +246,7 @@ def coded_kv_token_capacity(
     return int(round(max(t_adm, coded)))
 
 
-def gdx_capacity_scale(savings_s: float) -> float:
+def isiro_kv_capacity_scale(savings_s: float) -> float:
     """Asymptotic capacity scale ``1/(1-s)`` (ignore hot window)."""
     s = float(savings_s)
     if s < 0.0 or s >= 1.0:

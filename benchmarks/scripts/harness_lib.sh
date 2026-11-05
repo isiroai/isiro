@@ -138,24 +138,23 @@ esac
 # Opt-in KV alphabet for matched A/B (empty = leave vendor default / ISIRO stamp).
 SERVE_KV_CACHE_DTYPE="${SERVE_KV_CACHE_DTYPE:-}"
 # Opt-in ISIRO KV compress on the TIC arm only (fp8|fp4|bf16). Empty = off.
-# Prefer ISIRO_BENCH_GDX; legacy ISIRO_BENCH_GDX_KV is an alphabet alias.
-ISIRO_BENCH_GDX="${ISIRO_BENCH_GDX:-${ISIRO_BENCH_GDX_KV:-}}"
-ISIRO_BENCH_GDX_KV="${ISIRO_BENCH_GDX}"
-case "${ISIRO_BENCH_GDX}" in
+# ISIRO_BENCH_KV=bf16|fp8|fp4 enables Isiro KV on the Isiro arm.
+ISIRO_BENCH_KV="${ISIRO_BENCH_KV:-}"
+case "${ISIRO_BENCH_KV}" in
   ""|fp8|fp4|bf16) ;;
   *)
-    echo "ISIRO_BENCH_GDX must be empty, fp8, fp4, or bf16 (got ${ISIRO_BENCH_GDX})" >&2
+    echo "ISIRO_BENCH_KV must be empty, fp8, fp4, or bf16 (got ${ISIRO_BENCH_KV})" >&2
     exit 2
     ;;
 esac
-if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
-  # Product GDX auto-routes; drop stale unique-C / path-A parent envs.
-  if [[ -n "${ISIRO_GDX_C:-}" && "${ISIRO_GDX_C}" != "0" && "${ISIRO_GDX_C}" != "off" && "${ISIRO_GDX_C}" != "false" ]]; then
-    echo "ISIRO_BENCH_GDX=${ISIRO_BENCH_GDX}: unsetting inherited ISIRO_GDX_C=${ISIRO_GDX_C}" >&2
-    unset ISIRO_GDX_C || true
+if [[ -n "${ISIRO_BENCH_KV}" ]]; then
+  # Product Isiro KV auto-routes; drop stale unique-C / path-A parent envs.
+  if [[ -n "${ISIRO_KV_C:-}" && "${ISIRO_KV_C}" != "0" && "${ISIRO_KV_C}" != "off" && "${ISIRO_KV_C}" != "false" ]]; then
+    echo "ISIRO_BENCH_KV=${ISIRO_BENCH_KV}: unsetting inherited ISIRO_KV_C=${ISIRO_KV_C}" >&2
+    unset ISIRO_KV_C || true
   fi
   if [[ -z "${SERVE_KV_CACHE_DTYPE}" ]]; then
-    case "${ISIRO_BENCH_GDX}" in
+    case "${ISIRO_BENCH_KV}" in
       fp8) SERVE_KV_CACHE_DTYPE="fp8" ;;
       fp4) SERVE_KV_CACHE_DTYPE="nvfp4" ;;
       bf16) SERVE_KV_CACHE_DTYPE="bfloat16" ;;
@@ -226,63 +225,63 @@ echo "  MODEL_ID          = ${MODEL_ID}" >&2
 echo "  GRAPH_MODE        = ${GRAPH_MODE} (enforce_eager=${SERVE_ENFORCE_EAGER})" >&2
 echo "  EXPERIMENT_KIND   = ${EXPERIMENT_KIND}" >&2
 echo "  SERVE_KV_CACHE_DTYPE = ${SERVE_KV_CACHE_DTYPE:-unset}" >&2
-echo "  ISIRO_BENCH_GDX      = ${ISIRO_BENCH_GDX:-off}" >&2
+echo "  ISIRO_BENCH_KV      = ${ISIRO_BENCH_KV:-off}" >&2
 if [[ -n "${ISIRO_BENCH_EXTRA_BODY:-}" ]]; then
   export ISIRO_BENCH_EXTRA_BODY
   echo "  ISIRO_BENCH_EXTRA_BODY = ${ISIRO_BENCH_EXTRA_BODY}" >&2
 fi
-# Isiro-first: timed Isiro arm before cold baseline (GDX publish default on).
+# Isiro-first: timed Isiro arm before cold baseline (Isiro KV publish default on).
 ISIRO_FIRST=0
 _ISIRO_FIRST_RAW="${ISIRO_BENCH_ISIRO_FIRST-}"
-if [[ -z "${_ISIRO_FIRST_RAW}" && -n "${ISIRO_BENCH_GDX}" ]]; then
+if [[ -z "${_ISIRO_FIRST_RAW}" && -n "${ISIRO_BENCH_KV}" ]]; then
   _ISIRO_FIRST_RAW=1
 fi
 case "${_ISIRO_FIRST_RAW}" in
   1|true|yes|on) ISIRO_FIRST=1 ;;
 esac
 echo "  ISIRO_FIRST         = ${ISIRO_FIRST}" >&2
-# Eng remeter: serve+bench only (skip verify / GDX cold meters / baseline).
+# Eng remeter: serve+bench only (skip verify / Isiro KV cold meters / baseline).
 _bench_env_truthy() {
   case "${1:-}" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac
 }
 SKIP_VERIFY=0
-SKIP_GDX_METERS=0
-SKIP_GDX_CURVE=0
+SKIP_ISIRO_KV_METERS=0
+SKIP_ISIRO_KV_CURVE=0
 SKIP_BASELINE=0
 if _bench_env_truthy "${ISIRO_BENCH_SKIP_VERIFY:-}"; then SKIP_VERIFY=1; fi
-if _bench_env_truthy "${ISIRO_BENCH_SKIP_GDX_METERS:-}"; then SKIP_GDX_METERS=1; fi
-if _bench_env_truthy "${ISIRO_BENCH_SKIP_GDX_CURVE:-}"; then SKIP_GDX_CURVE=1; fi
+if _bench_env_truthy "${ISIRO_BENCH_SKIP_ISIRO_KV_METERS:-}"; then SKIP_ISIRO_KV_METERS=1; fi
+if _bench_env_truthy "${ISIRO_BENCH_SKIP_ISIRO_KV_CURVE:-}"; then SKIP_ISIRO_KV_CURVE=1; fi
 if _bench_env_truthy "${ISIRO_BENCH_SKIP_BASELINE:-}"; then SKIP_BASELINE=1; fi
 
-# GDX cold meters use host Python (serve stays in pinned VLLM_IMAGE). Remotes
+# Isiro KV cold meters use host Python (serve stays in pinned VLLM_IMAGE). Remotes
 # drift on transformers/kernels; bootstrap a managed venv + fail-closed
 # preflight before verify/serve so a missing kernels pin cannot burn a run.
-if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
-  echo "gdx_meter_env: ensuring pinned host meter python" >&2
-  _gdx_ensure_args=()
+if [[ -n "${ISIRO_BENCH_KV}" && "${SKIP_ISIRO_KV_METERS}" -eq 0 ]]; then
+  echo "isiro_kv_meter_env: ensuring pinned host meter python" >&2
+  _isiro_kv_ensure_args=()
   if [[ -n "${ISIRO_BENCH_PYTHON:-}" && -x "${ISIRO_BENCH_PYTHON}" ]]; then
-    _gdx_ensure_args+=(--python "${ISIRO_BENCH_PYTHON}")
+    _isiro_kv_ensure_args+=(--python "${ISIRO_BENCH_PYTHON}")
   fi
   if [[ -n "${ISIRO_BENCH_VENV:-}" ]]; then
-    _gdx_ensure_args+=(--venv "${ISIRO_BENCH_VENV}")
+    _isiro_kv_ensure_args+=(--venv "${ISIRO_BENCH_VENV}")
   fi
   if [[ -n "${ISIRO_BENCH_TORCH_INDEX:-}" ]]; then
-    _gdx_ensure_args+=(--torch-index-url "${ISIRO_BENCH_TORCH_INDEX}")
+    _isiro_kv_ensure_args+=(--torch-index-url "${ISIRO_BENCH_TORCH_INDEX}")
   fi
   ISIRO_BENCH_PYTHON="$(
-    python3 "${BENCH_ROOT}/scripts/ensure_gdx_meter_env.py" \
-      --requirements "${BENCH_ROOT}/requirements-gdx-meters.txt" \
+    python3 "${BENCH_ROOT}/scripts/ensure_isiro_kv_meter_env.py" \
+      --requirements "${BENCH_ROOT}/requirements-isiro-kv-meters.txt" \
       --print-python \
-      "${_gdx_ensure_args[@]}"
+      "${_isiro_kv_ensure_args[@]}"
   )" || {
-    echo "gdx_meter_env: FAIL (fix host meter deps before remeter)" >&2
-    echo "  pin file: ${BENCH_ROOT}/requirements-gdx-meters.txt" >&2
+    echo "isiro_kv_meter_env: FAIL (fix host meter deps before remeter)" >&2
+    echo "  pin file: ${BENCH_ROOT}/requirements-isiro-kv-meters.txt" >&2
     echo "  managed venv: \${ISIRO_BENCH_VENV:-~/.isiro/bench-venv}" >&2
     exit 2
   }
   export ISIRO_BENCH_PYTHON
   echo "  ISIRO_BENCH_PYTHON = ${ISIRO_BENCH_PYTHON}" >&2
-  unset _gdx_ensure_args
+  unset _isiro_kv_ensure_args
 fi
 # PROFILES / BASELINE_REUSE are printed after counts resolve.
 
@@ -368,8 +367,8 @@ fi
 echo "  PROFILES          = ${SELECTED_PROFILES[*]}" >&2
 echo "  BASELINE_REUSE    = ${REUSE_BASELINE}" >&2
 echo "  SKIP_VERIFY       = ${SKIP_VERIFY}" >&2
-echo "  SKIP_GDX_METERS   = ${SKIP_GDX_METERS}" >&2
-echo "  SKIP_GDX_CURVE    = ${SKIP_GDX_CURVE}" >&2
+echo "  SKIP_ISIRO_KV_METERS   = ${SKIP_ISIRO_KV_METERS}" >&2
+echo "  SKIP_ISIRO_KV_CURVE    = ${SKIP_ISIRO_KV_CURVE}" >&2
 echo "  SKIP_BASELINE     = ${SKIP_BASELINE}" >&2
 echo "==========================" >&2
 
@@ -536,8 +535,8 @@ build_tic_serve() {
     --host 0.0.0.0 --port "${API_PORT}"
     --max-model-len "${SERVE_MAX_MODEL_LEN}"
   )
-  if [[ -n "${SERVE_KV_CACHE_DTYPE}" && -z "${ISIRO_BENCH_GDX}" ]]; then
-    # When GDX is on, the runtime stamps the matching vendor dtype.
+  if [[ -n "${SERVE_KV_CACHE_DTYPE}" && -z "${ISIRO_BENCH_KV}" ]]; then
+    # When Isiro KV is on, the runtime stamps the matching vendor dtype.
     TIC_SERVE+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
   fi
 }
@@ -547,24 +546,24 @@ build_tic_serve
 start_tic_serve() {
   local log="$1"
   unset ISIRO_SERVE_CUDA_GRAPHS
-  unset ISIRO_GDX_C || true
-  unset ISIRO_GDX_KV || true
-  if [[ -n "${ISIRO_BENCH_GDX}" ]]; then
-    export ISIRO_GDX="${ISIRO_BENCH_GDX}"
-    export ISIRO_GDX_COLD_READY=1
-    # common.env may set ISIRO_GDX_* without export; Docker forward uses compgen -e.
-    if [[ -n "${ISIRO_GDX_FP8_KV_SCALES_OK:-}" ]]; then
-      export ISIRO_GDX_FP8_KV_SCALES_OK
+  unset ISIRO_KV_C || true
+  unset ISIRO_KV_PAGE || true
+  if [[ -n "${ISIRO_BENCH_KV}" ]]; then
+    export ISIRO_KV="${ISIRO_BENCH_KV}"
+    export ISIRO_KV_COLD_READY=1
+    # common.env may set ISIRO_KV_* without export; Docker forward uses compgen -e.
+    if [[ -n "${ISIRO_KV_FP8_SCALES_OK:-}" ]]; then
+      export ISIRO_KV_FP8_SCALES_OK
     fi
     # Cold-arm window + verbose deposit meter (opt-in for long/armed A/Bs).
-    if [[ -n "${ISIRO_GDX_LIVE_WINDOW:-}" ]]; then
-      export ISIRO_GDX_LIVE_WINDOW
+    if [[ -n "${ISIRO_KV_LIVE_WINDOW:-}" ]]; then
+      export ISIRO_KV_LIVE_WINDOW
     fi
-    if [[ -n "${ISIRO_GDX_METER:-}" ]]; then
-      export ISIRO_GDX_METER
+    if [[ -n "${ISIRO_KV_METER:-}" ]]; then
+      export ISIRO_KV_METER
     fi
   else
-    unset ISIRO_GDX || true
+    unset ISIRO_KV || true
   fi
   build_tic_serve
   if [[ "${SERVE_ENFORCE_EAGER}" == "true" ]]; then
@@ -595,7 +594,7 @@ write_commands_json() {
     "${SERVE_TENSOR_PARALLEL_SIZE}" "${SERVE_MAX_NUM_SEQS}" \
     "${BASELINE_REUSED_FROM}" "${PRECISION}" "${SERVE_ENFORCE_EAGER}" \
     "${VERIFY_REFERENCE}" \
-    "${SERVE_KV_CACHE_DTYPE:-}" "${ISIRO_BENCH_GDX_KV:-}" \
+    "${SERVE_KV_CACHE_DTYPE:-}" "${ISIRO_BENCH_KV:-}" \
     "${FP8_BASELINE_QUANT:-}" <<'PY'
 import json, os, sys
 from benchmark_lib import resolve_fp8_baseline_quantization
@@ -617,7 +616,7 @@ from benchmark_lib import resolve_fp8_baseline_quantization
     enforce_eager,
     verify_reference,
     kv_cache_dtype,
-    gdx_kv,
+    isiro_kv,
     fp8_quant,
 ) = sys.argv[1:]
 baseline = [
@@ -656,7 +655,7 @@ tic_serve = [
     "--host", "127.0.0.1", "--port", port,
     "--max-model-len", max_model_len,
 ]
-if kv_cache_dtype and not gdx_kv:
+if kv_cache_dtype and not isiro_kv:
     tic_serve.extend(["--kv-cache-dtype", kv_cache_dtype])
 doc = {
     "baseline_serve": baseline,
@@ -666,7 +665,7 @@ doc = {
     "verify_mode": "reference" if verify_reference == "1" else "integrity",
     "tic_serve": tic_serve,
     "kv_cache_dtype": kv_cache_dtype or None,
-    "isiro_gdx_kv": gdx_kv or None,
+    "isiro_kv": isiro_kv or None,
 }
 if precision == "fp8":
     doc["fp8_baseline_quantization"] = (
@@ -674,20 +673,20 @@ if precision == "fp8":
     )
 if precision == "awq":
     doc["awq_baseline_quantization"] = "awq"
-if gdx_kv:
+if isiro_kv:
     doc["tic_serve_env"] = {
-        "ISIRO_GDX": gdx_kv,
-        "ISIRO_GDX_COLD_READY": "1",
+        "ISIRO_KV": isiro_kv,
+        "ISIRO_KV_COLD_READY": "1",
     }
-    scales_ok = os.environ.get("ISIRO_GDX_FP8_KV_SCALES_OK", "").strip()
+    scales_ok = os.environ.get("ISIRO_KV_FP8_SCALES_OK", "").strip()
     if scales_ok:
-        doc["tic_serve_env"]["ISIRO_GDX_FP8_KV_SCALES_OK"] = scales_ok
-    live_w = os.environ.get("ISIRO_GDX_LIVE_WINDOW", "").strip()
+        doc["tic_serve_env"]["ISIRO_KV_FP8_SCALES_OK"] = scales_ok
+    live_w = os.environ.get("ISIRO_KV_LIVE_WINDOW", "").strip()
     if live_w:
-        doc["tic_serve_env"]["ISIRO_GDX_LIVE_WINDOW"] = live_w
-    gdx_meter = os.environ.get("ISIRO_GDX_METER", "").strip()
-    if gdx_meter:
-        doc["tic_serve_env"]["ISIRO_GDX_METER"] = gdx_meter
+        doc["tic_serve_env"]["ISIRO_KV_LIVE_WINDOW"] = live_w
+    isiro_kv_meter = os.environ.get("ISIRO_KV_METER", "").strip()
+    if isiro_kv_meter:
+        doc["tic_serve_env"]["ISIRO_KV_METER"] = isiro_kv_meter
 if reused_from:
     doc["baseline_reused_from"] = reused_from
 json.dump(doc, open(out, "w", encoding="utf-8"), indent=2, sort_keys=True)
@@ -906,113 +905,113 @@ PY
 echo "verify: PASS" >&2
 fi
 
-if [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 0 ]]; then
-  # Host meter python was preflighted at harness start (ensure_gdx_meter_env).
-  : "${ISIRO_BENCH_PYTHON:?ISIRO_BENCH_PYTHON unset after gdx_meter_env ensure}"
-  _gdx_host_python="${ISIRO_BENCH_PYTHON}"
-  echo "gdx_kv_bitexact: measuring cold roundtrip (alphabet=${ISIRO_BENCH_GDX}; python=${_gdx_host_python})" >&2
-  "${_gdx_host_python}" "${BENCH_ROOT}/scripts/gdx_kv_bitexact.py" \
-    --alphabet "${ISIRO_BENCH_GDX}" \
-    --out "${RUN_DIR}/gdx_kv_bitexact.json"
-  echo "gdx_kv_bitexact: PASS" >&2
-  if [[ "${SKIP_GDX_CURVE}" -eq 1 ]]; then
-    echo "gdx_kv_bytes_curve: SKIP (ISIRO_BENCH_SKIP_GDX_CURVE=1; no kv-bytes-vs-context.png until a fitting twin or vendor-page curve)" >&2
+if [[ -n "${ISIRO_BENCH_KV}" && "${SKIP_ISIRO_KV_METERS}" -eq 0 ]]; then
+  # Host meter python was preflighted at harness start (ensure_isiro_kv_meter_env).
+  : "${ISIRO_BENCH_PYTHON:?ISIRO_BENCH_PYTHON unset after isiro_kv_meter_env ensure}"
+  _isiro_kv_host_python="${ISIRO_BENCH_PYTHON}"
+  echo "isiro_kv_bitexact: measuring cold roundtrip (alphabet=${ISIRO_BENCH_KV}; python=${_isiro_kv_host_python})" >&2
+  "${_isiro_kv_host_python}" "${BENCH_ROOT}/scripts/isiro_kv_bitexact.py" \
+    --alphabet "${ISIRO_BENCH_KV}" \
+    --out "${RUN_DIR}/isiro_kv_bitexact.json"
+  echo "isiro_kv_bitexact: PASS" >&2
+  if [[ "${SKIP_ISIRO_KV_CURVE}" -eq 1 ]]; then
+    echo "isiro_kv_bytes_curve: SKIP (ISIRO_BENCH_SKIP_ISIRO_KV_CURVE=1; no kv-bytes-vs-context.png until a fitting twin or vendor-page curve)" >&2
   else
-  echo "gdx_kv_bytes_curve: measuring cold vs FA twin (alphabet=${ISIRO_BENCH_GDX}; python=${_gdx_host_python})" >&2
-  _gdx_gpu_model="${ISIRO_BENCH_GPU_MODEL:-}"
-  _gdx_gpu_count="${ISIRO_BENCH_GPU_COUNT:-0}"
-  if [[ -z "${_gdx_gpu_model}" ]] && command -v nvidia-smi >/dev/null 2>&1; then
-    _gdx_gpu_model="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    _gdx_gpu_count="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')"
+  echo "isiro_kv_bytes_curve: measuring cold vs FA twin (alphabet=${ISIRO_BENCH_KV}; python=${_isiro_kv_host_python})" >&2
+  _isiro_kv_gpu_model="${ISIRO_BENCH_GPU_MODEL:-}"
+  _isiro_kv_gpu_count="${ISIRO_BENCH_GPU_COUNT:-0}"
+  if [[ -z "${_isiro_kv_gpu_model}" ]] && command -v nvidia-smi >/dev/null 2>&1; then
+    _isiro_kv_gpu_model="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    _isiro_kv_gpu_count="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')"
   fi
-  _gdx_curve_extra=()
+  _isiro_kv_curve_extra=()
   if [[ -f "${RUN_DIR}/summary.json" ]]; then
-    _gdx_curve_extra+=(--summary-json "${RUN_DIR}/summary.json")
+    _isiro_kv_curve_extra+=(--summary-json "${RUN_DIR}/summary.json")
   fi
-  if [[ -n "${ISIRO_BENCH_GDX_TEXT_FILE:-}" && -f "${ISIRO_BENCH_GDX_TEXT_FILE}" ]]; then
-    _gdx_curve_extra+=(--text-file "${ISIRO_BENCH_GDX_TEXT_FILE}")
+  if [[ -n "${ISIRO_BENCH_KV_TEXT_FILE:-}" && -f "${ISIRO_BENCH_KV_TEXT_FILE}" ]]; then
+    _isiro_kv_curve_extra+=(--text-file "${ISIRO_BENCH_KV_TEXT_FILE}")
   fi
   # fp8/fp4: vendor FA pages via VLLM_IMAGE (same kv_cache_dtype as serve).
-  # bf16: HF forward; optional ISIRO_BENCH_GDX_MODEL_DIR twin when baseline is Hub FP8.
-  _gdx_curve_model_dir="${BASELINE_MODEL_DIR}"
-  _gdx_vendor_pages=""
-  case "${ISIRO_BENCH_GDX}" in
+  # bf16: HF forward; optional ISIRO_BENCH_KV_MODEL_DIR twin when baseline is Hub FP8.
+  _isiro_kv_curve_model_dir="${BASELINE_MODEL_DIR}"
+  _isiro_kv_vendor_pages=""
+  case "${ISIRO_BENCH_KV}" in
     fp8|fp4)
-      _gdx_curve_max_t="$(
+      _isiro_kv_curve_max_t="$(
         printf '%s\n' "${SERVE_MAX_MODEL_LEN:-8192}" \
           | awk -F, '{print $1+0}'
       )"
-      [[ "${_gdx_curve_max_t}" -ge 512 ]] || _gdx_curve_max_t=8192
-      _gdx_vendor_pages="${RUN_DIR}/gdx_vendor_fa_pages.npz"
+      [[ "${_isiro_kv_curve_max_t}" -ge 512 ]] || _isiro_kv_curve_max_t=8192
+      _isiro_kv_vendor_pages="${RUN_DIR}/isiro_kv_vendor_fa_pages.npz"
       # Fail closed before docker when HF ABI is MLA/sparse/CSA2 (GLM/DeepSeek Flash).
       # path_a_mla: use ISIRO_BENCH_MLA_LATENT_NPZ ([L,T,D] uint8) instead of FA dump.
-      _gdx_use_mla_latent=0
-      _gdx_preflight_err="$(
-        "${_gdx_host_python}" - <<PY
+      _isiro_kv_use_mla_latent=0
+      _isiro_kv_preflight_err="$(
+        "${_isiro_kv_host_python}" - <<PY
 from pathlib import Path
 import sys
 sys.path.insert(0, "${BENCH_ROOT}/scripts")
-from gdx_kv_curve_vendor_pages import vendor_fa_pages_unsupported_reason
+from isiro_kv_curve_vendor_pages import vendor_fa_pages_unsupported_reason
 r = vendor_fa_pages_unsupported_reason(Path("${BASELINE_MODEL_DIR}"))
 if r:
     print(r)
     raise SystemExit(2)
 PY
       )" || {
-        _gdx_mla_npz="${ISIRO_BENCH_MLA_LATENT_NPZ:-}"
-        if [[ -n "${_gdx_mla_npz}" && -f "${_gdx_mla_npz}" ]]; then
-          echo "gdx_kv_curve_mla_latent: FA pages unsupported (${_gdx_preflight_err}); using MLA latent ${_gdx_mla_npz}" >&2
-          _gdx_curve_extra+=(--mla-latent "${_gdx_mla_npz}")
-          _gdx_curve_extra+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE:-fp8_ds_mla}")
-          _gdx_use_mla_latent=1
+        _isiro_kv_mla_npz="${ISIRO_BENCH_MLA_LATENT_NPZ:-}"
+        if [[ -n "${_isiro_kv_mla_npz}" && -f "${_isiro_kv_mla_npz}" ]]; then
+          echo "isiro_kv_curve_mla_latent: FA pages unsupported (${_isiro_kv_preflight_err}); using MLA latent ${_isiro_kv_mla_npz}" >&2
+          _isiro_kv_curve_extra+=(--mla-latent "${_isiro_kv_mla_npz}")
+          _isiro_kv_curve_extra+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE:-fp8_ds_mla}")
+          _isiro_kv_use_mla_latent=1
         else
-          echo "gdx_kv_curve_vendor_pages: FAIL ${_gdx_preflight_err}" >&2
-          echo "gdx_kv_curve_vendor_pages: MLA/sparse HF; set ISIRO_BENCH_MLA_LATENT_NPZ to a [L,T,D] uint8 capture (path_a_mla), or ISIRO_BENCH_SKIP_GDX_METERS=1." >&2
+          echo "isiro_kv_curve_vendor_pages: FAIL ${_isiro_kv_preflight_err}" >&2
+          echo "isiro_kv_curve_vendor_pages: MLA/sparse HF; set ISIRO_BENCH_MLA_LATENT_NPZ to a [L,T,D] uint8 capture (path_a_mla), or ISIRO_BENCH_SKIP_ISIRO_KV_METERS=1." >&2
           exit 2
         fi
       }
-      if [[ "${_gdx_use_mla_latent}" -eq 0 ]]; then
-        echo "gdx_kv_curve_vendor_pages: capturing FA pages (kv_cache_dtype=${SERVE_KV_CACHE_DTYPE}; image=${VLLM_IMAGE}; model=${BASELINE_MODEL_DIR})" >&2
-        _gdx_vendor_mounts=(-v "${BASELINE_MODEL_DIR}:${BASELINE_MODEL_DIR}:ro")
-        _gdx_vendor_mounts+=(-v "${BENCH_ROOT}/scripts:${BENCH_ROOT}/scripts:ro")
-        _gdx_vendor_mounts+=(-v "${RUN_DIR}:${RUN_DIR}")
-        if [[ -n "${ISIRO_BENCH_GDX_TEXT_FILE:-}" && -f "${ISIRO_BENCH_GDX_TEXT_FILE}" ]]; then
-          _gdx_vendor_mounts+=(-v "${ISIRO_BENCH_GDX_TEXT_FILE}:${ISIRO_BENCH_GDX_TEXT_FILE}:ro")
+      if [[ "${_isiro_kv_use_mla_latent}" -eq 0 ]]; then
+        echo "isiro_kv_curve_vendor_pages: capturing FA pages (kv_cache_dtype=${SERVE_KV_CACHE_DTYPE}; image=${VLLM_IMAGE}; model=${BASELINE_MODEL_DIR})" >&2
+        _isiro_kv_vendor_mounts=(-v "${BASELINE_MODEL_DIR}:${BASELINE_MODEL_DIR}:ro")
+        _isiro_kv_vendor_mounts+=(-v "${BENCH_ROOT}/scripts:${BENCH_ROOT}/scripts:ro")
+        _isiro_kv_vendor_mounts+=(-v "${RUN_DIR}:${RUN_DIR}")
+        if [[ -n "${ISIRO_BENCH_KV_TEXT_FILE:-}" && -f "${ISIRO_BENCH_KV_TEXT_FILE}" ]]; then
+          _isiro_kv_vendor_mounts+=(-v "${ISIRO_BENCH_KV_TEXT_FILE}:${ISIRO_BENCH_KV_TEXT_FILE}:ro")
         fi
-        _gdx_fixture="${BENCH_ROOT}/fixtures/pride_and_prejudice.txt"
-        if [[ -f "${_gdx_fixture}" ]]; then
-          _gdx_vendor_mounts+=(-v "${_gdx_fixture}:${_gdx_fixture}:ro")
+        _isiro_kv_fixture="${BENCH_ROOT}/fixtures/pride_and_prejudice.txt"
+        if [[ -f "${_isiro_kv_fixture}" ]]; then
+          _isiro_kv_vendor_mounts+=(-v "${_isiro_kv_fixture}:${_isiro_kv_fixture}:ro")
         fi
-        _gdx_vendor_args=(
-          "${BENCH_ROOT}/scripts/gdx_kv_curve_vendor_pages.py"
+        _isiro_kv_vendor_args=(
+          "${BENCH_ROOT}/scripts/isiro_kv_curve_vendor_pages.py"
           --model-dir "${BASELINE_MODEL_DIR}"
           --kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}"
-          --max-t "${_gdx_curve_max_t}"
-          --out "${_gdx_vendor_pages}"
+          --max-t "${_isiro_kv_curve_max_t}"
+          --out "${_isiro_kv_vendor_pages}"
         )
-        if [[ -n "${ISIRO_BENCH_GDX_TEXT_FILE:-}" && -f "${ISIRO_BENCH_GDX_TEXT_FILE}" ]]; then
-          _gdx_vendor_args+=(--text-file "${ISIRO_BENCH_GDX_TEXT_FILE}")
+        if [[ -n "${ISIRO_BENCH_KV_TEXT_FILE:-}" && -f "${ISIRO_BENCH_KV_TEXT_FILE}" ]]; then
+          _isiro_kv_vendor_args+=(--text-file "${ISIRO_BENCH_KV_TEXT_FILE}")
         fi
         docker run --rm --gpus all \
           -e VLLM_ENABLE_V1_MULTIPROCESSING=0 \
-          "${_gdx_vendor_mounts[@]}" \
+          "${_isiro_kv_vendor_mounts[@]}" \
           --entrypoint python3 \
           "${VLLM_IMAGE}" \
-          "${_gdx_vendor_args[@]}"
-        _gdx_curve_extra+=(--vendor-pages "${_gdx_vendor_pages}")
-        _gdx_curve_extra+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
+          "${_isiro_kv_vendor_args[@]}"
+        _isiro_kv_curve_extra+=(--vendor-pages "${_isiro_kv_vendor_pages}")
+        _isiro_kv_curve_extra+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
       fi
       ;;
     bf16)
-      _gdx_curve_model_dir="${ISIRO_BENCH_GDX_MODEL_DIR:-${BASELINE_MODEL_DIR}}"
+      _isiro_kv_curve_model_dir="${ISIRO_BENCH_KV_MODEL_DIR:-${BASELINE_MODEL_DIR}}"
       ;;
   esac
-  _gdx_live_window="${ISIRO_GDX_LIVE_WINDOW:-512}"
-  # Token grid: explicit ISIRO_BENCH_GDX_CURVE_TOKENS, else geometric to HF
+  _isiro_kv_live_window="${ISIRO_KV_LIVE_WINDOW:-512}"
+  # Token grid: explicit ISIRO_BENCH_KV_CURVE_TOKENS, else geometric to HF
   # max_position_embeddings (model max context), else serve max_model_len.
-  if [[ -z "${ISIRO_BENCH_GDX_CURVE_TOKENS:-}" ]]; then
-    ISIRO_BENCH_GDX_CURVE_TOKENS="$(
-      "${_gdx_host_python}" - "${_gdx_curve_model_dir}" "${SERVE_MAX_MODEL_LEN:-8192}" <<'PY'
+  if [[ -z "${ISIRO_BENCH_KV_CURVE_TOKENS:-}" ]]; then
+    ISIRO_BENCH_KV_CURVE_TOKENS="$(
+      "${_isiro_kv_host_python}" - "${_isiro_kv_curve_model_dir}" "${SERVE_MAX_MODEL_LEN:-8192}" <<'PY'
 import json, sys
 from pathlib import Path
 
@@ -1042,49 +1041,49 @@ if not grid or grid[-1] != max_t:
 print(",".join(str(x) for x in grid))
 PY
     )"
-    export ISIRO_BENCH_GDX_CURVE_TOKENS
-    echo "gdx_kv_bytes_curve: tokens=${ISIRO_BENCH_GDX_CURVE_TOKENS}" >&2
+    export ISIRO_BENCH_KV_CURVE_TOKENS
+    echo "isiro_kv_bytes_curve: tokens=${ISIRO_BENCH_KV_CURVE_TOKENS}" >&2
   fi
-  _gdx_curve_extra+=(--tokens "${ISIRO_BENCH_GDX_CURVE_TOKENS}")
-  if [[ -n "${ISIRO_BENCH_GDX_CURVE_CAPTURE_T:-}" ]]; then
-    _gdx_curve_extra+=(--capture-t "${ISIRO_BENCH_GDX_CURVE_CAPTURE_T}")
+  _isiro_kv_curve_extra+=(--tokens "${ISIRO_BENCH_KV_CURVE_TOKENS}")
+  if [[ -n "${ISIRO_BENCH_KV_CURVE_CAPTURE_T:-}" ]]; then
+    _isiro_kv_curve_extra+=(--capture-t "${ISIRO_BENCH_KV_CURVE_CAPTURE_T}")
   fi
-  "${_gdx_host_python}" "${BENCH_ROOT}/scripts/gdx_kv_bytes_curve.py" \
-    --alphabet "${ISIRO_BENCH_GDX}" \
-    --out-json "${RUN_DIR}/gdx_kv_bytes_curve.json" \
+  "${_isiro_kv_host_python}" "${BENCH_ROOT}/scripts/isiro_kv_bytes_curve.py" \
+    --alphabet "${ISIRO_BENCH_KV}" \
+    --out-json "${RUN_DIR}/isiro_kv_bytes_curve.json" \
     --out-png "${RUN_DIR}/kv-bytes-vs-context.png" \
-    --model-dir "${_gdx_curve_model_dir}" \
+    --model-dir "${_isiro_kv_curve_model_dir}" \
     --model "${MODEL_ID}" \
-    --gpu-model "${_gdx_gpu_model}" \
-    --gpu-count "${_gdx_gpu_count}" \
+    --gpu-model "${_isiro_kv_gpu_model}" \
+    --gpu-count "${_isiro_kv_gpu_count}" \
     --weight-precision "${PRECISION}" \
-    --kv-precision "${ISIRO_BENCH_GDX}" \
-    --live-window "${_gdx_live_window}" \
-    "${_gdx_curve_extra[@]}"
-  echo "gdx_kv_bytes_curve: PASS" >&2
-  fi  # SKIP_GDX_CURVE
-elif [[ -n "${ISIRO_BENCH_GDX}" && "${SKIP_GDX_METERS}" -eq 1 ]]; then
-  echo "gdx_kv_meters: SKIP (ISIRO_BENCH_SKIP_GDX_METERS=1)" >&2
-  # compare_ab requires gdx_kv_bitexact.json when ISIRO_GDX is set; reuse ref.
-  _gdx_meter_src="${ISIRO_BENCH_BASELINE_REF:-}"
-  if [[ -z "${_gdx_meter_src}" || ! -e "${_gdx_meter_src}/gdx_kv_bitexact.json" ]]; then
+    --kv-precision "${ISIRO_BENCH_KV}" \
+    --live-window "${_isiro_kv_live_window}" \
+    "${_isiro_kv_curve_extra[@]}"
+  echo "isiro_kv_bytes_curve: PASS" >&2
+  fi  # SKIP_ISIRO_KV_CURVE
+elif [[ -n "${ISIRO_BENCH_KV}" && "${SKIP_ISIRO_KV_METERS}" -eq 1 ]]; then
+  echo "isiro_kv_meters: SKIP (ISIRO_BENCH_SKIP_ISIRO_KV_METERS=1)" >&2
+  # compare_ab requires isiro_kv_bitexact.json when ISIRO_KV is set; reuse ref.
+  _isiro_kv_meter_src="${ISIRO_BENCH_BASELINE_REF:-}"
+  if [[ -z "${_isiro_kv_meter_src}" || ! -e "${_isiro_kv_meter_src}/isiro_kv_bitexact.json" ]]; then
     # Fall back to newest prior scratch for this system that already metered.
-    _gdx_meter_src="$(
+    _isiro_kv_meter_src="$(
       ls -1dt "${SCRATCH_ROOT}"/*-"${SYSTEM_ID}" 2>/dev/null \
         | while read -r _d; do
-            [[ -e "${_d}/gdx_kv_bitexact.json" && "${_d}" != "${RUN_DIR}" ]] && echo "${_d}" && break
+            [[ -e "${_d}/isiro_kv_bitexact.json" && "${_d}" != "${RUN_DIR}" ]] && echo "${_d}" && break
           done
     )"
   fi
-  if [[ -n "${_gdx_meter_src}" ]]; then
-    for _gdx_ref in gdx_kv_bitexact.json gdx_kv_bytes_curve.json kv-bytes-vs-context.png; do
-      if [[ -e "${_gdx_meter_src}/${_gdx_ref}" && ! -e "${RUN_DIR}/${_gdx_ref}" ]]; then
-        cp -a "${_gdx_meter_src}/${_gdx_ref}" "${RUN_DIR}/${_gdx_ref}"
-        echo "gdx_kv_meters: reused ${_gdx_ref} from ${_gdx_meter_src}" >&2
+  if [[ -n "${_isiro_kv_meter_src}" ]]; then
+    for _isiro_kv_ref in isiro_kv_bitexact.json isiro_kv_bytes_curve.json kv-bytes-vs-context.png; do
+      if [[ -e "${_isiro_kv_meter_src}/${_isiro_kv_ref}" && ! -e "${RUN_DIR}/${_isiro_kv_ref}" ]]; then
+        cp -a "${_isiro_kv_meter_src}/${_isiro_kv_ref}" "${RUN_DIR}/${_isiro_kv_ref}"
+        echo "isiro_kv_meters: reused ${_isiro_kv_ref} from ${_isiro_kv_meter_src}" >&2
       fi
     done
   fi
-  unset _gdx_meter_src _gdx_ref
+  unset _isiro_kv_meter_src _isiro_kv_ref
 fi
 
 cleanup() {

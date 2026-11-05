@@ -98,7 +98,7 @@ def figure_tagline(
                 kv_s = str(
                     item.get("kv_precision")
                     or item.get("kv_cache_dtype")
-                    or item.get("isiro_gdx_kv")
+                    or item.get("isiro_kv")
                     or ""
                 ).strip()
             if gpu_s and model_s:
@@ -331,8 +331,8 @@ def parse_kv_cache_gib(log_text: str) -> float:
     )
     if reserved:
         return float(reserved.group(1))
-    # Legacy GDX admit-clamp print (retired; prefer Available / reserved above).
-    gdx_mib = re.search(r"GDX FA live clamp:\s*([0-9.]+)\s*MiB", log_text)
+    # Legacy Isiro KV admit-clamp print (retired; prefer Available / reserved above).
+    gdx_mib = re.search(r"Isiro KV FA live clamp:\s*([0-9.]+)\s*MiB", log_text)
     if gdx_mib:
         return float(gdx_mib.group(1)) / 1024.0
     pool = re.search(r"vendor_pool_bytes=(\d+)", log_text)
@@ -1853,7 +1853,7 @@ def kv_overflow_footnote_lines(*, gib_only: bool = False) -> list[str]:
     _ = gib_only
     body = (
         "† Available KV is the vendor reserved pool (GiB). KV tokens capacity "
-        "uses GDX cold packing on that budget: scale 1/(1-s) with a dense hot "
+        "uses Isiro KV cold packing on that budget: scale 1/(1-s) with a dense hot "
         "window. Example: s=0.42 → 1/0.58 ≈ 1.72 → +72% tokens."
     )
     return [body, ""]

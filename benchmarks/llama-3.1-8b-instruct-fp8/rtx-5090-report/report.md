@@ -9,9 +9,9 @@ Tooling:
 Compared:
 
 - **Baseline:** vLLM (`vllm serve` / Docker `vllm/vllm-openai`) with `--kv-cache-dtype fp8`
-- **Isiro:** `isiro serve … --target vllm` with TIC weights and `ISIRO_GDX=fp8` (same vLLM version; cold KV compress on vendor attention pages)
+- **Isiro:** `isiro serve … --target vllm` with TIC weights and `ISIRO_KV=fp8` (same vLLM version; cold KV compress on vendor attention pages)
 
-GDX cold coding-rate vs naive vendor KV bits (estimate): bf16 ~29-31% vs 16 bpv; fp8 ~19-25% vs 8 bpv. Section A GPU memory is the reserved vendor KV pool, not coded cold bytes.
+Isiro KV cold coding-rate vs naive vendor KV bits (estimate): bf16 ~29-31% vs 16 bpv; fp8 ~19-25% vs 8 bpv. Section A GPU memory is the reserved vendor KV pool, not coded cold bytes.
 
 ## Correctness
 
@@ -20,7 +20,7 @@ GDX cold coding-rate vs naive vendor KV bits (estimate): bf16 ~29-31% vs 16 bpv;
 | ------------------ | ---------------- | --------------------------------------------- |
 | On-disk model size | 9.08 GB          | **8.47 GB** (**6.79% smaller**)               |
 | Integrity          | baseline weights | **PASS** (`isiro verify`)                     |
-| KV bit-exactness   | vendor KV pages  | **PASS** (GDX `fp8` cold roundtrip)           |
+| KV bit-exactness   | vendor KV pages  | **PASS** (Isiro KV `fp8` cold roundtrip)           |
 | Serve output match | -                | FAIL (3/4 prompts matched (temp=0 token IDs)) |
 
 
@@ -48,11 +48,11 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights.
 | GPU memory reserved for KV | 18.01 GiB (295008 tokens) | 19.05 GiB (312176 tokens)† |
 
 
-† Reserved pool on the GPU at vendor KV bytes/token. Token counts are pool admission slots (same bpv as the vendor dtype), not GDX-coded cold capacity. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
+† Reserved pool on the GPU at vendor KV bytes/token. Token counts are pool admission slots (same bpv as the vendor dtype), not Isiro-KV-coded cold capacity. Longer context uses persist after vendor reclaim of prefix blocks (TokenIDs plus archived K,V). Not a second vendor KV cache on the host.
 
 ### KV vs context
 
-`ISIRO_GDX=fp8` on vendor FA fp8 KV pages from a Project Gutenberg prefill (`kv_source=vendor_fa_pages`). At T=8192: Baseline KV 0.50 GiB, Isiro KV 0.39 GiB; save 0.11 GiB (21.7%). Bottom panel adds loaded weights (Baseline 8.51 GiB, Isiro 7.93 GiB): at T=8192, Baseline 9.01 GiB vs Isiro 8.32 GiB (weights + KV).
+`ISIRO_KV=fp8` on vendor FA fp8 KV pages from a Project Gutenberg prefill (`kv_source=vendor_fa_pages`). At T=8192: Baseline KV 0.50 GiB, Isiro KV 0.39 GiB; save 0.11 GiB (21.7%). Bottom panel adds loaded weights (Baseline 8.51 GiB, Isiro 7.93 GiB): at T=8192, Baseline 9.01 GiB vs Isiro 8.32 GiB (weights + KV).
 
 Figure. Weights and KV vs 1-user context.
 
@@ -96,13 +96,13 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 | System             | `rtx-5090`                            |
 | CUDA graphs        | on (eager prefill, graph decode)      |
 | Weights            | `fp8`                                 |
-| KV cache           | dtype `fp8`; `ISIRO_GDX=fp8` on Isiro |
+| KV cache           | dtype `fp8`; `ISIRO_KV=fp8` on Isiro |
 | Compiler           | `v0.1.1`                              |
 | Runtime            | `v0.1.1`                              |
 | vLLM               | 0.31.0                                |
 | GPU                | NVIDIA GeForce RTX 5090 x 1           |
 | Driver / CUDA      | 590.44.01 / 13.1                      |
-| ISIRO_GDX          | `fp8`                                 |
+| ISIRO_KV          | `fp8`                                 |
 | Isiro attention    | `CUSTOM` (`ISIRO_ATTN` unset)         |
 | Baseline attention | `FLASHINFER`                          |
 

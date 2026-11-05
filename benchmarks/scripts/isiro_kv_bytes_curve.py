@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Plot cold GDX KV bytes vs FA twin across context length T.
+"""Plot cold Isiro KV bytes vs FA twin across context length T.
 
 Uses real KV from a real token stream (Project Gutenberg text). Hot window
-stays FA; cold prefix is GDX o1. Writes PNG + JSON for the public report.
+stays FA; cold prefix is Isiro KV o1. Writes PNG + JSON for the public report.
 
 KV sources (fail-closed):
 - ``bf16`` alphabet: HF forward on a dense/bf16-capable weight tree (real bf16
   bit patterns; matches product bf16 deposit bitcast).
 - ``fp8`` / ``fp4`` alphabets: vendor FA page bytes from
-  ``gdx_kv_curve_vendor_pages.py`` (same ``kv_cache_dtype`` as serve). Product
-  GDX compresses those pages only; there is no bf16→e4m3/e2m1 cast.
+  ``isiro_kv_curve_vendor_pages.py`` (same ``kv_cache_dtype`` as serve). Product
+  Isiro KV compresses those pages only; there is no bf16→e4m3/e2m1 cast.
 
-FA twin and GDX cold lengths follow vendor layer caps from config
+FA twin and Isiro KV cold lengths follow vendor layer caps from config
 (``layer_types`` + ``sliding_window``): sliding layers use
 ``min(T, window)``, full layers use ``T``. That matches vLLM hybrid
 AttentionSpec geometry better than naive ``T * all_layers``.
@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-SCHEMA = "isiro-benchmark-gdx-kv-bytes-curve-v3"
+SCHEMA = "isiro-benchmark-isiro-kv-bytes-curve-v3"
 
 _DEFAULT_W = 512
 # Public-domain long text (Project Gutenberg #1342). Cached under the out dir.
@@ -58,7 +58,7 @@ def _ensure_runtime_import() -> str | None:
             return None
         except ImportError:
             continue
-    return "isiro_runtime not importable for GDX KV-bytes curve"
+    return "isiro_runtime not importable for Isiro KV KV-bytes curve"
 
 
 def _fa_bpv(alphabet: str) -> float:
@@ -246,33 +246,33 @@ def _pack_codes_nbytes(alphabet: str, codes) -> tuple[int, float]:
 
     a = alphabet.strip().lower()
     if a in ("bf16", "bfloat16"):
-        from isiro_runtime.ops.tic.native_compute.gdx.atoms.bf16_o1 import (
-            encode_gdx_bf16_o1,
+        from isiro_runtime.ops.tic.native_compute.isiro_kv.atoms.bf16_o1 import (
+            encode_isiro_kv_bf16_o1,
             packed_nbytes_bf16_o1,
         )
 
-        ra = encode_gdx_bf16_o1(codes)
+        ra = encode_isiro_kv_bf16_o1(codes)
         packed = int(packed_nbytes_bf16_o1(ra))
         bpv = float(packed * 8.0 / max(int(ra.n_values), 1))
         return packed, bpv
     if a in ("fp8", "fp8_e4m3"):
-        from isiro_runtime.ops.tic.native_compute.gdx.atoms.e4m3_msb_o1 import (
-            encode_gdx_e4m3_msb_o1,
+        from isiro_runtime.ops.tic.native_compute.isiro_kv.atoms.e4m3_msb_o1 import (
+            encode_isiro_kv_e4m3_msb_o1,
         )
 
         u8 = _require_uint8_codes(codes, where="pack_fp8")
-        ra = encode_gdx_e4m3_msb_o1(u8)
+        ra = encode_isiro_kv_e4m3_msb_o1(u8)
         n = int(ra.n_values)
         packed = int(ra.streams.nbytes + ra.offsets.nbytes + ra.freq_blob.nbytes)
         bpv = float(packed * 8.0 / max(n, 1))
         return packed, bpv
     if a in ("fp4", "nvfp4", "e2m1"):
-        from isiro_runtime.ops.tic.native_compute.gdx.atoms.e2m1_o1 import (
-            encode_gdx_e2m1_o1,
+        from isiro_runtime.ops.tic.native_compute.isiro_kv.atoms.e2m1_o1 import (
+            encode_isiro_kv_e2m1_o1,
         )
 
         u8 = _require_uint8_codes(codes, where="pack_fp4")
-        ra = encode_gdx_e2m1_o1(u8)
+        ra = encode_isiro_kv_e2m1_o1(u8)
         n = int(ra.n_values)
         packed = int(ra.streams.nbytes + ra.offsets.nbytes + ra.freq_blob.nbytes)
         bpv = float(packed * 8.0 / max(n, 1))
@@ -307,24 +307,24 @@ def _gate_curve_points(
 ) -> tuple[bool, str | None]:
     cold_pts = [p for p in points if int(p["cold_t"]) > 0]
     if not cold_pts:
-        return False, "GDX cold bytes curve has no cold-T points"
+        return False, "Isiro KV cold bytes curve has no cold-T points"
     last = cold_pts[-1]
     if float(last["save_vs_fa"]) <= 0.0:
-        return False, "GDX cold+hot bytes did not beat FA twin at max T"
+        return False, "Isiro KV cold+hot bytes did not beat FA twin at max T"
     if float(last.get("payload_bpv") or fa_bpv) >= float(fa_bpv):
         return False, (
-            "GDX payload bpv at max T did not beat FA twin "
+            "Isiro KV payload bpv at max T did not beat FA twin "
             f"({last.get('payload_bpv')} >= {fa_bpv})"
         )
     if len(cold_pts) >= 2:
         first = cold_pts[0]
         t_ratio = float(last["cold_t"]) / float(max(int(first["cold_t"]), 1))
-        b_ratio = float(last["gdx_cold_nbytes"]) / float(
-            max(int(first["gdx_cold_nbytes"]), 1)
+        b_ratio = float(last["isiro_kv_cold_nbytes"]) / float(
+            max(int(first["isiro_kv_cold_nbytes"]), 1)
         )
         if t_ratio >= 4.0 and b_ratio < 2.0:
             return False, (
-                "GDX cold nbytes did not grow with T "
+                "Isiro KV cold nbytes did not grow with T "
                 f"(cold_t x{t_ratio:.1f}, bytes x{b_ratio:.2f})"
             )
     return True, None
@@ -420,16 +420,16 @@ def measure_curve_from_mla_latent(
         need_t = int(need_t)
         if need_t in pack_len_cache:
             return pack_len_cache[need_t]
-        gdx = 0
+        isiro_kv = 0
         bpv_acc = 0.0
         n_pack = 0
         for li in range(n_layers):
             page = lat[li : li + 1, :need_t, None, :]
             packed, bpv = _pack_codes_nbytes(a, page)
-            gdx += int(packed)
+            isiro_kv += int(packed)
             bpv_acc += float(bpv)
             n_pack += 1
-        out = (int(gdx), float(bpv_acc / max(n_pack, 1)))
+        out = (int(isiro_kv), float(bpv_acc / max(n_pack, 1)))
         pack_len_cache[need_t] = out
         return out
 
@@ -440,46 +440,46 @@ def measure_curve_from_mla_latent(
         # Twin = full latent residency (1 byte/value at fa_bpv=8).
         fa_all = int(n_layers * int(T) * dim * fa_bpv) // 8
         fa_hot = int(n_layers * hot_t * dim * fa_bpv) // 8
-        gdx_cold = 0
+        isiro_kv_cold = 0
         payload_bpv: float | None = None
         if cold_t > 0:
             need_t = int(cold_t)
             if need_t <= max_t_pages:
-                gdx_cold, payload_bpv = _pack_cold_len(need_t)
+                isiro_kv_cold, payload_bpv = _pack_cold_len(need_t)
             else:
                 n_full, rem = divmod(need_t, max_t_pages)
                 full_nb, full_bpv = _pack_cold_len(max_t_pages)
-                gdx_cold = int(n_full) * int(full_nb)
+                isiro_kv_cold = int(n_full) * int(full_nb)
                 bpv_w = float(full_bpv) * float(n_full) * float(max_t_pages)
                 denom = float(n_full) * float(max_t_pages)
                 if rem > 0:
                     rem_nb, rem_bpv = _pack_cold_len(rem)
-                    gdx_cold += int(rem_nb)
+                    isiro_kv_cold += int(rem_nb)
                     bpv_w += float(rem_bpv) * float(rem)
                     denom += float(rem)
                 payload_bpv = float(bpv_w / max(denom, 1.0))
-        gdx_total = int(gdx_cold + fa_hot)
+        isiro_kv_total = int(isiro_kv_cold + fa_hot)
         if cold_t < 1:
             points.append(
                 {
                     "T": int(T),
                     "cold_t": 0,
                     "fa_twin_nbytes": fa_all,
-                    "gdx_cold_nbytes": 0,
-                    "gdx_total_nbytes": fa_all,
+                    "isiro_kv_cold_nbytes": 0,
+                    "isiro_kv_total_nbytes": fa_all,
                     "save_vs_fa": 0.0,
                     "payload_bpv": None,
                 }
             )
             continue
-        save = 1.0 - (float(gdx_total) / float(max(fa_all, 1)))
+        save = 1.0 - (float(isiro_kv_total) / float(max(fa_all, 1)))
         points.append(
             {
                 "T": int(T),
                 "cold_t": int(cold_t * n_layers),
                 "fa_twin_nbytes": int(fa_all),
-                "gdx_cold_nbytes": int(gdx_cold),
-                "gdx_total_nbytes": int(gdx_total),
+                "isiro_kv_cold_nbytes": int(isiro_kv_cold),
+                "isiro_kv_total_nbytes": int(isiro_kv_total),
                 "save_vs_fa": float(save),
                 "payload_bpv": (
                     None if payload_bpv is None else float(payload_bpv)
@@ -619,7 +619,7 @@ def measure_curve_from_vendor_pages(
     for T in tok_list:
         fa_hot = 0
         fa_cold = 0
-        gdx_cold = 0
+        isiro_kv_cold = 0
         cold_tokens = 0
         bpv_acc = 0.0
         n_pack = 0
@@ -654,32 +654,32 @@ def measure_curve_from_vendor_pages(
                     where="vendor_page",
                 )
                 packed, bpv = _pack_codes_nbytes(a, codes)
-                gdx_cold += int(packed)
+                isiro_kv_cold += int(packed)
                 bpv_acc += float(bpv)
                 n_pack += 1
         fa_all = int(fa_cold + fa_hot)
-        gdx_total = int(gdx_cold + fa_hot)
+        isiro_kv_total = int(isiro_kv_cold + fa_hot)
         if cold_tokens < 1:
             points.append(
                 {
                     "T": int(T),
                     "cold_t": 0,
                     "fa_twin_nbytes": fa_all,
-                    "gdx_cold_nbytes": 0,
-                    "gdx_total_nbytes": fa_all,
+                    "isiro_kv_cold_nbytes": 0,
+                    "isiro_kv_total_nbytes": fa_all,
                     "save_vs_fa": 0.0,
                     "payload_bpv": None,
                 }
             )
             continue
-        save = 1.0 - (float(gdx_total) / float(max(fa_all, 1)))
+        save = 1.0 - (float(isiro_kv_total) / float(max(fa_all, 1)))
         points.append(
             {
                 "T": int(T),
                 "cold_t": int(cold_tokens),
                 "fa_twin_nbytes": int(fa_all),
-                "gdx_cold_nbytes": int(gdx_cold),
-                "gdx_total_nbytes": int(gdx_total),
+                "isiro_kv_cold_nbytes": int(isiro_kv_cold),
+                "isiro_kv_total_nbytes": int(isiro_kv_total),
                 "save_vs_fa": float(save),
                 "payload_bpv": float(bpv_acc / max(n_pack, 1)),
             }
@@ -712,7 +712,7 @@ def measure_curve_from_vendor_pages(
 
 
 def _default_bf16_capture_t() -> int:
-    raw = os.environ.get("ISIRO_BENCH_GDX_CURVE_CAPTURE_T") or "8192"
+    raw = os.environ.get("ISIRO_BENCH_KV_CURVE_CAPTURE_T") or "8192"
     try:
         return max(512, int(raw))
     except ValueError:
@@ -732,7 +732,7 @@ def measure_curve(
     """Real-KV curve (bf16 alphabet): one HF forward, slice per T, pack cold.
 
     When ``max(tokens)`` exceeds the capture budget (default 8192, override
-    ``capture_t`` / ``ISIRO_BENCH_GDX_CURVE_CAPTURE_T``), forward only at the
+    ``capture_t`` / ``ISIRO_BENCH_KV_CURVE_CAPTURE_T``), forward only at the
     capture length and tile packed cold nbytes for larger T (same idea as MLA
     latent tiling). Hot window stays FA on every point.
     """
@@ -787,7 +787,7 @@ def measure_curve(
     cap_budget = int(capture_t) if capture_t is not None else _default_bf16_capture_t()
     forward_t = min(max_t, max(512, cap_budget))
     tiled = bool(max_t > forward_t)
-    cache = cache_dir or (Path.cwd() / ".gdx_kv_curve_cache")
+    cache = cache_dir or (Path.cwd() / ".isiro_kv_curve_cache")
     try:
         text = _load_real_text(text_file=text_file, cache_dir=cache)
     except Exception as exc:
@@ -928,37 +928,37 @@ def measure_curve(
             out = (0, float(fa_bpv))
             pack_len_cache[key] = out
             return out
-        gdx = 0
+        isiro_kv = 0
         bpv_acc = 0.0
         n_pack = 0
 
         def _pack_slice(t_len: int) -> None:
-            nonlocal gdx, bpv_acc, n_pack
+            nonlocal isiro_kv, bpv_acc, n_pack
             t_len = min(int(t_len), t_cap)
             if t_len < 1:
                 return
             for page in (k_page[:, :t_len, :, :], v_page[:, :t_len, :, :]):
                 packed, bpv = _pack_codes_nbytes(a, page)
-                gdx += int(packed)
+                isiro_kv += int(packed)
                 bpv_acc += float(bpv)
                 n_pack += 1
 
         if need_t <= t_cap:
             _pack_slice(need_t)
-            out = (int(gdx), float(bpv_acc / max(n_pack, 1)))
+            out = (int(isiro_kv), float(bpv_acc / max(n_pack, 1)))
             pack_len_cache[key] = out
             return out
         n_full, rem = divmod(need_t, t_cap)
         full_nb, full_bpv = _pack_layer_cold(li, t_cap)
-        gdx = int(n_full) * int(full_nb)
+        isiro_kv = int(n_full) * int(full_nb)
         bpv_w = float(full_bpv) * float(n_full) * float(t_cap)
         denom = float(n_full) * float(t_cap)
         if rem > 0:
             rem_nb, rem_bpv = _pack_layer_cold(li, rem)
-            gdx += int(rem_nb)
+            isiro_kv += int(rem_nb)
             bpv_w += float(rem_bpv) * float(rem)
             denom += float(rem)
-        out = (int(gdx), float(bpv_w / max(denom, 1.0)))
+        out = (int(isiro_kv), float(bpv_w / max(denom, 1.0)))
         pack_len_cache[key] = out
         return out
 
@@ -991,7 +991,7 @@ def measure_curve(
     for T in tok_list:
         fa_hot = 0
         fa_cold = 0
-        gdx_cold = 0
+        isiro_kv_cold = 0
         cold_tokens = 0
         bpv_acc = 0.0
         n_pack = 0
@@ -1032,37 +1032,37 @@ def measure_curve(
                 v_page = _kv_layer_to_lthd(v_vis[:, :, :cold_t_layer, :])
                 for page in (k_page, v_page):
                     packed, bpv = _pack_codes_nbytes(a, page)
-                    gdx_cold += int(packed)
+                    isiro_kv_cold += int(packed)
                     bpv_acc += float(bpv)
                     n_pack += 1
             else:
                 packed, bpv = _pack_layer_cold(li, cold_t_layer)
-                gdx_cold += int(packed)
+                isiro_kv_cold += int(packed)
                 bpv_acc += float(bpv)
                 n_pack += 1
         fa_all = int(fa_cold + fa_hot)
-        gdx_total = int(gdx_cold + fa_hot)
+        isiro_kv_total = int(isiro_kv_cold + fa_hot)
         if cold_tokens < 1:
             points.append(
                 {
                     "T": int(T),
                     "cold_t": 0,
                     "fa_twin_nbytes": fa_all,
-                    "gdx_cold_nbytes": 0,
-                    "gdx_total_nbytes": fa_all,
+                    "isiro_kv_cold_nbytes": 0,
+                    "isiro_kv_total_nbytes": fa_all,
                     "save_vs_fa": 0.0,
                     "payload_bpv": None,
                 }
             )
             continue
-        save = 1.0 - (float(gdx_total) / float(max(fa_all, 1)))
+        save = 1.0 - (float(isiro_kv_total) / float(max(fa_all, 1)))
         points.append(
             {
                 "T": int(T),
                 "cold_t": int(cold_tokens),
                 "fa_twin_nbytes": int(fa_all),
-                "gdx_cold_nbytes": int(gdx_cold),
-                "gdx_total_nbytes": int(gdx_total),
+                "isiro_kv_cold_nbytes": int(isiro_kv_cold),
+                "isiro_kv_total_nbytes": int(isiro_kv_total),
                 "save_vs_fa": float(save),
                 "payload_bpv": float(bpv_acc / max(n_pack, 1)),
             }
@@ -1114,7 +1114,7 @@ def render_png(
     weight_precision: str = "",
     kv_precision: str = "",
 ) -> None:
-    """2x1: KV-only (top) and weights+KV (bottom). No GDX in legend labels."""
+    """2x1: KV-only (top) and weights+KV (bottom). No Isiro KV in legend labels."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -1135,7 +1135,7 @@ def render_png(
     xs = [int(p["T"]) for p in pts]
     gib = float(1024**3)
     fa = [float(p["fa_twin_nbytes"]) / gib for p in pts]
-    isiro_kv = [float(p["gdx_total_nbytes"]) / gib for p in pts]
+    isiro_kv = [float(p["isiro_kv_total_nbytes"]) / gib for p in pts]
     b_w = doc.get("baseline_weight_bytes")
     t_w = doc.get("isiro_weight_bytes")
     has_weights = (
@@ -1245,17 +1245,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--alphabet",
-        default=os.environ.get("ISIRO_BENCH_GDX")
-        or os.environ.get("ISIRO_BENCH_GDX_KV")
+        default=os.environ.get("ISIRO_BENCH_KV")
+        or os.environ.get("ISIRO_KV")
         or "bf16",
     )
     parser.add_argument("--out-json", type=Path, required=True)
     parser.add_argument("--out-png", type=Path, required=True)
     parser.add_argument(
         "--tokens",
-        default=os.environ.get("ISIRO_BENCH_GDX_CURVE_TOKENS")
+        default=os.environ.get("ISIRO_BENCH_KV_CURVE_TOKENS")
         or "512,1024,2048,4096,8192",
-        help="Comma-separated context lengths (or ISIRO_BENCH_GDX_CURVE_TOKENS)",
+        help="Comma-separated context lengths (or ISIRO_BENCH_KV_CURVE_TOKENS)",
     )
     parser.add_argument("--live-window", type=int, default=_DEFAULT_W)
     parser.add_argument(
@@ -1264,7 +1264,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "HF forward capture length for bf16; larger --tokens tile beyond "
-            "this (default ISIRO_BENCH_GDX_CURVE_CAPTURE_T or 8192)"
+            "this (default ISIRO_BENCH_KV_CURVE_CAPTURE_T or 8192)"
         ),
     )
     parser.add_argument(
@@ -1335,7 +1335,7 @@ def main(argv: list[str] | None = None) -> int:
         "--vendor-pages",
         type=Path,
         default=None,
-        help="npz from gdx_kv_curve_vendor_pages.py (required for fp8/fp4 FA)",
+        help="npz from isiro_kv_curve_vendor_pages.py (required for fp8/fp4 FA)",
     )
     parser.add_argument(
         "--mla-latent",
@@ -1356,7 +1356,7 @@ def main(argv: list[str] | None = None) -> int:
     if needs_vendor and args.mla_latent is not None:
         if not Path(args.mla_latent).is_file():
             print(
-                f"gdx_kv_bytes_curve: FAIL error=--mla-latent missing "
+                f"isiro_kv_bytes_curve: FAIL error=--mla-latent missing "
                 f"({args.mla_latent})",
                 file=sys.stderr,
             )
@@ -1371,7 +1371,7 @@ def main(argv: list[str] | None = None) -> int:
     elif needs_vendor:
         if args.vendor_pages is None or not Path(args.vendor_pages).is_file():
             print(
-                "gdx_kv_bytes_curve: FAIL error=--vendor-pages required for "
+                "isiro_kv_bytes_curve: FAIL error=--vendor-pages required for "
                 f"alphabet={alphabet!r} (vendor FA pages; no bf16 cast). "
                 "For MLA use --mla-latent.",
                 file=sys.stderr,
@@ -1393,7 +1393,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         if not args.model_dir or not Path(args.model_dir).is_dir():
             print(
-                "gdx_kv_bytes_curve: FAIL error=--model-dir required (real KV)",
+                "isiro_kv_bytes_curve: FAIL error=--model-dir required (real KV)",
                 file=sys.stderr,
             )
             return 2
@@ -1403,7 +1403,7 @@ def main(argv: list[str] | None = None) -> int:
             model_dir=Path(args.model_dir),
             text_file=args.text_file,
             live_window=int(args.live_window),
-            cache_dir=args.out_json.parent / ".gdx_kv_curve_cache",
+            cache_dir=args.out_json.parent / ".isiro_kv_curve_cache",
             capture_t=(
                 int(args.capture_t) if args.capture_t is not None else None
             ),
@@ -1446,14 +1446,14 @@ def main(argv: list[str] | None = None) -> int:
             kv_precision=kv_prec,
         )
         print(
-            f"gdx_kv_bytes_curve: PASS alphabet={doc.get('alphabet')} "
+            f"isiro_kv_bytes_curve: PASS alphabet={doc.get('alphabet')} "
             f"source={doc.get('source')} points={len(doc.get('points') or [])} "
             f"png={args.out_png}",
             file=sys.stderr,
         )
         return 0
     print(
-        f"gdx_kv_bytes_curve: FAIL error={doc.get('error')}",
+        f"isiro_kv_bytes_curve: FAIL error={doc.get('error')}",
         file=sys.stderr,
     )
     return 2

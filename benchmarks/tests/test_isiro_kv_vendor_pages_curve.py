@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression: fp8/fp4 GDX curves must use vendor FA pages, not bf16 casts."""
+"""Regression: fp8/fp4 Isiro KV curves must use vendor FA pages, not bf16 casts."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ sys.path.insert(0, str(SCRIPTS))
 
 class GdxVendorPagesCurveTests(unittest.TestCase):
     def test_gdx_fp8_curve_bans_bf16_standin_and_requires_vendor_pages(self) -> None:
-        curve = (SCRIPTS / "gdx_kv_bytes_curve.py").read_text(encoding="utf-8")
-        vendor = (SCRIPTS / "gdx_kv_curve_vendor_pages.py").read_text(encoding="utf-8")
+        curve = (SCRIPTS / "isiro_kv_bytes_curve.py").read_text(encoding="utf-8")
+        vendor = (SCRIPTS / "isiro_kv_curve_vendor_pages.py").read_text(encoding="utf-8")
         harness = (SCRIPTS / "harness_lib.sh").read_text(encoding="utf-8")
         for banned in (
             ">> 8",
@@ -34,7 +34,7 @@ class GdxVendorPagesCurveTests(unittest.TestCase):
         self.assertIn("vendor_fa_pages", curve)
         self.assertIn("--vendor-pages", curve)
         self.assertIn("no bf16 cast", curve)
-        self.assertIn("gdx_kv_curve_vendor_pages.py", harness)
+        self.assertIn("isiro_kv_curve_vendor_pages.py", harness)
         self.assertIn("--vendor-pages", harness)
         self.assertIn("vendor_fa_pages_unsupported_reason", harness)
         self.assertIn("ISIRO_BENCH_MLA_LATENT_NPZ", harness)
@@ -44,9 +44,9 @@ class GdxVendorPagesCurveTests(unittest.TestCase):
         fp8_block_start = harness.index("gdx_kv_curve_vendor_pages")
         fp8_block = harness[fp8_block_start : fp8_block_start + 1800]
         self.assertIn("BASELINE_MODEL_DIR", fp8_block)
-        self.assertNotIn("ISIRO_BENCH_GDX_MODEL_DIR", fp8_block)
+        self.assertNotIn("ISIRO_BENCH_KV_MODEL_DIR", fp8_block)
 
-        from gdx_kv_bytes_curve import measure_curve, measure_curve_from_vendor_pages
+        from isiro_kv_bytes_curve import measure_curve, measure_curve_from_vendor_pages
 
         denied = measure_curve(
             "fp8",
@@ -81,7 +81,7 @@ class GdxVendorPagesCurveTests(unittest.TestCase):
                 kv_cache_dtype="fp8",
             )
             if doc.get("error") and "not importable" in str(doc.get("error")):
-                self.skipTest("isiro_runtime not importable for GDX curve")
+                self.skipTest("isiro_runtime not importable for Isiro KV curve")
             self.assertEqual(doc.get("kv_source"), "vendor_fa_pages")
             self.assertEqual(doc.get("source"), "vendor_fa_pages")
             self.assertEqual(doc.get("kv_cache_dtype"), "fp8")
@@ -91,7 +91,7 @@ class GdxVendorPagesCurveTests(unittest.TestCase):
             self.assertLess(float(cold[-1]["payload_bpv"]), 8.0)
 
             with self.assertRaises(TypeError):
-                from gdx_kv_bytes_curve import _pack_codes_nbytes
+                from isiro_kv_bytes_curve import _pack_codes_nbytes
 
                 _pack_codes_nbytes(
                     "fp8",
@@ -99,7 +99,7 @@ class GdxVendorPagesCurveTests(unittest.TestCase):
                 )
 
     def test_mla_latent_curve_path_a(self) -> None:
-        from gdx_kv_bytes_curve import measure_curve_from_mla_latent
+        from isiro_kv_bytes_curve import measure_curve_from_mla_latent
 
         import numpy as np
 
@@ -119,7 +119,7 @@ class GdxVendorPagesCurveTests(unittest.TestCase):
                 kv_cache_dtype="fp8_ds_mla",
             )
             if doc.get("error") and "not importable" in str(doc.get("error")):
-                self.skipTest("isiro_runtime not importable for GDX curve")
+                self.skipTest("isiro_runtime not importable for Isiro KV curve")
             self.assertEqual(doc.get("kv_source"), "vendor_mla_latent")
             self.assertTrue(doc.get("ok"), doc.get("error"))
             cold = [p for p in doc["points"] if int(p["cold_t"]) > 0]
@@ -127,7 +127,7 @@ class GdxVendorPagesCurveTests(unittest.TestCase):
             self.assertGreater(float(cold[-1]["save_vs_fa"]), 0.0)
 
     def test_mla_latent_curve_tiles_beyond_capture(self) -> None:
-        from gdx_kv_bytes_curve import measure_curve_from_mla_latent
+        from isiro_kv_bytes_curve import measure_curve_from_mla_latent
 
         import numpy as np
 
@@ -146,7 +146,7 @@ class GdxVendorPagesCurveTests(unittest.TestCase):
                 kv_cache_dtype="fp8_ds_mla",
             )
             if doc.get("error") and "not importable" in str(doc.get("error")):
-                self.skipTest("isiro_runtime not importable for GDX curve")
+                self.skipTest("isiro_runtime not importable for Isiro KV curve")
             self.assertTrue(doc.get("ok"), doc.get("error"))
             self.assertTrue(doc.get("tiled_beyond_capture"))
             self.assertEqual(doc.get("fa_twin_mode"), "mla_latent_tiled_sequence")

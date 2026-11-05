@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from gdx_kv_bytes_curve import _fa_dump_layer_caps, _layer_caps_from_config
-from gdx_kv_curve_vendor_pages import (
+from isiro_kv_bytes_curve import _fa_dump_layer_caps, _layer_caps_from_config
+from isiro_kv_curve_vendor_pages import (
     _expand_logical_block_ids,
     vendor_fa_pages_unsupported_reason,
 )

@@ -225,8 +225,8 @@ def main() -> None:
     lines.append("")
     lines.append("- **Baseline:** vLLM (`vllm serve` / Docker `vllm/vllm-openai`) with `--kv-cache-dtype bfloat16`")
     lines.append(
-        "- **Isiro:** `isiro serve … --target vllm` with TIC weights and `ISIRO_GDX=bf16` "
-        "(cold KV compress on vendor FA pages; `ISIRO_GDX_COLD_READY=1`, `ISIRO_GDX_FUSED_ATTEND=0`)"
+        "- **Isiro:** `isiro serve … --target vllm` with TIC weights and `ISIRO_KV=bf16` "
+        "(cold KV compress on vendor FA pages; `ISIRO_KV_COLD_READY=1`, `ISIRO_KV_FUSED_ATTEND=0`)"
     )
     lines.append("")
     lines.append(
@@ -250,7 +250,7 @@ def main() -> None:
     lines.append(
         f"| KV bit-exactness | vendor KV pages | "
         f"**{'PASS' if corr.get('kv_bit_exact_ok') else 'see meters'}** "
-        f"(GDX `bf16` cold roundtrip) |"
+        f"(Isiro KV `bf16` cold roundtrip) |"
     )
     lines.append(
         f"| Cold deposit / twin free | - | "
@@ -287,12 +287,12 @@ def main() -> None:
     )
     lines.append("")
     lines.append(
-        "Reserved pool is vendor admission slots, not GDX-coded cold capacity. "
+        "Reserved pool is vendor admission slots, not Isiro-KV-coded cold capacity. "
         "On FA path_a, process FA twin bytes drop when vendor Sliding or pool reclaim "
         "arms persist; `free_fa_twin` clears the live twin ledger (`live_fa_nbytes=0`)."
     )
     lines.append("")
-    lines.append("### Live GDX residency (Isiro, after long prompt)")
+    lines.append("### Live Isiro KV residency (Isiro, after long prompt)")
     lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
@@ -357,9 +357,9 @@ def main() -> None:
     lines.append("| System | `rtx-5090` |")
     lines.append("| CUDA graphs | on |")
     lines.append("| Weights | `fp8` |")
-    lines.append("| KV cache | dtype `bfloat16`; `ISIRO_GDX=bf16` on Isiro |")
-    lines.append("| Live window | `ISIRO_GDX_LIVE_WINDOW=512` |")
-    lines.append("| Cold ready | `ISIRO_GDX_COLD_READY=1` |")
+    lines.append("| KV cache | dtype `bfloat16`; `ISIRO_KV=bf16` on Isiro |")
+    lines.append("| Live window | `ISIRO_KV_LIVE_WINDOW=512` |")
+    lines.append("| Cold ready | `ISIRO_KV_COLD_READY=1` |")
     lines.append("| Fused attend | `0` (attend=`a`) |")
     lines.append(f"| Compiler | `{args.compiler}` |")
     lines.append(f"| Runtime | `{args.runtime}` |")

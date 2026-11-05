@@ -23,11 +23,11 @@ fi
 
 exec "${PY}" "${REMETER}" \
   --url "${ISIRO_BENCH_URL:-http://127.0.0.1:8000}" \
-  --arm gdx \
+  --arm isiro_kv \
   --out "${OUT}" \
   --gdx-kv bf16 \
   --fused 0 \
-  --live-window "${ISIRO_GDX_LIVE_WINDOW:-512}" \
+  --live-window "${ISIRO_KV_LIVE_WINDOW:-512}" \
   --kv-cache-dtype bfloat16 \
   --max-model-len 8192 \
   "${EXTRA[@]}"

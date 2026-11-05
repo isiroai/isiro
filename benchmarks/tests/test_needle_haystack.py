@@ -692,8 +692,8 @@ class NeedleHaystackTests(unittest.TestCase):
             "GPU KV cache size: 20,480 tokens\n"
         )
         self.assertAlmostEqual(product, 1.09)
-        gdx = parse_kv_cache_gib(
-            "GDX FA live clamp: 449 MiB (vendor FA HBM; admit=8192 cold_arm_W=512)\n"
+        isiro_kv = parse_kv_cache_gib(
+            "Isiro KV FA live clamp: 449 MiB (vendor FA HBM; admit=8192 cold_arm_W=512)\n"
             "GPU KV cache size: 8,208 tokens\n"
         )
         self.assertAlmostEqual(gdx, 449 / 1024.0)

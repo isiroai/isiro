@@ -9,9 +9,9 @@ Tooling:
 Compared:
 
 - **Baseline:** vLLM (`vllm serve` / Docker `vllm/vllm-openai`) with `--kv-cache-dtype bfloat16`
-- **Isiro:** `isiro serve … --target vllm` with TIC weights and `ISIRO_GDX=bf16` (same vLLM version; cold KV compress on vendor attention pages)
+- **Isiro:** `isiro serve … --target vllm` with TIC weights and `ISIRO_KV=bf16` (same vLLM version; cold KV compress on vendor attention pages)
 
-Section A Available KV is the vendor reserved pool (GiB). KV tokens capacity applies GDX cold packing on that budget. Measured cold vs FA twin bytes (when the curve ran) are under KV vs context.
+Section A Available KV is the vendor reserved pool (GiB). KV tokens capacity applies Isiro KV cold packing on that budget. Measured cold vs FA twin bytes (when the curve ran) are under KV vs context.
 
 ## Correctness
 
@@ -19,7 +19,7 @@ Section A Available KV is the vendor reserved pool (GiB). KV tokens capacity app
 |--------|----------|-------|
 | On-disk model size | 21.85 GB | **18.50 GB** (**15.35% smaller**) |
 | Integrity | baseline weights | **PASS** (`isiro verify`) |
-| KV bit-exactness | vendor KV pages | **PASS** (GDX `bf16` cold roundtrip) |
+| KV bit-exactness | vendor KV pages | **PASS** (Isiro KV `bf16` cold roundtrip) |
 | Serve output match | - | **PASS** (4/4 prompts, temp=0, token IDs equal) |
 
 ## A. GPU memory
@@ -42,7 +42,7 @@ Available KV is the vendor reserved pool on the GPU (same util target as Baselin
 
 ### KV tokens capacity
 
-Weight compression grows Available KV. GDX then stores more tokens in that memory (hot window stays dense; cold prefix is packed). With measured s=0.33 → scale 1/(1-s) ≈ 1.49 (hot-corrected).
+Weight compression grows Available KV. Isiro KV then stores more tokens in that memory (hot window stays dense; cold prefix is packed). With measured s=0.33 → scale 1/(1-s) ≈ 1.49 (hot-corrected).
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
@@ -50,7 +50,7 @@ Weight compression grows Available KV. GDX then stores more tokens in that memor
 
 ### KV vs context
 
-`ISIRO_GDX=bf16` on KV from a Project Gutenberg text forward. At T=262,144: Baseline KV 16.00 GiB, Isiro KV 10.71 GiB; save 5.29 GiB (33.1%). Bottom panel adds loaded weights (Baseline 19.92 GiB, Isiro 15.83 GiB): at T=262,144, Baseline 35.92 GiB vs Isiro 26.54 GiB (weights + KV).
+`ISIRO_KV=bf16` on KV from a Project Gutenberg text forward. At T=262,144: Baseline KV 16.00 GiB, Isiro KV 10.71 GiB; save 5.29 GiB (33.1%). Bottom panel adds loaded weights (Baseline 19.92 GiB, Isiro 15.83 GiB): at T=262,144, Baseline 35.92 GiB vs Isiro 26.54 GiB (weights + KV).
 
 Figure. Weights and KV vs 1-user context.
 
@@ -96,13 +96,13 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 | System | `rtx-5090` |
 | CUDA graphs | on (eager prefill, graph decode) |
 | Weights | `awq` |
-| KV cache | dtype `bfloat16`; `ISIRO_GDX=bf16` on Isiro |
+| KV cache | dtype `bfloat16`; `ISIRO_KV=bf16` on Isiro |
 | Compiler | `v0.1.1` |
 | Runtime | `v0.1.1` |
 | vLLM | 0.31.0 |
 | GPU | NVIDIA GeForce RTX 5090 x 1 |
 | Driver / CUDA | 590.44.01 / 13.1 |
-| ISIRO_GDX | `bf16` |
+| ISIRO_KV | `bf16` |
 | Isiro attention | `FLASH_ATTN` (`ISIRO_ATTN` unset) |
 | Baseline attention | `FLASH_ATTN` |
 

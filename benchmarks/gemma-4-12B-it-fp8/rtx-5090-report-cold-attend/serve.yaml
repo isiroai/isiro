@@ -1,4 +1,4 @@
-# Matched to published rtx-5090-report lean GDX bf16 remeter.
+# Matched to published rtx-5090-report lean Isiro KV bf16 remeter.
 vllm:
   serve:
     max_model_len: 8192

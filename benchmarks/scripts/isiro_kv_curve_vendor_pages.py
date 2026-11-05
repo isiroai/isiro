@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Capture vendor FA KV page bytes for the GDX bytes curve (fp8/fp4).
+"""Capture vendor FA KV page bytes for the Isiro KV bytes curve (fp8/fp4).
 
-Product GDX fp8/fp4 deposits compress vendor FA storage only (uint8 e4m3 /
+Product Isiro KV fp8/fp4 deposits compress vendor FA storage only (uint8 e4m3 /
 nvfp4 codes). There is no bf16→e4m3 cast on the serve path. This script runs a
 short vLLM offline prefill with the same ``kv_cache_dtype`` as serve, then
-depages FA pages into a numpy archive for ``gdx_kv_bytes_curve.py``.
+depages FA pages into a numpy archive for ``isiro_kv_bytes_curve.py``.
 
 Intended to run inside ``VLLM_IMAGE`` (or a host with matching vLLM), e.g.:
 
@@ -67,10 +67,10 @@ def vendor_fa_pages_unsupported_reason(model_dir: Path) -> str | None:
     tc = cfg.get("text_config")
     if isinstance(tc, dict):
         maps.append(tc)
-    # Product serve: ISIRO_GDX auto-routes these to unique_c (see gdx_route.py).
+    # Product serve: ISIRO_KV auto-routes these to unique_c (see gdx_route.py).
     # This script is the path_a FA-page curve only.
     _unique_c_hint = (
-        "serve ISIRO_GDX auto-routes unique_c; this path_a FA-page curve does not apply"
+        "serve ISIRO_KV auto-routes unique_c; this path_a FA-page curve does not apply"
     )
     for m in maps:
         if m.get("kv_lora_rank") is not None:
@@ -598,13 +598,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.model_dir.is_dir():
         print(
-            f"gdx_kv_curve_vendor_pages: FAIL model_dir missing: {args.model_dir}",
+            f"isiro_kv_curve_vendor_pages: FAIL model_dir missing: {args.model_dir}",
             file=sys.stderr,
         )
         return 2
     reason = vendor_fa_pages_unsupported_reason(args.model_dir)
     if reason:
-        print(f"gdx_kv_curve_vendor_pages: FAIL {reason}", file=sys.stderr)
+        print(f"isiro_kv_curve_vendor_pages: FAIL {reason}", file=sys.stderr)
         return 2
     try:
         dump = capture_vendor_pages(
@@ -616,7 +616,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except Exception as exc:  # noqa: BLE001 - meter must fail-closed
         print(
-            f"gdx_kv_curve_vendor_pages: FAIL error={type(exc).__name__}: {exc}",
+            f"isiro_kv_curve_vendor_pages: FAIL error={type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
         return 2
@@ -652,7 +652,7 @@ def main(argv: list[str] | None = None) -> int:
         meta_path = Path(str(args.out) + ".meta.json")
     meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(
-        f"gdx_kv_curve_vendor_pages: PASS layers={meta['layers']} "
+        f"isiro_kv_curve_vendor_pages: PASS layers={meta['layers']} "
         f"T={args.max_t} H={meta['kv_heads']} D={meta['head_dim']} "
         f"dtype={meta['kv_dtype']} out={args.out}",
         file=sys.stderr,

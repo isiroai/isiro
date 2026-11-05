@@ -11,7 +11,7 @@ Tooling:
 Compared:
 
 - **Baseline:** vLLM (`vllm serve` / Docker `vllm/vllm-openai:v0.31.0`) with `--kv-cache-dtype bfloat16`
-- **Isiro:** `isiro serve … --target vllm` with TIC weights and `ISIRO_GDX=bf16` (`ISIRO_GDX_COLD_READY=1`, `ISIRO_GDX_FUSED_ATTEND=0`, `ISIRO_GDX_LIVE_WINDOW=512`)
+- **Isiro:** `isiro serve … --target vllm` with TIC weights and `ISIRO_KV=bf16` (`ISIRO_KV_COLD_READY=1`, `ISIRO_KV_FUSED_ATTEND=0`, `ISIRO_KV_LIVE_WINDOW=512`)
 
 **Scope:** FA `path_a` / `fa-kv` only. Not a GLM `path_a_mla` / `o1-mla-latent` proxy (see `SCOPE.md`). Dual GO required: physical cold-attend residency + latency beat. Published sibling `rtx-5090-report/` left untouched.
 
@@ -21,7 +21,7 @@ Compared:
 |--------|----------|-------|
 | On-disk model size | 15.04 GB | **12.42 GB** (**17.43% smaller**) |
 | Integrity | baseline weights | **PASS** (`isiro verify`) |
-| KV bit-exactness | vendor KV pages | **PASS** (GDX `bf16` cold roundtrip) |
+| KV bit-exactness | vendor KV pages | **PASS** (Isiro KV `bf16` cold roundtrip) |
 | Cold deposit / twin free (serve) | - | **PASS** deposit (`n_deposit=96`, no OOM); ledger `free_fa_twin` only until vendor Sliding/pool |
 | NIAH (residency scrape) | - | **PASS** (256/1024/2048/4000/8000 d50 = 1.0) |
 | Sandbox free_fa (codec) | - | **PASS** (`save_vs_all_fa≈0.859`, `f_cold=1`) |
@@ -42,9 +42,9 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights.
 |--------|----------|-------|
 | GPU KV cache tokens (log) | 60,990 | 61,527 |
 
-Reserved pool is vendor admission slots, not GDX-coded cold capacity. Longer context should persist after vendor Sliding or pool reclaim.
+Reserved pool is vendor admission slots, not Isiro-KV-coded cold capacity. Longer context should persist after vendor Sliding or pool reclaim.
 
-### Live GDX residency (Isiro serve, after long prompt)
+### Live Isiro KV residency (Isiro serve, after long prompt)
 
 | Metric | Value |
 |--------|-------|
@@ -78,7 +78,7 @@ Physical reclaim of vendor FA pages is not a missing zero-prefix path for attend
 
 ### KV vs context (coded cold curve)
 
-`ISIRO_GDX=bf16` host curve from harness remeter (`gdx_kv_bytes_curve.json`). Reserved-pool honesty unchanged: curve is coded cold vs FA twin, not `nvidia-smi` reclaim.
+`ISIRO_KV=bf16` host curve from harness remeter (`isiro_kv_bytes_curve.json`). Reserved-pool honesty unchanged: curve is coded cold vs FA twin, not `nvidia-smi` reclaim.
 
 ![Weights and KV vs 1-user context](kv-bytes-vs-context.png)
 
@@ -119,9 +119,9 @@ Tok/s is aggregate system throughput (`vllm bench serve`, graphs-on, conc 32, 40
 | System | `rtx-5090` |
 | CUDA graphs | on |
 | Weights | `fp8` |
-| KV cache | dtype `bfloat16`; `ISIRO_GDX=bf16` on Isiro |
-| Live window | `ISIRO_GDX_LIVE_WINDOW=512` |
-| Cold ready | `ISIRO_GDX_COLD_READY=1` |
+| KV cache | dtype `bfloat16`; `ISIRO_KV=bf16` on Isiro |
+| Live window | `ISIRO_KV_LIVE_WINDOW=512` |
+| Cold ready | `ISIRO_KV_COLD_READY=1` |
 | Fused attend | `0` (attend=`a`) |
 | Compiler | `v0.1.0` |
 | Runtime | `v0.1.1` |

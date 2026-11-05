@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Measure GDX KV cold roundtrip bit-exactness for the public A/B report.
+"""Measure Isiro KV KV cold roundtrip bit-exactness for the public A/B report.
 
-Imports the product GDX atom from the serve overlay (or ISIRO_RUNTIME_SRC /
+Imports the product Isiro KV atom from the serve overlay (or ISIRO_RUNTIME_SRC /
 PYTHONPATH) and encodes/decodes a small synthetic page. Writes a JSON meter
 for compare_ab / generate_report. Fail-closed: missing import or mismatch is
 not PASS.
@@ -164,7 +164,7 @@ def run_meter(alphabet: str, *, seed: int = 11) -> dict[str, Any]:
                 "schema": SCHEMA,
                 "alphabet": alphabet,
                 "kv_bit_exact_ok": False,
-                "error": f"unsupported GDX alphabet {alphabet!r}",
+                "error": f"unsupported Isiro KV alphabet {alphabet!r}",
             }
     except Exception as exc:  # noqa: BLE001 - meter must fail-closed
         return {
@@ -180,10 +180,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--alphabet",
-        default=os.environ.get("ISIRO_BENCH_GDX")
-        or os.environ.get("ISIRO_BENCH_GDX_KV")
+        default=os.environ.get("ISIRO_BENCH_KV")
+        or os.environ.get("ISIRO_BENCH_KV")
         or "bf16",
-        help="GDX alphabet (bf16, fp8, fp4)",
+        help="Isiro KV alphabet (bf16, fp8, fp4)",
     )
     parser.add_argument(
         "--out",
@@ -199,13 +199,13 @@ def main(argv: list[str] | None = None) -> int:
     ok = bool(doc.get("kv_bit_exact_ok"))
     if ok:
         print(
-            f"gdx_kv_bitexact: PASS alphabet={doc.get('alphabet')} "
+            f"isiro_kv_bitexact: PASS alphabet={doc.get('alphabet')} "
             f"n={doc.get('n_values')} bpv={doc.get('avg_bpv')}",
             file=sys.stderr,
         )
         return 0
     print(
-        f"gdx_kv_bitexact: FAIL alphabet={doc.get('alphabet')} "
+        f"isiro_kv_bitexact: FAIL alphabet={doc.get('alphabet')} "
         f"error={doc.get('error')}",
         file=sys.stderr,
     )

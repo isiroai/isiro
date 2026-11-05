@@ -1,6 +1,6 @@
 # Eager residency probe (follow-up)
 
-`--enforce-eager`, `ISIRO_GDX=bf16`, W=512, ~4504 prompt tokens.
+`--enforce-eager`, `ISIRO_KV=bf16`, W=512, ~4504 prompt tokens.
 
 | Event | Meter |
 |---|---|

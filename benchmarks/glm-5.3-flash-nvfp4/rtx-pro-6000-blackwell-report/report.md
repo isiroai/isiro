@@ -5,15 +5,15 @@
 Tooling:
 
 - `vllm bench serve` (tok/s, ITL / TPOT / TTFT percentiles)
-- Ambient twin scrape (`remeter_path_a_vs_vanilla.py`) for NIAH / GDX ledger
-- GDX KV-bytes curve from vendor MLA latent capture (`mla_latent_real_t100k.npz`; T through 1,000,000 via tiled remeter)
+- Ambient twin scrape (`remeter_path_a_vs_vanilla.py`) for NIAH / Isiro KV ledger
+- Isiro KV KV-bytes curve from vendor MLA latent capture (`mla_latent_real_t100k.npz`; T through 1,000,000 via tiled remeter)
 
 Compared:
 
 - **Baseline:** stock `vllm serve` on Hub NVFP4 (`GLM-5.3-Flash-NVFP4`)
-- **Isiro:** `isiro-serve-native` on `GLM-5.3-Flash-NVFP4-TIC` with `ISIRO_GDX=fp8` (route=`path_a_mla`, payload=`o1-mla-latent`, `dual_hold=0`)
+- **Isiro:** `isiro-serve-native` on `GLM-5.3-Flash-NVFP4-TIC` with `ISIRO_KV=fp8` (route=`path_a_mla`, payload=`o1-mla-latent`, `dual_hold=0`)
 
-Serve knobs matched to TIC `serve.yaml` remeter: TP=4, `max_model_len=8192`, `max_num_seqs=10`, `max_num_batched_tokens=8192`, `gpu_memory_utilization=0.95`, `kv_cache_dtype=fp8`, prefix cache off, flashinfer autotune off, `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0`. Isiro: `ISIRO_GDX_LIVE_WINDOW=512`, graphs-on (no `--enforce-eager`).
+Serve knobs matched to TIC `serve.yaml` remeter: TP=4, `max_model_len=8192`, `max_num_seqs=10`, `max_num_batched_tokens=8192`, `gpu_memory_utilization=0.95`, `kv_cache_dtype=fp8`, prefix cache off, flashinfer autotune off, `VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0`. Isiro: `ISIRO_KV_LIVE_WINDOW=512`, graphs-on (no `--enforce-eager`).
 
 ## Correctness
 
@@ -47,9 +47,9 @@ Savings % uses `1 - Isiro/Baseline` for loaded weights (on-disk stamp here; serv
 | GPU KV cache tokens (log) | 2,377,500 | 2,273,735 |
 
 
-Reserved pool is vendor admission slots, not GDX-coded cold capacity. Physical vendor MLA pages still attend after deposit (`free_fa_twin` is ledger-only).
+Reserved pool is vendor admission slots, not Isiro-KV-coded cold capacity. Physical vendor MLA pages still attend after deposit (`free_fa_twin` is ledger-only).
 
-### Live GDX ledger (Isiro, after long prompt)
+### Live Isiro KV ledger (Isiro, after long prompt)
 
 Cold o1 slab vs synthetic twin (not nvidia-smi). After attach-ordinal fix, all 11 Full MLA layers deposit.
 
@@ -67,7 +67,7 @@ Cold o1 slab vs synthetic twin (not nvidia-smi). After attach-ordinal fix, all 1
 
 ### KV vs context (coded cold)
 
-`ISIRO_GDX=fp8` on vendor MLA latent (`kv_source=vendor_mla_latent`, W=512). Capture T=100,000; points through T=1,000,000 remeter pack on tiled capture chunks (`fa_twin_mode=mla_latent_tiled_sequence`). At T=1,000,000: Baseline KV **6.88 GiB**, Isiro KV **3.94 GiB**; save **42.8%** (coded cold pack rate). Live ledger 0.987 remains the short deposited-prefix meter, not this full-sequence curve.
+`ISIRO_KV=fp8` on vendor MLA latent (`kv_source=vendor_mla_latent`, W=512). Capture T=100,000; points through T=1,000,000 remeter pack on tiled capture chunks (`fa_twin_mode=mla_latent_tiled_sequence`). At T=1,000,000: Baseline KV **6.88 GiB**, Isiro KV **3.94 GiB**; save **42.8%** (coded cold pack rate). Live ledger 0.987 remains the short deposited-prefix meter, not this full-sequence curve.
 
 Figure. Weights and KV vs 1-user context (tagline: `weights nvfp4 | KV fp8`).
 
@@ -103,5 +103,5 @@ Isiro wins aggregate output tok/s and TTFT (especially p95/p99 under concurrency
 - Baseline model: `/root/models/llm/fp4/GLM-5.3-Flash-NVFP4`
 - TIC model: `/root/models/llm/fp4/GLM-5.3-Flash-NVFP4-TIC` (`serve.yaml` as above)
 - Bench: `isiro_gdx_bench_serve.json`, `vanilla_matched_bench_serve.json`
-- Curve: `gdx_kv_bytes_curve.json`, `kv-bytes-vs-context.png` (T through 1,000,000)
+- Curve: `isiro_kv_bytes_curve.json`, `kv-bytes-vs-context.png` (T through 1,000,000)
 - Ledger / NIAH: `isiro_gdx_mla_graphs_scrape.json`, `vanilla_matched_scrape.json`

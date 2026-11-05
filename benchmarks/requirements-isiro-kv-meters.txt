@@ -1,17 +1,17 @@
-# Host Python deps for GDX cold meters (bitexact + KV-bytes curve).
+# Host Python deps for Isiro KV cold meters (bitexact + KV-bytes curve).
 # Serve stays in the pinned vLLM Docker image; these meters need CUDA torch
 # on the host. Pin ranges so remotes do not drift onto a transformers that
 # requires kernels without installing kernels (common remeter failure).
 #
 # Torch is installed separately (CUDA wheel index varies by GPU/driver).
-# See ensure_gdx_meter_env.py --torch-index-url / ISIRO_BENCH_TORCH_INDEX.
+# See ensure_isiro_kv_meter_env.py --torch-index-url / ISIRO_BENCH_TORCH_INDEX.
 
 numpy>=1.26,<3
 transformers>=4.51,<6
 # transformers finegrained Hub FP8 (quant_method=fp8) needs this band.
 kernels>=0.17.0,<0.18.0
 # AWQ checkpoints (e.g. Qwen3.6-27B-AWQ): transformers AWQ quantizer imports
-# gptqmodel; needed for the bf16 GDX KV-bytes HF curve on AWQ baselines.
+# gptqmodel; needed for the bf16 Isiro KV-bytes HF curve on AWQ baselines.
 gptqmodel>=2
 accelerate>=0.33
 safetensors>=0.4

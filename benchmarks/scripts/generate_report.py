@@ -104,7 +104,7 @@ def pct_gain_from_ratio(ratio: Any) -> str:
 
 
 def _arm_col() -> str:
-    """Customer product arm column label (TIC weights + optional GDX)."""
+    """Customer product arm column label (TIC weights + optional Isiro KV)."""
     return "Isiro"
 
 
@@ -118,12 +118,12 @@ def tokens_with_pool(
 ) -> str:
     """Format reserved pool for the report.
 
-    Always show vendor pool token slots plus GiB. Under GDX those tokens are
-    admission slots at vendor bpv (not GDX-coded cold capacity); the †
+    Always show vendor pool token slots plus GiB. Under Isiro KV those tokens are
+    admission slots at vendor bpv (not Isiro-KV-coded cold capacity); the †
     footnote says so. ``gib_only`` is retained for callers but no longer
     strips tokens (customer Capacity matches the bf16 report shape).
     """
-    del gib_only  # tokens always shown; footnote covers GDX semantics
+    del gib_only  # tokens always shown; footnote covers Isiro KV semantics
     parts = [number(tokens, 0)]
     bits: list[str] = []
     if gib is not None:
@@ -282,7 +282,7 @@ def _section_intro(
     model = str(summary.get("model") or "")
     compiler, runtime = _compiler_runtime_versions(summary)
     cmds = commands if isinstance(commands, dict) else {}
-    gdx_kv = cmds.get("isiro_gdx_kv")
+    isiro_kv = cmds.get("isiro_kv")
     kv_dtype = cmds.get("kv_cache_dtype")
     compared = [
         "Compared:",
@@ -294,10 +294,10 @@ def _section_intro(
         ),
         "- **Isiro:** `isiro serve … --target vllm` (TIC weights; same vLLM version)",
     ]
-    if gdx_kv:
+    if isiro_kv:
         compared[-1] = (
             f"- **Isiro:** `isiro serve … --target vllm` with TIC weights and "
-            f"`ISIRO_GDX={gdx_kv}` (same vLLM version; cold KV compress on "
+            f"`ISIRO_KV={isiro_kv}` (same vLLM version; cold KV compress on "
             "vendor attention pages)"
         )
     lines = [
@@ -326,13 +326,13 @@ def _section_intro(
         *compared,
         "",
     ]
-    if gdx_kv:
+    if isiro_kv:
         # Measured cold vs FA twin (when present) lives under KV vs context.
         # Coded token capacity (1/(1-s), hot-corrected) is under Section A.
         lines.extend(
             [
                 "Section A Available KV is the vendor reserved pool (GiB). "
-                "KV tokens capacity applies GDX cold packing on that budget. "
+                "KV tokens capacity applies Isiro KV cold packing on that budget. "
                 "Measured cold vs FA twin bytes (when the curve ran) are under "
                 "KV vs context.",
                 "",
@@ -365,9 +365,9 @@ def _kv_bit_exact_row(correctness: dict[str, Any]) -> str | None:
     status = _bit_exact_cell(ok)
     status_cell = bold_win(status, win=status == "PASS")
     alphabet = correctness.get("kv_bit_exact_alphabet")
-    detail = "GDX cold roundtrip"
+    detail = "Isiro KV cold roundtrip"
     if alphabet:
-        detail = f"GDX `{alphabet}` cold roundtrip"
+        detail = f"Isiro KV `{alphabet}` cold roundtrip"
     return f"| KV bit-exactness | vendor KV pages | {status_cell} ({detail}) |"
 
 
@@ -470,11 +470,11 @@ def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
 
 
 def _fold_coded_kv_capacity(summary: dict[str, Any]) -> dict[str, Any]:
-    """Attach hot/cold GDX coded token capacity onto ``kv_cache`` in-place."""
+    """Attach hot/cold Isiro KV coded token capacity onto ``kv_cache`` in-place."""
     from capacity_plan import (
         coded_kv_token_capacity,
-        gdx_capacity_scale,
-        gdx_cold_savings_from_bpv,
+        isiro_kv_capacity_scale,
+        isiro_kv_cold_savings_from_bpv,
     )
 
     kv = summary.get("kv_cache")
@@ -487,12 +487,12 @@ def _fold_coded_kv_capacity(summary: dict[str, Any]) -> dict[str, Any]:
 
     s: float | None = None
     w = 512
-    gdx = summary.get("gdx_kv_bytes")
-    if isinstance(gdx, dict):
-        raw_s = gdx.get("save_at_max_t")
+    isiro_kv_doc = summary.get("isiro_kv_bytes")
+    if isinstance(isiro_kv_doc, dict):
+        raw_s = isiro_kv_doc.get("save_at_max_t")
         if isinstance(raw_s, (int, float)) and 0.0 < float(raw_s) < 1.0:
             s = float(raw_s)
-        raw_w = gdx.get("live_window")
+        raw_w = isiro_kv_doc.get("live_window")
         if isinstance(raw_w, (int, float)) and int(raw_w) > 0:
             w = int(raw_w)
     if s is None:
@@ -502,27 +502,27 @@ def _fold_coded_kv_capacity(summary: dict[str, Any]) -> dict[str, Any]:
             fa = corr.get("kv_bit_exact_fa_bpv")
             if isinstance(avg, (int, float)) and isinstance(fa, (int, float)):
                 try:
-                    s = gdx_cold_savings_from_bpv(float(avg), float(fa))
+                    s = isiro_kv_cold_savings_from_bpv(float(avg), float(fa))
                 except ValueError:
                     s = None
     if s is None or s <= 0.0:
-        # No GDX meter: coded == vendor admission on both arms.
+        # No Isiro KV meter: coded == vendor admission on both arms.
         kv["baseline_tokens_coded"] = int(round(float(b_adm)))
         kv["tic_tokens_coded"] = int(round(float(t_adm)))
         return summary
 
-    scale = gdx_capacity_scale(s)
+    scale = isiro_kv_capacity_scale(s)
     b_coded = coded_kv_token_capacity(
-        b_adm, savings_s=s, live_window=w, apply_gdx=False
+        b_adm, savings_s=s, live_window=w, apply_isiro_kv=False
     )
     t_coded = coded_kv_token_capacity(
-        t_adm, savings_s=s, live_window=w, apply_gdx=True
+        t_adm, savings_s=s, live_window=w, apply_isiro_kv=True
     )
     kv["baseline_tokens_coded"] = int(b_coded)
     kv["tic_tokens_coded"] = int(t_coded)
-    kv["gdx_capacity_s"] = float(s)
-    kv["gdx_capacity_scale"] = float(scale)
-    kv["gdx_live_window"] = int(w)
+    kv["isiro_kv_capacity_s"] = float(s)
+    kv["isiro_kv_capacity_scale"] = float(scale)
+    kv["isiro_kv_live_window"] = int(w)
     return summary
 
 
@@ -531,7 +531,7 @@ def _section_kv_reservation(
     *,
     gib_only: bool = False,
 ) -> list[str]:
-    """Available KV GiB, then GDX-coded KV tokens capacity when metered."""
+    """Available KV GiB, then Isiro-KV-coded KV tokens capacity when metered."""
     b_tokens = kv.get("baseline_tokens_measured")
     t_tokens = kv.get("tic_tokens_measured")
     b_bytes = kv.get("baseline_memory_bytes_measured")
@@ -554,7 +554,7 @@ def _section_kv_reservation(
         "",
     ]
     # Pilot surface: GiB-only Available KV. Optional short honesty note.
-    if gib_only or kv.get("gdx_capacity_s") is not None:
+    if gib_only or kv.get("isiro_kv_capacity_s") is not None:
         lines.extend(
             [
                 "Available KV is the vendor reserved pool on the GPU "
@@ -565,8 +565,8 @@ def _section_kv_reservation(
 
     b_coded = kv.get("baseline_tokens_coded")
     t_coded = kv.get("tic_tokens_coded")
-    s = kv.get("gdx_capacity_s")
-    scale = kv.get("gdx_capacity_scale")
+    s = kv.get("isiro_kv_capacity_s")
+    scale = kv.get("isiro_kv_capacity_scale")
     if (
         isinstance(b_coded, (int, float))
         and isinstance(t_coded, (int, float))
@@ -589,7 +589,7 @@ def _section_kv_reservation(
             [
                 "### KV tokens capacity",
                 "",
-                "Weight compression grows Available KV. GDX then stores more "
+                "Weight compression grows Available KV. Isiro KV then stores more "
                 "tokens in that memory (hot window stays dense; cold prefix "
                 f"is packed). With measured s={number(s)} → scale 1/(1-s) ≈ "
                 f"{scale_txt} (hot-corrected).",
@@ -604,7 +604,7 @@ def _section_kv_reservation(
             ]
         )
     elif not gib_only:
-        # Legacy non-GDX: keep vendor admission tokens next to GiB for honesty.
+        # Legacy without Isiro KV: keep vendor admission tokens next to GiB for honesty.
         b_tok = number(b_tokens, 0) if b_tokens is not None else "null"
         t_tok = number(t_tokens, 0) if t_tokens is not None else "null"
         tok_win = (
@@ -688,7 +688,7 @@ def _section_c(
     if not seqs_matched and batch_gain:
         seqs_tic = f"{seqs_tic} ({bold_win(batch_gain, win=seqs_win)})"
     letter = str(prefix) if prefix in ("C", "D") else "D"
-    # KV tokens capacity lives under Section A (coded when GDX is on).
+    # KV tokens capacity lives under Section A (coded when Isiro KV is on).
     _ = (gib_only, kv, overflow_note)
     lines = [
         f"## {letter}. Capacity",
@@ -837,11 +837,11 @@ def _equal_batch_redundant(
     return False
 
 
-def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
+def _section_isiro_kv_bytes(summary: dict[str, Any]) -> list[str]:
     """KV vs Baseline FA twin curve (plus weights+KV panel when available)."""
-    gdx = summary.get("gdx_kv_bytes")
-    if not isinstance(gdx, dict) or not gdx.get("image"):
-        # GDX serve without curve (e.g. 27B bf16 twin OOMs): explicit omit.
+    isiro_kv_doc = summary.get("isiro_kv_bytes")
+    if not isinstance(isiro_kv_doc, dict) or not isiro_kv_doc.get("image"):
+        # Isiro KV serve without curve (e.g. 27B bf16 twin OOMs): explicit omit.
         corr = summary.get("correctness") if isinstance(
             summary.get("correctness"), dict
         ) else {}
@@ -851,23 +851,23 @@ def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
                 "### KV vs context",
                 "",
                 (
-                    f"`ISIRO_GDX={alph}` is on for serve. "
+                    f"`ISIRO_KV={alph}` is on for serve. "
                     "kv-bytes-vs-context.png omitted: curve did not run "
-                    "(unset ISIRO_BENCH_SKIP_GDX_CURVE; for AWQ/quant baselines "
-                    "ensure gptqmodel in the GDX meter venv, or set "
-                    "ISIRO_BENCH_GDX_MODEL_DIR to a fitting HF twin)."
+                    "(unset ISIRO_BENCH_SKIP_ISIRO_KV_CURVE; for AWQ/quant baselines "
+                    "ensure gptqmodel in the Isiro KV meter venv, or set "
+                    "ISIRO_BENCH_KV_MODEL_DIR to a fitting HF twin)."
                 ),
                 "",
             ]
         return []
-    alphabet = gdx.get("alphabet") or "bf16"
-    max_t = gdx.get("max_t")
-    b_gib = gdx.get("baseline_kv_gib_at_max_t")
-    t_gib = gdx.get("isiro_kv_gib_at_max_t")
-    save_gib = gdx.get("save_gib_at_max_t")
-    save = gdx.get("save_at_max_t")
-    b_w = gdx.get("baseline_weight_gib")
-    t_w = gdx.get("isiro_weight_gib")
+    alphabet = isiro_kv_doc.get("alphabet") or "bf16"
+    max_t = isiro_kv_doc.get("max_t")
+    b_gib = isiro_kv_doc.get("baseline_kv_gib_at_max_t")
+    t_gib = isiro_kv_doc.get("isiro_kv_gib_at_max_t")
+    save_gib = isiro_kv_doc.get("save_gib_at_max_t")
+    save = isiro_kv_doc.get("save_at_max_t")
+    b_w = isiro_kv_doc.get("baseline_weight_gib")
+    t_w = isiro_kv_doc.get("isiro_weight_gib")
     if (
         isinstance(max_t, (int, float))
         and isinstance(b_gib, (int, float))
@@ -907,13 +907,13 @@ def _section_gdx_kv_bytes(summary: dict[str, Any]) -> list[str]:
         "### KV vs context",
         "",
         (
-            f"`ISIRO_GDX={alphabet}` on KV from a Project Gutenberg text "
+            f"`ISIRO_KV={alphabet}` on KV from a Project Gutenberg text "
             f"forward. {save_line}{weight_line}"
         ),
         "",
         "Figure. Weights and KV vs 1-user context.",
         "",
-        f"![Weights and KV vs 1-user context]({gdx['image']})",
+        f"![Weights and KV vs 1-user context]({isiro_kv_doc['image']})",
         "",
     ]
     return lines
@@ -940,14 +940,14 @@ def _mode_sections(
     cmds = commands if isinstance(commands, dict) else {}
     if not cmds and isinstance(summary.get("commands"), dict):
         cmds = summary["commands"]
-    gdx_doc = summary.get("gdx_kv_bytes") if isinstance(summary.get("gdx_kv_bytes"), dict) else {}
-    gdx_on = bool(str(cmds.get("isiro_gdx_kv") or "").strip()) or bool(
-        gdx_doc.get("image") or gdx_doc.get("alphabet")
+    isiro_kv_doc = summary.get("isiro_kv_bytes") if isinstance(summary.get("isiro_kv_bytes"), dict) else {}
+    isiro_kv_on = bool(str(cmds.get("isiro_kv") or "").strip()) or bool(
+        isiro_kv_doc.get("image") or isiro_kv_doc.get("alphabet")
     )
     lines: list[str] = []
     lines.extend(_section_gpu_excluding_kv(footprint))
-    lines.extend(_section_kv_reservation(kv, gib_only=gdx_on))
-    lines.extend(_section_gdx_kv_bytes(summary))
+    lines.extend(_section_kv_reservation(kv, gib_only=isiro_kv_on))
+    lines.extend(_section_isiro_kv_bytes(summary))
     reserved_gib = pool_gib(
         kv.get("tic_memory_bytes_measured"),
         kv.get("tic_tokens_measured"),
@@ -991,7 +991,7 @@ def _mode_sections(
                 kv,
                 prefix=cap_letter,
                 overflow_note=False,
-                gib_only=gdx_on,
+                gib_only=isiro_kv_on,
             )
         )
         lines.extend(
@@ -1029,14 +1029,14 @@ def _section_g(
     )
     compiler, runtime = _compiler_runtime_versions(summary)
     kv_dtype = commands.get("kv_cache_dtype")
-    gdx_kv = commands.get("isiro_gdx_kv")
+    isiro_kv = commands.get("isiro_kv")
     kv_cell = "product KV cache size"
-    if kv_dtype or gdx_kv:
+    if kv_dtype or isiro_kv:
         parts = []
         if kv_dtype:
             parts.append(f"dtype `{kv_dtype}`")
-        if gdx_kv:
-            parts.append(f"`ISIRO_GDX={gdx_kv}` on Isiro")
+        if isiro_kv:
+            parts.append(f"`ISIRO_KV={isiro_kv}` on Isiro")
         kv_cell = "; ".join(parts)
     lines = [
         "## Config",
@@ -1061,8 +1061,8 @@ def _section_g(
     ]
     if reused:
         lines.append(f"| Baseline reused from | `{reused}` |")
-    if gdx_kv:
-        lines.append(f"| ISIRO_GDX | `{gdx_kv}` |")
+    if isiro_kv:
+        lines.append(f"| ISIRO_KV | `{isiro_kv}` |")
     attn = (
         summary.get("attention")
         if isinstance(summary.get("attention"), dict)
@@ -1193,31 +1193,31 @@ def write_report(run_dir: Path, output: Path) -> Path:
     temp = Path(tempfile.mkdtemp(prefix=".isiro-bench-report-"))
     try:
         _stage_sanitized_tree(run_dir, temp)
-        gdx_curve = run_dir / "gdx_kv_bytes_curve.json"
-        gdx_png_src = run_dir / "kv-bytes-vs-context.png"
-        if gdx_curve.is_file() and gdx_png_src.is_file():
+        isiro_kv_curve = run_dir / "isiro_kv_bytes_curve.json"
+        isiro_kv_png_src = run_dir / "kv-bytes-vs-context.png"
+        if isiro_kv_curve.is_file() and isiro_kv_png_src.is_file():
             import shutil as _shutil
 
-            gdx_doc = load_json(gdx_curve)
-            _gdx_alph = str(gdx_doc.get("alphabet") or "").strip().lower()
-            if _gdx_alph in ("fp8", "fp8_e4m3", "fp4", "nvfp4", "e2m1"):
-                if str(gdx_doc.get("kv_source") or "") != "vendor_fa_pages":
+            isiro_kv_doc = load_json(isiro_kv_curve)
+            _isiro_kv_alph = str(isiro_kv_doc.get("alphabet") or "").strip().lower()
+            if _isiro_kv_alph in ("fp8", "fp8_e4m3", "fp4", "nvfp4", "e2m1"):
+                if str(isiro_kv_doc.get("kv_source") or "") != "vendor_fa_pages":
                     raise RuntimeError(
-                        "gdx_kv_bytes_curve.json alphabet="
-                        f"{_gdx_alph!r} requires kv_source=vendor_fa_pages "
+                        "isiro_kv_bytes_curve.json alphabet="
+                        f"{_isiro_kv_alph!r} requires kv_source=vendor_fa_pages "
                         "(vendor FA pages; refuse bf16-stand-in curves at publish)"
                     )
             dest_png = output.parent / "kv-bytes-vs-context.png"
             # Re-render when summary has weight bytes so the 2x1 panel stays current.
             try:
-                from gdx_kv_bytes_curve import render_png as _render_gdx_png
+                from isiro_kv_bytes_curve import render_png as _render_isiro_kv_png
 
                 fp = None
                 summary_probe = run_dir / "summary.json"
                 if summary_probe.is_file():
                     fp = (load_json(summary_probe).get("footprint") or {})
-                b_w = gdx_doc.get("baseline_weight_bytes")
-                t_w = gdx_doc.get("isiro_weight_bytes")
+                b_w = isiro_kv_doc.get("baseline_weight_bytes")
+                t_w = isiro_kv_doc.get("isiro_weight_bytes")
                 if fp:
                     b_fp = (fp.get("baseline") or {}).get(
                         "model_loading_bytes_reported"
@@ -1228,8 +1228,8 @@ def write_report(run_dir: Path, output: Path) -> Path:
                     if isinstance(t_fp, (int, float)) and int(t_fp) > 0:
                         t_w = int(t_fp)
                 if isinstance(b_w, (int, float)) and isinstance(t_w, (int, float)):
-                    gdx_doc["baseline_weight_bytes"] = int(b_w)
-                    gdx_doc["isiro_weight_bytes"] = int(t_w)
+                    isiro_kv_doc["baseline_weight_bytes"] = int(b_w)
+                    isiro_kv_doc["isiro_weight_bytes"] = int(t_w)
                 env = load_json(run_dir / "environment.json") if (
                     run_dir / "environment.json"
                 ).is_file() else {}
@@ -1262,18 +1262,18 @@ def write_report(run_dir: Path, output: Path) -> Path:
                 )
                 w_prec = str(
                     summary_for_prec.get("precision")
-                    or gdx_doc.get("weight_precision")
+                    or isiro_kv_doc.get("weight_precision")
                     or ""
                 ).strip()
                 kv_prec = str(
-                    cmds_for_prec.get("isiro_gdx_kv")
+                    cmds_for_prec.get("isiro_kv")
                     or cmds_for_prec.get("kv_cache_dtype")
-                    or gdx_doc.get("kv_precision")
-                    or gdx_doc.get("alphabet")
+                    or isiro_kv_doc.get("kv_precision")
+                    or isiro_kv_doc.get("alphabet")
                     or ""
                 ).strip()
-                _render_gdx_png(
-                    gdx_doc,
+                _render_isiro_kv_png(
+                    isiro_kv_doc,
                     dest_png,
                     gpu=str(env.get("gpu_model") or ""),
                     gpu_count=env.get("gpu_count"),
@@ -1282,8 +1282,8 @@ def write_report(run_dir: Path, output: Path) -> Path:
                     kv_precision=kv_prec,
                 )
             except Exception:
-                _shutil.copy2(gdx_png_src, dest_png)
-            pts = list(gdx_doc.get("points") or [])
+                _shutil.copy2(isiro_kv_png_src, dest_png)
+            pts = list(isiro_kv_doc.get("points") or [])
             save_max = None
             max_t = None
             b_gib = None
@@ -1296,15 +1296,15 @@ def write_report(run_dir: Path, output: Path) -> Path:
                 save_max = last.get("save_vs_fa")
                 max_t = last.get("T")
                 fa_b = last.get("fa_twin_nbytes")
-                gdx_b = last.get("gdx_total_nbytes")
+                isiro_kv_b = last.get("isiro_kv_total_nbytes")
                 if isinstance(fa_b, (int, float)):
                     b_gib = float(fa_b) / float(1024**3)
                 if isinstance(gdx_b, (int, float)):
-                    t_gib = float(gdx_b) / float(1024**3)
+                    t_gib = float(isiro_kv_b) / float(1024**3)
                 if b_gib is not None and t_gib is not None:
                     save_gib = float(b_gib) - float(t_gib)
-            bw = gdx_doc.get("baseline_weight_bytes")
-            tw = gdx_doc.get("isiro_weight_bytes")
+            bw = isiro_kv_doc.get("baseline_weight_bytes")
+            tw = isiro_kv_doc.get("isiro_weight_bytes")
             if isinstance(bw, (int, float)):
                 b_w_gib = float(bw) / float(1024**3)
             if isinstance(tw, (int, float)):
@@ -1312,10 +1312,10 @@ def write_report(run_dir: Path, output: Path) -> Path:
             summary_path = temp / "summary.json"
             if summary_path.is_file():
                 summary = load_json(summary_path)
-                summary["gdx_kv_bytes"] = {
+                summary["isiro_kv_bytes"] = {
                     "image": dest_png.name,
-                    "alphabet": gdx_doc.get("alphabet"),
-                    "live_window": gdx_doc.get("live_window"),
+                    "alphabet": isiro_kv_doc.get("alphabet"),
+                    "live_window": isiro_kv_doc.get("live_window"),
                     "max_t": max_t,
                     "baseline_kv_gib_at_max_t": b_gib,
                     "isiro_kv_gib_at_max_t": t_gib,
@@ -1323,7 +1323,7 @@ def write_report(run_dir: Path, output: Path) -> Path:
                     "save_at_max_t": save_max,
                     "baseline_weight_gib": b_w_gib,
                     "isiro_weight_gib": t_w_gib,
-                    "ok": bool(gdx_doc.get("ok")),
+                    "ok": bool(isiro_kv_doc.get("ok")),
                 }
                 write_json(summary_path, summary)
         haystack_jsonl = run_dir / "needle_haystack.jsonl"

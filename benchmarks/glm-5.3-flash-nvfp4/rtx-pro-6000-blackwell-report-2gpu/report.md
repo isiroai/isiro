@@ -26,7 +26,7 @@ Vanilla at this utilization does not fit on two cards. Raising utilization does 
 
 Weights: the 11.1% TIC bundle. A token expands 8 of 288 expert scales into the GEMM workspace. The packed streams for the other experts stay packed. Guard: `tests/test_joint_scale_workspace_ssot.py`.
 
-KV: one GDX order-1 latent, split on the coordinate strips. Two cards together hold one compressed copy. Each card holds 328 of the 656 latent bytes per token, and the join is the original latent. On a 16-token crop of the GLM latent fixture, a frequency bank fit on each half was smaller than one shared bank (7,388 stream bytes versus 7,881). Guard: `tests/test_gdx_mla_latent_shard_ssot.py`.
+KV: one Isiro KV order-1 latent, split on the coordinate strips. Two cards together hold one compressed copy. Each card holds 328 of the 656 latent bytes per token, and the join is the original latent. On a 16-token crop of the GLM latent fixture, a frequency bank fit on each half was smaller than one shared bank (7,388 stream bytes versus 7,881). Guard: `tests/test_gdx_mla_latent_shard_ssot.py`.
 
 ## Serve
 

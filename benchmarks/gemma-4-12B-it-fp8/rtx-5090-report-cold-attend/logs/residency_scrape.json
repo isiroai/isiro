@@ -33,6 +33,6 @@
   "niah_8000_d50_ms": 865.7795200124383,
   "baseline_long_ms": 277925.8,
   "speedup_vs_baseline": 2234.704929383633,
-  "recipe": "ISIRO_GDX_KV=bf16 ISIRO_GDX_LIVE_WINDOW=512 ISIRO_GDX_FUSED_ATTEND=0 --max-model-len 8192 --kv-cache-dtype bfloat16",
+  "recipe": "ISIRO_KV_PAGE=bf16 ISIRO_KV_LIVE_WINDOW=512 ISIRO_KV_FUSED_ATTEND=0 --max-model-len 8192 --kv-cache-dtype bfloat16",
   "ownership": "invent_KV_SET_off"
 }

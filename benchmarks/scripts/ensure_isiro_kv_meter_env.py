@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Bootstrap + preflight the host Python used for GDX cold meters.
+"""Bootstrap + preflight the host Python used for Isiro KV cold meters.
 
-Serve A/B stays in the pinned ``VLLM_IMAGE`` Docker container. GDX bitexact
+Serve A/B stays in the pinned ``VLLM_IMAGE`` Docker container. Isiro KV bitexact
 and the KV-bytes curve run on the host (CUDA torch + transformers). Remotes
 drift: a fresh ``pip install transformers`` can pull a release that needs
 ``kernels`` for Hub FP8 finegrained linear, then the curve dies after verify.
 
 Top-team pattern this follows:
-  - committed pin file (``requirements-gdx-meters.txt``)
+  - committed pin file (``requirements-isiro-kv-meters.txt``)
   - managed venv (default ``~/.isiro/bench-venv``)
   - fail-closed preflight *before* the long serve loop
   - optional self-heal install into the managed venv
@@ -98,7 +98,7 @@ else:
     # metering (pin file installs it). Missing import is an error.
     errs.append(
         "kernels not importable; Hub FP8 curve needs "
-        "kernels>=0.17.0,<0.18.0 (see requirements-gdx-meters.txt)"
+        "kernels>=0.17.0,<0.18.0 (see requirements-isiro-kv-meters.txt)"
     )
 # isiro_runtime is optional here: harness overlay may be on PYTHONPATH later.
 try:
@@ -186,7 +186,7 @@ def ensure_torch(
         if any(n == "torch.cuda.is_available=True" for n in report.notes):
             return
     print(
-        f"gdx_meter_env: installing torch from {index_url}",
+        f"isiro_kv_meter_env: installing torch from {index_url}",
         file=sys.stderr,
     )
     pip_install(
@@ -204,7 +204,7 @@ def default_venv() -> Path:
 
 
 def default_requirements() -> Path:
-    return Path(__file__).resolve().parents[1] / "requirements-gdx-meters.txt"
+    return Path(__file__).resolve().parents[1] / "requirements-isiro-kv-meters.txt"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         "--requirements",
         type=Path,
         default=None,
-        help="Pin file (default: benchmarks/requirements-gdx-meters.txt)",
+        help="Pin file (default: benchmarks/requirements-isiro-kv-meters.txt)",
     )
     parser.add_argument(
         "--torch-index-url",
@@ -258,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
 
     req = args.requirements or default_requirements()
     if not req.is_file():
-        print(f"gdx_meter_env: FAIL missing requirements {req}", file=sys.stderr)
+        print(f"isiro_kv_meter_env: FAIL missing requirements {req}", file=sys.stderr)
         return 2
 
     need_cuda = not args.allow_no_cuda
@@ -266,16 +266,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.python is not None:
         report = preflight_python(Path(args.python), need_cuda=need_cuda)
         for line in report.as_lines():
-            print(f"gdx_meter_env: {line}", file=sys.stderr)
+            print(f"isiro_kv_meter_env: {line}", file=sys.stderr)
         if report.ok:
             if args.print_python:
                 print(report.python)
             return 0
         print(
-            "gdx_meter_env: ISIRO_BENCH_PYTHON failed preflight; "
+            "isiro_kv_meter_env: ISIRO_BENCH_PYTHON failed preflight; "
             "falling back to managed venv"
             if not args.check_only
-            else "gdx_meter_env: FAIL preflight (check-only)",
+            else "isiro_kv_meter_env: FAIL preflight (check-only)",
             file=sys.stderr,
         )
         if args.check_only:
@@ -286,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         venv_py = (args.venv or default_venv()) / "bin" / "python"
         report = preflight_python(venv_py, need_cuda=need_cuda)
         for line in report.as_lines():
-            print(f"gdx_meter_env: {line}", file=sys.stderr)
+            print(f"isiro_kv_meter_env: {line}", file=sys.stderr)
         if args.print_python and report.ok:
             print(report.python)
         return 0 if report.ok else 2
@@ -297,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
         pip_install(py, ["-r", str(req)], dry_run=args.dry_run)
         ensure_torch(py, index_url=str(args.torch_index_url), dry_run=args.dry_run)
     except (OSError, subprocess.CalledProcessError, RuntimeError) as exc:
-        print(f"gdx_meter_env: FAIL bootstrap: {exc}", file=sys.stderr)
+        print(f"isiro_kv_meter_env: FAIL bootstrap: {exc}", file=sys.stderr)
         return 2
 
     if args.dry_run:
@@ -307,9 +307,9 @@ def main(argv: list[str] | None = None) -> int:
 
     report = preflight_python(py, need_cuda=need_cuda)
     for line in report.as_lines():
-        print(f"gdx_meter_env: {line}", file=sys.stderr)
+        print(f"isiro_kv_meter_env: {line}", file=sys.stderr)
     if not report.ok:
-        print("gdx_meter_env: FAIL after install", file=sys.stderr)
+        print("isiro_kv_meter_env: FAIL after install", file=sys.stderr)
         return 2
     if args.print_python:
         print(report.python)

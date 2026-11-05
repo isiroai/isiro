@@ -42,8 +42,8 @@ from capacity_plan import (  # noqa: E402
     coded_kv_token_capacity,
     concurrency_for_seqs,
     default_scale_hi,
-    gdx_capacity_scale,
-    gdx_cold_savings_from_bpv,
+    isiro_kv_capacity_scale,
+    isiro_kv_cold_savings_from_bpv,
     scale_seqs_from_kv_estimate,
     scale_seqs_from_kv_measured,
     search_max,
@@ -51,11 +51,11 @@ from capacity_plan import (  # noqa: E402
 from compare_ab import (  # noqa: E402
     artifact_digest,
     build_equal_batch_block,
-    fold_gdx_kv_bitexact,
+    fold_isiro_kv_bitexact,
     fold_serve_output_match,
     publish_go_gate_mismatches,
 )
-from gdx_kv_bitexact import run_meter as gdx_kv_run_meter  # noqa: E402
+from isiro_kv_bitexact import run_meter as isiro_kv_run_meter  # noqa: E402
 from attention_ab import parse_serve_attention  # noqa: E402
 from generate_report import (  # noqa: E402
     _graph_mode,
@@ -637,7 +637,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_coded_kv_token_capacity_hot_cold(self) -> None:
         # Asymptotic: s=0.42 → 1/0.58 ≈ 1.724; with W=0 equals raw scale.
-        self.assertAlmostEqual(gdx_capacity_scale(0.42), 1.0 / 0.58, places=6)
+        self.assertAlmostEqual(isiro_kv_capacity_scale(0.42), 1.0 / 0.58, places=6)
         self.assertEqual(
             coded_kv_token_capacity(10000, savings_s=0.42, live_window=0),
             round(10000 / 0.58),
@@ -650,7 +650,7 @@ class BenchmarkTests(unittest.TestCase):
             hot,
             round((10000 - 512 * 0.42) / 0.58),
         )
-        # Baseline arm: no GDX.
+        # Baseline arm: no Isiro KV.
         self.assertEqual(
             coded_kv_token_capacity(
                 47396, savings_s=0.42, live_window=512, apply_gdx=False
@@ -658,7 +658,7 @@ class BenchmarkTests(unittest.TestCase):
             47396,
         )
         self.assertAlmostEqual(
-            gdx_cold_savings_from_bpv(6.603098788094933, 16.0),
+            isiro_kv_cold_savings_from_bpv(6.603098788094933, 16.0),
             1.0 - 6.603098788094933 / 16.0,
             places=9,
         )
@@ -674,7 +674,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(
             scale_seqs_from_kv_measured(32, 100, 50, 45), 32
         )
-        # 5090 GDX remeter: 235120 → 285056 ≈ 1.21x → 39, align to 40
+        # 5090 Isiro KV remeter: 235120 → 285056 ≈ 1.21x → 39, align to 40
         self.assertEqual(
             scale_seqs_from_kv_measured(32, 235120, 285056, 45), 40
         )
@@ -1692,7 +1692,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("## C. Capacity", report)
             self.assertIn("### Generation", report)
 
-    def test_report_gdx_kv_bitexact_and_lean_intro(self) -> None:
+    def test_report_isiro_kv_bitexact_and_lean_intro(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             run = Path(temp)
             summary = _sample_summary(
@@ -1715,7 +1715,7 @@ class BenchmarkTests(unittest.TestCase):
                     {
                         "baseline_serve": ["vllm", "serve"],
                         "tic_serve": ["isiro", "serve"],
-                        "isiro_gdx_kv": "bf16",
+                        "isiro_kv": "bf16",
                         "kv_cache_dtype": "bfloat16",
                         "enforce_eager": True,
                     }
@@ -1724,9 +1724,9 @@ class BenchmarkTests(unittest.TestCase):
             )
             report = render(run)
             self.assertIn("**Isiro:**", report)
-            self.assertIn("`ISIRO_GDX=bf16`", report)
+            self.assertIn("`ISIRO_KV=bf16`", report)
             self.assertIn("KV bit-exactness", report)
-            self.assertIn("GDX `bf16` cold roundtrip", report)
+            self.assertIn("Isiro KV `bf16` cold roundtrip", report)
             self.assertIn("Available KV", report)
             self.assertIn("KV tokens capacity", report)
             self.assertIn("KV vs context", report)
@@ -1743,7 +1743,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("hot-corrected", report)
             self.assertNotIn("coding-rate", report)
             self.assertNotIn("~29-31%", report)
-            self.assertNotIn("ISIRO_GDX_C=fp8", report)
+            self.assertNotIn("ISIRO_KV_C=fp8", report)
             self.assertNotIn("TIC + KV compress", report)
             self.assertNotIn("ISIRO invent lock", report)
             self.assertNotIn("| Metric | Baseline | TIC |", report)
@@ -1756,13 +1756,13 @@ class BenchmarkTests(unittest.TestCase):
             # Coded capacity lives under Section A.
             self.assertIn("### KV tokens capacity", report.split("## D. Capacity")[0])
 
-    def test_fold_gdx_kv_bitexact_required(self) -> None:
+    def test_fold_isiro_kv_bitexact_required(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             run = Path(temp)
             correctness: dict = {}
-            missing = fold_gdx_kv_bitexact(run, correctness, required=True)
+            missing = fold_isiro_kv_bitexact(run, correctness, required=True)
             self.assertTrue(missing)
-            (run / "gdx_kv_bitexact.json").write_text(
+            (run / "isiro_kv_bitexact.json").write_text(
                 json.dumps(
                     {
                         "schema": "isiro-benchmark-gdx-kv-bitexact-v1",
@@ -1778,18 +1778,18 @@ class BenchmarkTests(unittest.TestCase):
             )
             correctness = {}
             self.assertEqual(
-                fold_gdx_kv_bitexact(run, correctness, required=True), []
+                fold_isiro_kv_bitexact(run, correctness, required=True), []
             )
             self.assertEqual(correctness.get("kv_bit_exact_avg_bpv"), 6.5)
             self.assertEqual(correctness.get("kv_bit_exact_fa_bpv"), 16.0)
             self.assertTrue(correctness["kv_bit_exact_ok"])
             self.assertEqual(correctness["kv_bit_exact_alphabet"], "bf16")
 
-    def test_gdx_kv_bitexact_meter_bf16_when_overlay_present(self) -> None:
+    def test_isiro_kv_bitexact_meter_bf16_when_overlay_present(self) -> None:
         site = Path.home() / ".isiro" / "serve-site" / "isiro_runtime"
         if not site.is_dir():
             self.skipTest("product serve-site overlay not installed")
-        doc = gdx_kv_run_meter("bf16", seed=11)
+        doc = isiro_kv_run_meter("bf16", seed=11)
         self.assertTrue(doc.get("kv_bit_exact_ok"), msg=doc.get("error"))
         self.assertEqual(doc.get("alphabet"), "bf16")
 
@@ -1934,8 +1934,8 @@ class BenchmarkTests(unittest.TestCase):
         md2 = "\n".join(render_story_markdown(doc))
         self.assertIn("Graph 2", md2)
 
-    def test_gdx_kv_layer_caps_from_hybrid_config(self) -> None:
-        from gdx_kv_bytes_curve import (
+    def test_isiro_kv_layer_caps_from_hybrid_config(self) -> None:
+        from isiro_kv_bytes_curve import (
             _layer_caps_from_config,
             _layer_fa_nbytes,
             _vendor_eff_t,
@@ -1984,8 +1984,8 @@ class BenchmarkTests(unittest.TestCase):
         # 4*1024 + 2*8192 = 20480 token-layers; *2*8*256*2 bytes
         self.assertEqual(fa, 20480 * 2 * 8 * 256 * 2)
 
-    def test_gdx_kv_layer_caps_full_sequence_without_layer_types(self) -> None:
-        from gdx_kv_bytes_curve import _layer_caps_from_config
+    def test_isiro_kv_layer_caps_full_sequence_without_layer_types(self) -> None:
+        from isiro_kv_bytes_curve import _layer_caps_from_config
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1997,13 +1997,13 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(meta.get("fa_twin_mode"), "full_sequence")
         self.assertEqual(caps, [None, None, None])
 
-    def test_gdx_kv_bytes_curve_cold_grows_with_t(self) -> None:
+    def test_isiro_kv_bytes_curve_cold_grows_with_t(self) -> None:
         import os
         from pathlib import Path
 
         import torch
 
-        from gdx_kv_bytes_curve import measure_curve
+        from isiro_kv_bytes_curve import measure_curve
 
         if not torch.cuda.is_available():
             self.skipTest("CUDA required for real KV curve")
@@ -2021,25 +2021,25 @@ class BenchmarkTests(unittest.TestCase):
             live_window=512,
         )
         if doc.get("error") and "not importable" in str(doc.get("error")):
-            self.skipTest("isiro_runtime not importable for GDX curve")
+            self.skipTest("isiro_runtime not importable for Isiro KV curve")
         self.assertTrue(doc.get("ok"), doc.get("error"))
         self.assertEqual(doc.get("source"), "real_model_kv")
         cold = [p for p in doc["points"] if int(p["cold_t"]) > 0]
         self.assertGreaterEqual(len(cold), 2)
         self.assertGreater(
-            int(cold[-1]["gdx_cold_nbytes"]),
-            2 * int(cold[0]["gdx_cold_nbytes"]),
+            int(cold[-1]["isiro_kv_cold_nbytes"]),
+            2 * int(cold[0]["isiro_kv_cold_nbytes"]),
         )
         self.assertGreater(
-            int(cold[-1]["gdx_total_nbytes"]),
-            int(cold[0]["gdx_total_nbytes"]),
+            int(cold[-1]["isiro_kv_total_nbytes"]),
+            int(cold[0]["isiro_kv_total_nbytes"]),
         )
         self.assertLess(float(cold[-1]["payload_bpv"]), 16.0)
         self.assertGreater(float(cold[-1]["save_vs_fa"]), 0.0)
 
-    def test_gdx_kv_bytes_curve_skips_empty_hybrid_cache_layers(self) -> None:
+    def test_isiro_kv_bytes_curve_skips_empty_hybrid_cache_layers(self) -> None:
         """Qwen3.5 GDN / linear_attention leave empty DynamicCache slots."""
-        src = (SCRIPTS / "gdx_kv_bytes_curve.py").read_text(encoding="utf-8")
+        src = (SCRIPTS / "isiro_kv_bytes_curve.py").read_text(encoding="utf-8")
         self.assertIn("Hybrid stacks", src)
         self.assertIn("no FA past_key_values layers with keys/values", src)
         self.assertIn("hf_fa_layers", src)
@@ -2048,15 +2048,15 @@ class BenchmarkTests(unittest.TestCase):
             src,
         )
 
-    def test_gdx_kv_bytes_curve_legend_has_no_gdx_and_weights_panel(self) -> None:
+    def test_isiro_kv_bytes_curve_legend_has_no_gdx_token_and_weights_panel(self) -> None:
         from pathlib import Path
 
         src = (
             Path(__file__).resolve().parents[1]
             / "scripts"
-            / "gdx_kv_bytes_curve.py"
+            / "isiro_kv_bytes_curve.py"
         ).read_text(encoding="utf-8")
-        self.assertNotIn("Isiro GDX", src)
+        self.assertNotIn("GDX", src)
         self.assertNotIn("gaussian", src.lower())
         self.assertNotIn("_bf16_page", src)
         self.assertIn("real_model_kv", src)
@@ -2171,21 +2171,21 @@ class ResolveFp8BaselineQuantizationTests(unittest.TestCase):
 
 class GdxMeterEnvTests(unittest.TestCase):
     def test_requirements_pin_kernels_band(self) -> None:
-        text = (ROOT / "requirements-gdx-meters.txt").read_text(encoding="utf-8")
+        text = (ROOT / "requirements-isiro-kv-meters.txt").read_text(encoding="utf-8")
         self.assertIn("kernels>=0.17.0,<0.18.0", text)
         self.assertIn("transformers", text)
         self.assertIn("numpy", text)
 
     def test_harness_calls_ensure_before_meters(self) -> None:
         src = (SCRIPTS / "harness_lib.sh").read_text(encoding="utf-8")
-        self.assertIn("ensure_gdx_meter_env.py", src)
+        self.assertIn("ensure_isiro_kv_meter_env.py", src)
         self.assertLess(
-            src.index("gdx_meter_env: ensuring pinned host meter python"),
-            src.index("gdx_kv_bitexact: measuring cold roundtrip"),
+            src.index("isiro_kv_meter_env: ensuring pinned host meter python"),
+            src.index("isiro_kv_bitexact: measuring cold roundtrip"),
         )
 
     def test_preflight_fails_closed_without_kernels(self) -> None:
-        from ensure_gdx_meter_env import preflight_python
+        from ensure_isiro_kv_meter_env import preflight_python
 
         # System python3 almost never has the meter stack; must fail closed.
         report = preflight_python(Path(sys.executable), need_cuda=False)
@@ -2201,11 +2201,11 @@ class GdxMeterEnvTests(unittest.TestCase):
             result = subprocess.run(
                 [
                     sys.executable,
-                    str(SCRIPTS / "ensure_gdx_meter_env.py"),
+                    str(SCRIPTS / "ensure_isiro_kv_meter_env.py"),
                     "--venv",
                     str(venv),
                     "--requirements",
-                    str(ROOT / "requirements-gdx-meters.txt"),
+                    str(ROOT / "requirements-isiro-kv-meters.txt"),
                     "--dry-run",
                     "--print-python",
                     "--allow-no-cuda",

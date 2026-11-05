@@ -1,7 +1,7 @@
 # ISIRO Benchmarks
 
 Matched A/B with `vllm bench serve`: vLLM **baseline** vs **Isiro**
-(`isiro serve … --target vllm`; TIC weights, optional GDX KV compress).
+(`isiro serve … --target vllm`; TIC weights, optional Isiro KV compress).
 
 ~29% footprint savings apply across BF16 models, see [model cards](../model-cards/README.md) and [Hugging Face](https://huggingface.co/isiroai).
 
@@ -10,6 +10,17 @@ Matched A/B with `vllm bench serve`: vLLM **baseline** vs **Isiro**
   - [Gemma 4 12B IT](gemma-4-12B-it/)
   - [Gemma 4 12B IT FP8](gemma-4-12B-it-fp8/) ([Isiro report](gemma-4-12B-it-fp8/rtx-5090-report/))
   - [Qwen3.8-27B](qwen3.8-27b/)
+
+
+## Product modes
+
+| Mode | Weights | Isiro KV | Command |
+|------|---------|----------|---------|
+| TIC only | `.tic` | unset | `isiro serve model.tic --target vllm` |
+| TIC + Isiro KV | `.tic` | `ISIRO_KV=bf16` / `fp8` / `fp4` or harness `ISIRO_BENCH_KV` | same |
+| Isiro KV only | Hub / AWQ / FP8 | `ISIRO_KV=...` | `vllm serve MODEL` with isiro installed |
+
+Matched A/B in this tree is usually **baseline vLLM** vs **TIC (+ optional Isiro KV)**.
 
 ## Prerequisites
 
@@ -32,10 +43,10 @@ Set either to a semver only when you want to pin.
 
 ```bash
 cp benchmarks/common.env.example benchmarks/{model}/common.env
-# Optional: bf16 KV compress A/B (ISIRO_GDX=bf16; lean publish skips NIAH)
-# cp benchmarks/common.env.bf16.gdx-kv.example \
-#   benchmarks/{model}/common.env.bf16.gdx-kv
-# Optional: Hub FP8 weights + bf16 GDX KV (basename must end in .fp8)
+# Optional: bf16 KV compress A/B (ISIRO_KV=bf16; lean publish skips NIAH)
+# cp benchmarks/common.env.bf16.isiro-kv.example \
+#   benchmarks/{model}/common.env.bf16.isiro-kv
+# Optional: Hub FP8 weights + bf16 Isiro KV (basename must end in .fp8)
 # cp benchmarks/common.env.fp8.example benchmarks/{model}/common.env.fp8
 ```
 
@@ -45,7 +56,7 @@ cp benchmarks/common.env.example benchmarks/{model}/common.env
 
 `{model}` is the directory name under `benchmarks/`. Each launch writes a
 timestamped report. Default runs needle-in-a-haystack, then the tok/s A/B.
-Lean GDX publish configs set `ISIRO_BENCH_SKIP_NEEDLE=1` (Correctness uses
+Lean Isiro KV publish configs set `ISIRO_BENCH_SKIP_NEEDLE=1` (Correctness uses
 weight + KV bit-exactness + serve output match instead).
 
 ```bash
@@ -69,13 +80,13 @@ Single-request latency: `SERVE_MAX_NUM_SEQS=1` and `BENCH_MAX_CONCURRENCY=1` (or
 
 The report includes needle-in-a-haystack (fact retrieval by context length) and
 `vllm bench serve` (tok/s, ITL). Plot deps: `benchmarks/requirements-plot.txt`.
-GDX cold meters: bitexact + bf16 curve pack on host CUDA (pinned in
-`benchmarks/requirements-gdx-meters.txt`; harness runs
-`scripts/ensure_gdx_meter_env.py` at start: managed venv
+Isiro KV cold meters: bitexact + bf16 curve pack on host CUDA (pinned in
+`benchmarks/requirements-isiro-kv-meters.txt`; harness runs
+`scripts/ensure_isiro_kv_meter_env.py` at start: managed venv
 `~/.isiro/bench-venv`, override with `ISIRO_BENCH_PYTHON` /
-`ISIRO_BENCH_VENV` / `ISIRO_BENCH_TORCH_INDEX`). For `ISIRO_BENCH_GDX=fp8`
+`ISIRO_BENCH_VENV` / `ISIRO_BENCH_TORCH_INDEX`). For `ISIRO_BENCH_KV=fp8`
 or `fp4`, the KV-bytes curve captures vendor FA page bytes inside
-`VLLM_IMAGE` (`scripts/gdx_kv_curve_vendor_pages.py`, same
+`VLLM_IMAGE` (`scripts/isiro_kv_curve_vendor_pages.py`, same
 `SERVE_KV_CACHE_DTYPE` as serve) then packs on the host. There is no
 bf16→e4m3 cast; Hub FP8 baselines do not need a bf16 twin for that curve.
 
@@ -102,7 +113,7 @@ When needle is enabled, `benchmarks/run_ab.sh {model}` (Graph ON default) writes
 1. `needle-haystack.png`: 3-needle recall heatmap. X is context tokens (EvalScope/Kamradt: 20 linear bins from 1k to the advertised model max). Y is needle depth % (EvalScope 11.11% steps). Color is recall fraction. An X in a column is OOM. Two panels: Isiro, Baseline default fill.
 2. `vram-vs-context.png`: VRAM in-use vs context T (non-KV plus live pool blocks plus TokenID/persist). Dashed is reserved pool on each side. Dotted usable VRAM. Light red above usable VRAM; darker red above GPU HBM. An X on the GPU HBM line is OOM at that context. Not nvidia-smi reserved.
 
-Lean GDX configs (`ISIRO_BENCH_SKIP_NEEDLE=1`) skip those PNGs and publish Correctness + GPU memory + capacity + generation tables only.
+Lean Isiro KV configs (`ISIRO_BENCH_SKIP_NEEDLE=1`) skip those PNGs and publish Correctness + GPU memory + capacity + generation tables only.
 
 Scratch copies live under `benchmarks/scratch/{UTC}-{system_id}/`.
 
@@ -112,11 +123,11 @@ Tok/s, ITL, and GPU memory are markdown tables, not extra PNGs. CUDA graphs ON i
 
 ## Methodology
 
-Each run compares vLLM (**baseline**) to **Isiro** (`isiro serve` with TIC weights, optional `ISIRO_GDX`) on the same host with matched vLLM version, BF16, memory util, max len, TP, graph mode, seed, warmups, prompts, and I/O lengths. Fresh server per side.
+Each run compares vLLM (**baseline**) to **Isiro** (`isiro serve` with TIC weights, optional `ISIRO_KV`) on the same host with matched vLLM version, BF16, memory util, max len, TP, graph mode, seed, warmups, prompts, and I/O lengths. Fresh server per side.
 
 Isiro uses the product `isiro serve` default, including isiro-fa (CUSTOM vendor-family drop-in when `ISIRO_ATTN` is unset). The harness clears an inherited `ISIRO_ATTN=0` so a parent shell cannot skip that default. Pin only with `ISIRO_BENCH_ISIRO_ATTN` if you need to override. Attention backend is recorded in serve config JSON; it is not a fairness key (baseline FLASH_ATTN vs Isiro CUSTOM is expected).
 
-The report records correctness (weight bit-exactness; KV bit-exactness when GDX is on; serve output match), GPU memory, capacity, generation throughput and latency under that matched setup.
+The report records correctness (weight bit-exactness; KV bit-exactness when Isiro KV is on; serve output match), GPU memory, capacity, generation throughput and latency under that matched setup.
 
 ## Optional story JSON
 

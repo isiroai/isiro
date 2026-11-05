@@ -1,6 +1,6 @@
 # Scope: FA cold-attend remeter (not GLM MLA)
 
-This stamp is **Gemma FA `path_a` / `fa-kv`** on `rtx-5090` (`ISIRO_GDX=bf16`).
+This stamp is **Gemma FA `path_a` / `fa-kv`** on `rtx-5090` (`ISIRO_KV=bf16`).
 
 It shares the o1 cold/hot spine with GLM, but it is **not** a proxy for
 `path_a_mla` / `o1-mla-latent`. Do not claim these numbers unlock GLM on
