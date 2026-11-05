@@ -104,7 +104,16 @@ fi
 
 : "${MODEL_SLUG:?set MODEL_SLUG (launch_ab.py sets it to the model directory name)}"
 : "${BASELINE_MODEL_DIR:?set BASELINE_MODEL_DIR in common.env}"
-: "${TIC_MODEL_DIR:?set TIC_MODEL_DIR in common.env}"
+: "${TIC_MODEL_DIR:=}"
+if [[ -z "${TIC_MODEL_DIR}" ]]; then
+  case "${ISIRO_BENCH_KV_ONLY:-}" in
+    1|true|yes|on) TIC_MODEL_DIR="${BASELINE_MODEL_DIR}" ;;
+    *)
+      echo "set TIC_MODEL_DIR in common.env (or ISIRO_BENCH_KV_ONLY=1)" >&2
+      exit 2
+      ;;
+  esac
+fi
 : "${MODEL_ID:?set MODEL_ID in common.env}"
 : "${VLLM_IMAGE:?set VLLM_IMAGE in common.env}"
 # Local tokenizer for vllm bench (gated Hub ids like meta-llama/*).
@@ -147,6 +156,23 @@ case "${ISIRO_BENCH_KV}" in
     exit 2
     ;;
 esac
+# ISIRO_BENCH_KV_ONLY=1: both arms are raw HF (no .tic). Isiro arm is
+# `vllm serve` + PYTHONPATH=serve-site + ISIRO_KV (not `isiro serve`).
+_ISIRO_KV_ONLY_RAW="${ISIRO_BENCH_KV_ONLY:-}"
+ISIRO_BENCH_KV_ONLY=0
+case "${_ISIRO_KV_ONLY_RAW}" in
+  1|true|yes|on) ISIRO_BENCH_KV_ONLY=1 ;;
+esac
+unset _ISIRO_KV_ONLY_RAW
+if [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 ]]; then
+  if [[ -z "${ISIRO_BENCH_KV}" ]]; then
+    echo "ISIRO_BENCH_KV_ONLY=1 requires ISIRO_BENCH_KV=bf16|fp8|fp4" >&2
+    exit 2
+  fi
+  # Same weights both arms; TIC_MODEL_DIR may point at the baseline tree.
+  : "${TIC_MODEL_DIR:=${BASELINE_MODEL_DIR}}"
+  export ISIRO_BENCH_SKIP_VERIFY="${ISIRO_BENCH_SKIP_VERIFY:-1}"
+fi
 if [[ -n "${ISIRO_BENCH_KV}" ]]; then
   # Product Isiro KV auto-routes; drop stale unique-C / path-A parent envs.
   if [[ -n "${ISIRO_KV_C:-}" && "${ISIRO_KV_C}" != "0" && "${ISIRO_KV_C}" != "off" && "${ISIRO_KV_C}" != "false" ]]; then
@@ -168,13 +194,20 @@ _TIC_FOR_VERSION="${TIC_MODEL_DIR}/model.tic"
 if [[ ! -f "${_TIC_FOR_VERSION}" ]]; then
   _TIC_FOR_VERSION="$(find "${TIC_MODEL_DIR}" -maxdepth 1 -name '*.tic' -print -quit 2>/dev/null || true)"
 fi
-eval "$(
-  python3 "${BENCH_ROOT}/scripts/probe_isiro_versions.py" \
-    --tic "${_TIC_FOR_VERSION}" \
-    --format-override "${ISIRO_FORMAT:-auto}" \
-    --runtime-override "${ISIRO_RUNTIME:-auto}"
-)"
-echo "versions: compiler=${ISIRO_FORMAT} runtime=${ISIRO_RUNTIME}" >&2
+if [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 && ! -f "${_TIC_FOR_VERSION}" ]]; then
+  # No .tic on the KV-only twin; do not invent a compiler/runtime pin.
+  ISIRO_FORMAT="${ISIRO_FORMAT:-kv-only}"
+  ISIRO_RUNTIME="${ISIRO_RUNTIME:-kv-only}"
+  echo "versions: compiler=${ISIRO_FORMAT} runtime=${ISIRO_RUNTIME} (ISIRO_BENCH_KV_ONLY; no .tic)" >&2
+else
+  eval "$(
+    python3 "${BENCH_ROOT}/scripts/probe_isiro_versions.py" \
+      --tic "${_TIC_FOR_VERSION}" \
+      --format-override "${ISIRO_FORMAT:-auto}" \
+      --runtime-override "${ISIRO_RUNTIME:-auto}"
+  )"
+  echo "versions: compiler=${ISIRO_FORMAT} runtime=${ISIRO_RUNTIME}" >&2
+fi
 
 # Precision confusion guard: the config file basename encodes the intended
 # precision (common.env => bf16, common.env.fp8 => fp8). A stale
@@ -183,9 +216,9 @@ echo "versions: compiler=${ISIRO_FORMAT} runtime=${ISIRO_RUNTIME}" >&2
 # disagree so reports can never be mislabeled.
 CONFIG_BASENAME="$(basename "${CONFIG}")"
 case "${CONFIG_BASENAME}" in
-  *.fp8) CONFIG_PRECISION="fp8" ;;
-  *.awq) CONFIG_PRECISION="awq" ;;
-  *)     CONFIG_PRECISION="bf16" ;;
+  *.fp8|*.fp8.*) CONFIG_PRECISION="fp8" ;;
+  *.awq|*.awq.*) CONFIG_PRECISION="awq" ;;
+  *)             CONFIG_PRECISION="bf16" ;;
 esac
 if [[ "${CONFIG_PRECISION}" != "${PRECISION}" ]]; then
   echo "precision mismatch: config '${CONFIG_BASENAME}' implies ${CONFIG_PRECISION} but PRECISION=${PRECISION}" >&2
@@ -226,6 +259,7 @@ echo "  GRAPH_MODE        = ${GRAPH_MODE} (enforce_eager=${SERVE_ENFORCE_EAGER})
 echo "  EXPERIMENT_KIND   = ${EXPERIMENT_KIND}" >&2
 echo "  SERVE_KV_CACHE_DTYPE = ${SERVE_KV_CACHE_DTYPE:-unset}" >&2
 echo "  ISIRO_BENCH_KV      = ${ISIRO_BENCH_KV:-off}" >&2
+echo "  ISIRO_BENCH_KV_ONLY = ${ISIRO_BENCH_KV_ONLY}" >&2
 if [[ -n "${ISIRO_BENCH_EXTRA_BODY:-}" ]]; then
   export ISIRO_BENCH_EXTRA_BODY
   echo "  ISIRO_BENCH_EXTRA_BODY = ${ISIRO_BENCH_EXTRA_BODY}" >&2
@@ -497,6 +531,18 @@ build_baseline_serve() {
   if [[ -n "${SERVE_KV_CACHE_DTYPE}" ]]; then
     BASELINE_SERVE+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
   fi
+  # Dens TIME twin: match Isiro FUSED PIECEWISE (mode 3) so fairness gate
+  # does not reject Hub FULL_AND_PIECEWISE vs fuse PIECEWISE.
+  local _fused_on=0
+  case "${ISIRO_KV_FUSED_ATTEND:-0}" in
+    1|on|true|yes|ON|TRUE|YES) _fused_on=1 ;;
+  esac
+  if [[ "${_fused_on}" -eq 1 && "${SERVE_ENFORCE_EAGER}" != "true" ]]; then
+    BASELINE_SERVE+=(
+      --compilation-config
+      '{"mode":3,"cudagraph_mode":"PIECEWISE","inductor_compile_config":{"combo_kernels":true,"benchmark_combo_kernel":true}}'
+    )
+  fi
 }
 # Initial baseline command for dry-run / early logs; rebuilt after capacity search.
 build_baseline_serve
@@ -508,15 +554,20 @@ if [[ ! -x "${ISIRO_SERVE_BIN}" ]]; then
   ISIRO_SERVE_BIN="$(command -v isiro || true)"
 fi
 if [[ -z "${ISIRO_SERVE_BIN}" || ! -x "${ISIRO_SERVE_BIN}" ]]; then
-  echo "isiro serve binary not found; install customer isiro to ~/.isiro/bin" >&2
-  exit 2
+  if [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 ]]; then
+    echo "isiro CLI absent; ISIRO_BENCH_KV_ONLY=1 continues with vllm+serve-site" >&2
+    ISIRO_SERVE_BIN=""
+  else
+    echo "isiro serve binary not found; install customer isiro to ~/.isiro/bin" >&2
+    exit 2
+  fi
 fi
-if [[ "${ISIRO_SERVE_BIN}" == *".venv"* ]]; then
+if [[ -n "${ISIRO_SERVE_BIN}" && "${ISIRO_SERVE_BIN}" == *".venv"* ]]; then
   echo "refusing isiro from a .venv (${ISIRO_SERVE_BIN}); use ~/.isiro/bin/isiro" >&2
   exit 2
 fi
 ISIRO_ON_PATH="$(command -v isiro || true)"
-if [[ "${ISIRO_ON_PATH}" == *".venv"* ]]; then
+if [[ -n "${ISIRO_ON_PATH}" && "${ISIRO_ON_PATH}" == *".venv"* && "${ISIRO_BENCH_KV_ONLY}" -ne 1 ]]; then
   echo "isiro on PATH resolves to a .venv (${ISIRO_ON_PATH}); put ~/.isiro/bin first" >&2
   exit 2
 fi
@@ -543,6 +594,7 @@ build_tic_serve() {
 build_tic_serve
 
 # Sets TIC_PID. Appends --enforce-eager when SERVE_ENFORCE_EAGER=true.
+# ISIRO_BENCH_KV_ONLY: docker vllm + serve-site + ISIRO_KV (raw HF, no .tic).
 start_tic_serve() {
   local log="$1"
   unset ISIRO_SERVE_CUDA_GRAPHS
@@ -551,19 +603,110 @@ start_tic_serve() {
   if [[ -n "${ISIRO_BENCH_KV}" ]]; then
     export ISIRO_KV="${ISIRO_BENCH_KV}"
     export ISIRO_KV_COLD_READY=1
-    # common.env may set ISIRO_KV_* without export; Docker forward uses compgen -e.
     if [[ -n "${ISIRO_KV_FP8_SCALES_OK:-}" ]]; then
       export ISIRO_KV_FP8_SCALES_OK
     fi
-    # Cold-arm window + verbose deposit meter (opt-in for long/armed A/Bs).
     if [[ -n "${ISIRO_KV_LIVE_WINDOW:-}" ]]; then
       export ISIRO_KV_LIVE_WINDOW
     fi
     if [[ -n "${ISIRO_KV_METER:-}" ]]; then
       export ISIRO_KV_METER
     fi
+    if [[ -n "${ISIRO_KV_FUSED_ATTEND:-}" ]]; then
+      export ISIRO_KV_FUSED_ATTEND
+    fi
+    if [[ -n "${ISIRO_KV_FUSED_DECODE:-}" ]]; then
+      export ISIRO_KV_FUSED_DECODE
+    fi
   else
     unset ISIRO_KV || true
+  fi
+  if [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 ]]; then
+    local _isiro_home="${ISIRO_HOME:-${HOME}/.isiro}"
+    local _serve_site="${_isiro_home}/serve-site"
+    if [[ ! -d "${_serve_site}/isiro_runtime" ]]; then
+      echo "ISIRO_BENCH_KV_ONLY: missing serve-site at ${_serve_site}" >&2
+      exit 2
+    fi
+    : "${ISIRO_KV_LIVE_WINDOW:=512}"
+    export ISIRO_KV_LIVE_WINDOW
+    local -a kv_only_serve=(
+      docker run --rm --name "${BASELINE_CONTAINER}-isiro-kv" --gpus all
+      -p "127.0.0.1:${API_PORT}:8000"
+      -v "${BASELINE_MODEL_DIR}:/model:ro"
+      -v "${_isiro_home}:/isiro/.isiro:ro"
+      -e HOME=/isiro
+      -e ISIRO_HOME=/isiro/.isiro
+      -e "PYTHONPATH=/isiro/.isiro/serve-site"
+      -e VLLM_USE_FLASHINFER_SAMPLER=0
+      -e "VLLM_LOGGING_LEVEL=${VLLM_LOGGING_LEVEL:-DEBUG}"
+      -e VLLM_BUILD_URL= -e VLLM_BUILD_PIPELINE= -e VLLM_BUILD_COMMIT= -e VLLM_IMAGE_TAG=
+      -e "ISIRO_KV=${ISIRO_BENCH_KV}"
+      -e ISIRO_KV_COLD_READY=1
+      -e "ISIRO_KV_LIVE_WINDOW=${ISIRO_KV_LIVE_WINDOW}"
+    )
+    if [[ -n "${ISIRO_LICENSE_KEY:-}" ]]; then
+      kv_only_serve+=(-e "ISIRO_LICENSE_KEY=${ISIRO_LICENSE_KEY}")
+    fi
+    if [[ -n "${ISIRO_KV_FP8_SCALES_OK:-}" ]]; then
+      kv_only_serve+=(-e "ISIRO_KV_FP8_SCALES_OK=${ISIRO_KV_FP8_SCALES_OK}")
+    fi
+    if [[ -n "${ISIRO_KV_METER:-}" ]]; then
+      kv_only_serve+=(-e "ISIRO_KV_METER=${ISIRO_KV_METER}")
+    fi
+    if [[ -n "${ISIRO_KV_FUSED_ATTEND:-}" ]]; then
+      kv_only_serve+=(-e "ISIRO_KV_FUSED_ATTEND=${ISIRO_KV_FUSED_ATTEND}")
+    fi
+    if [[ -n "${ISIRO_KV_FUSED_DECODE:-}" ]]; then
+      kv_only_serve+=(-e "ISIRO_KV_FUSED_DECODE=${ISIRO_KV_FUSED_DECODE}")
+    fi
+    kv_only_serve+=(
+      "${VLLM_IMAGE}"
+      --model /model
+      --served-model-name "${MODEL_ID}"
+    )
+    if [[ "${PRECISION}" == "fp8" ]]; then
+      kv_only_serve+=(--quantization "${FP8_BASELINE_QUANT}")
+    elif [[ "${PRECISION}" == "awq" ]]; then
+      kv_only_serve+=(--quantization awq --dtype bfloat16)
+    else
+      kv_only_serve+=(--dtype bfloat16)
+    fi
+    kv_only_serve+=(
+      --max-model-len "${SERVE_MAX_MODEL_LEN}"
+      --gpu-memory-utilization "${SERVE_GPU_MEMORY_UTILIZATION}"
+      --tensor-parallel-size "${SERVE_TENSOR_PARALLEL_SIZE}"
+      --max-num-seqs "${SERVE_MAX_NUM_SEQS}"
+      --no-enable-prefix-caching
+      --trust-remote-code
+      --no-enable-flashinfer-autotune
+    )
+    if [[ -n "${SERVE_MAX_NUM_BATCHED_TOKENS:-}" ]]; then
+      kv_only_serve+=(--max-num-batched-tokens "${SERVE_MAX_NUM_BATCHED_TOKENS}")
+    fi
+    if [[ "${SERVE_ENFORCE_EAGER}" == "true" ]]; then
+      kv_only_serve+=(--enforce-eager)
+    fi
+    if [[ -n "${SERVE_KV_CACHE_DTYPE}" ]]; then
+      kv_only_serve+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
+    fi
+    # a+ fused must not bake FULL decode FA. Raw vllm docker does not go
+    # through isiro serve's FUSED→PIECEWISE pin; pass after IMAGE so docker
+    # does not eat the flag.
+    local _fused_on=0
+    case "${ISIRO_KV_FUSED_ATTEND:-0}" in
+      1|on|true|yes|ON|TRUE|YES) _fused_on=1 ;;
+    esac
+    if [[ "${_fused_on}" -eq 1 && "${SERVE_ENFORCE_EAGER}" != "true" ]]; then
+      # mode 3 required: vLLM 0.31 overrides mode2+PIECEWISE to NONE.
+      kv_only_serve+=(
+        --compilation-config
+        '{"mode":3,"cudagraph_mode":"PIECEWISE","inductor_compile_config":{"combo_kernels":true,"benchmark_combo_kernel":true}}'
+      )
+    fi
+    "${kv_only_serve[@]}" >"${log}" 2>&1 &
+    TIC_PID=$!
+    return 0
   fi
   build_tic_serve
   if [[ "${SERVE_ENFORCE_EAGER}" == "true" ]]; then
@@ -595,7 +738,7 @@ write_commands_json() {
     "${BASELINE_REUSED_FROM}" "${PRECISION}" "${SERVE_ENFORCE_EAGER}" \
     "${VERIFY_REFERENCE}" \
     "${SERVE_KV_CACHE_DTYPE:-}" "${ISIRO_BENCH_KV:-}" \
-    "${FP8_BASELINE_QUANT:-}" <<'PY'
+    "${FP8_BASELINE_QUANT:-}" "${ISIRO_BENCH_KV_ONLY}" <<'PY'
 import json, os, sys
 from benchmark_lib import resolve_fp8_baseline_quantization
 
@@ -618,7 +761,9 @@ from benchmark_lib import resolve_fp8_baseline_quantization
     kv_cache_dtype,
     isiro_kv,
     fp8_quant,
+    isiro_kv_only,
 ) = sys.argv[1:]
+isiro_kv_only = isiro_kv_only in ("1", "true", "yes", "on")
 baseline = [
     "docker", "run", "--rm", "--gpus", "all",
     "-p", f"127.0.0.1:{port}:8000",
@@ -666,7 +811,14 @@ doc = {
     "tic_serve": tic_serve,
     "kv_cache_dtype": kv_cache_dtype or None,
     "isiro_kv": isiro_kv or None,
+    "isiro_kv_only": isiro_kv_only,
 }
+if isiro_kv_only:
+    doc["tic_verify"] = None
+    doc["verify_mode"] = "skipped_kv_only"
+    doc["isiro_serve_kind"] = "vllm_serve_isiro_kv"
+    # Isiro arm matches baseline docker argv; ISIRO_KV is in tic_serve_env.
+    doc["tic_serve"] = list(baseline)
 if precision == "fp8":
     doc["fp8_baseline_quantization"] = (
         fp8_quant or resolve_fp8_baseline_quantization(baseline_model)
@@ -687,6 +839,10 @@ if isiro_kv:
     isiro_kv_meter = os.environ.get("ISIRO_KV_METER", "").strip()
     if isiro_kv_meter:
         doc["tic_serve_env"]["ISIRO_KV_METER"] = isiro_kv_meter
+    for _k in ("ISIRO_KV_FUSED_ATTEND", "ISIRO_KV_FUSED_DECODE"):
+        _v = os.environ.get(_k, "").strip()
+        if _v:
+            doc["tic_serve_env"][_k] = _v
 if reused_from:
     doc["baseline_reused_from"] = reused_from
 json.dump(doc, open(out, "w", encoding="utf-8"), indent=2, sort_keys=True)
@@ -1124,6 +1280,11 @@ apply_capacity_one_wave_batched_tokens() {
 }
 
 prepare_tic_bundle() {
+  if [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 ]]; then
+    echo "prepare_tic_bundle: SKIP (ISIRO_BENCH_KV_ONLY=1; raw HF both arms)" >&2
+    mkdir -p "${TIC_BENCH_BUNDLE}"
+    return 0
+  fi
   mkdir -p "${TIC_BENCH_BUNDLE}"
   for source in "${TIC_MODEL_DIR}"/*; do
     name="$(basename "${source}")"
@@ -1354,6 +1515,10 @@ wait_ready() {
 # shows TIC weights heavier than baseline (e.g. leftover densify-at-attach).
 assert_tic_weight_hbm_win() {
   local tic_log="${1:?tic serve log}"
+  if [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 ]]; then
+    echo "assert_tic_weight_hbm_win: SKIP (ISIRO_BENCH_KV_ONLY; same AWQ/HF weights)" >&2
+    return 0
+  fi
   local baseline_env="${RUN_DIR}/baseline_environment.json"
   if [[ ! -f "${baseline_env}" ]]; then
     echo "assert_tic_weight_hbm_win: missing ${baseline_env}; skip" >&2
@@ -1459,7 +1624,12 @@ write_effective_config() {
     "${RUN_DIR}/${variant}_serve_config.json" \
     "${yaml_path}" \
     "${SERVE_ENFORCE_EAGER}" \
-    "${BENCH_ROOT}/scripts" <<'PY'
+    "${BENCH_ROOT}/scripts" \
+    "${SERVE_MAX_MODEL_LEN}" \
+    "${SERVE_GPU_MEMORY_UTILIZATION}" \
+    "${SERVE_TENSOR_PARALLEL_SIZE}" \
+    "${SERVE_MAX_NUM_SEQS}" \
+    "${ISIRO_BENCH_KV_ONLY}" <<'PY'
 import json, re, sys
 from pathlib import Path
 
@@ -1469,6 +1639,12 @@ from attention_ab import parse_serve_attention, requested_isiro_attn
 text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 yaml_path = Path(sys.argv[3]) if sys.argv[3] else None
 expect_enforce_eager = sys.argv[4] == "true"
+# Harness knobs (fallback when docker vllm log omits V1 config dump fields).
+_knob_max_len = int(sys.argv[6])
+_knob_gpu_util = float(sys.argv[7])
+_knob_tp = int(sys.argv[8])
+_knob_max_seqs = int(sys.argv[9])
+_kv_only = sys.argv[10] in ("1", "true", "yes", "on")
 
 def flag(pattern, cast=str):
     match = re.search(pattern, text)
@@ -1578,6 +1754,34 @@ for key in (
 ):
     if doc.get(key) is not None and key not in doc["sources"]:
         doc["sources"][key] = "server_log"
+
+# KV-only docker vllm logs often omit the isiro-serve V1 config dump. Fill
+# from harness knobs + known CLI (matched A/B already set these on argv).
+if _kv_only:
+    if doc["max_model_len"] is None:
+        doc["max_model_len"] = _knob_max_len
+        doc["sources"]["max_model_len"] = "harness_kv_only"
+    if doc["gpu_memory_utilization"] is None:
+        doc["gpu_memory_utilization"] = _knob_gpu_util
+        doc["sources"]["gpu_memory_utilization"] = "harness_kv_only"
+    if doc["tensor_parallel_size"] is None:
+        doc["tensor_parallel_size"] = _knob_tp
+        doc["sources"]["tensor_parallel_size"] = "harness_kv_only"
+    if doc["max_num_seqs"] is None:
+        doc["max_num_seqs"] = _knob_max_seqs
+        doc["sources"]["max_num_seqs"] = "harness_kv_only"
+    if doc["prefix_caching"] is None:
+        doc["prefix_caching"] = False
+        doc["sources"]["prefix_caching"] = "harness_kv_only"
+    if doc["enforce_eager"] is None:
+        doc["enforce_eager"] = expect_enforce_eager
+        doc["sources"]["enforce_eager"] = "harness_kv_only"
+    if doc["trust_remote_code"] is None:
+        doc["trust_remote_code"] = True
+        doc["sources"]["trust_remote_code"] = "harness_kv_only"
+    if doc["flashinfer_autotune"] is None:
+        doc["flashinfer_autotune"] = False
+        doc["sources"]["flashinfer_autotune"] = "harness_kv_only"
 
 required = (
     "max_model_len",
@@ -1907,10 +2111,15 @@ capacity_scale_hi_and_weights() {
     python3 "${BENCH_ROOT}/scripts/capacity_plan.py" weight-bytes \
       --path "${BASELINE_MODEL_DIR}"
   )"
-  weight_t="$(
-    python3 "${BENCH_ROOT}/scripts/capacity_plan.py" weight-bytes \
-      --path "${TIC_MODEL_DIR}/model.tic"
-  )"
+  if [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 ]]; then
+    # Same AWQ/HF weights both arms; no .tic headroom.
+    weight_t="${weight_b}"
+  else
+    weight_t="$(
+      python3 "${BENCH_ROOT}/scripts/capacity_plan.py" weight-bytes \
+        --path "${TIC_MODEL_DIR}/model.tic"
+    )"
+  fi
   if [[ -n "${CAPACITY_SCALE_HI:-}" ]]; then
     scale_hi="${CAPACITY_SCALE_HI}"
   else
@@ -2805,10 +3014,15 @@ elif [[ "${EXPERIMENT_KIND}" == "capacity" ]]; then
   echo "equal-batch transparency: skipped (set ISIRO_BENCH_EQUAL_BATCH=1 to enable)" >&2
 fi
 
+_COMPARE_TIC_ARTIFACT="${TIC_MODEL_DIR}/model.tic"
+if [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 ]]; then
+  # Same raw HF/AWQ tree both arms (no .tic).
+  _COMPARE_TIC_ARTIFACT="${BASELINE_MODEL_DIR}"
+fi
 python3 "${BENCH_ROOT}/scripts/compare_ab.py" \
   --run-dir "${RUN_DIR}" \
   --baseline-model "${BASELINE_MODEL_DIR}" \
-  --tic-artifact "${TIC_MODEL_DIR}/model.tic" \
+  --tic-artifact "${_COMPARE_TIC_ARTIFACT}" \
   --model "${MODEL_SLUG}" \
   --precision "${PRECISION}" \
   --system-id "${SYSTEM_ID}" \

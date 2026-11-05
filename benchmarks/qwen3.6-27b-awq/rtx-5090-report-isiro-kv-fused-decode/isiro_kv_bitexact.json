@@ -1,0 +1,10 @@
+{
+  "alphabet": "fp8",
+  "avg_bpv": 3.9893445745828084,
+  "coding_win": true,
+  "error": null,
+  "fa_bpv": 8.0,
+  "kv_bit_exact_ok": true,
+  "n_values": 4096,
+  "schema": "isiro-benchmark-isiro-kv-bitexact-v1"
+}

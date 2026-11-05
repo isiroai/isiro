@@ -65,17 +65,17 @@ def _ensure_runtime_import() -> str | None:
 
 def _roundtrip_bf16(seed: int = 11) -> dict[str, Any]:
     import numpy as np
-    from isiro_runtime.ops.tic.native_compute.gdx.atoms.bf16_o1 import (
+    from isiro_runtime.ops.tic.native_compute.isiro_kv.atoms.bf16_o1 import (
         bf16_to_u16,
-        decode_gdx_bf16_o1,
-        encode_gdx_bf16_o1,
+        decode_isiro_kv_bf16_o1,
+        encode_isiro_kv_bf16_o1,
     )
 
     rng = np.random.default_rng(seed)
     vals = rng.normal(size=(1, 64, 2, 32)).astype(np.float32)
     u16 = bf16_to_u16(vals)
-    packed = encode_gdx_bf16_o1(vals)
-    out = decode_gdx_bf16_o1(packed)
+    packed = encode_isiro_kv_bf16_o1(vals)
+    out = decode_isiro_kv_bf16_o1(packed)
     ok = bool(np.array_equal(out, u16))
     bpv = float(packed.avg_bpv_meter())
     # Entropy win vs naive bf16 FA twin (16 bpv).
@@ -93,16 +93,16 @@ def _roundtrip_bf16(seed: int = 11) -> dict[str, Any]:
 
 def _roundtrip_fp8(seed: int = 11) -> dict[str, Any]:
     import numpy as np
-    from isiro_runtime.ops.tic.native_compute.gdx.atoms.e4m3_msb_o1 import (
-        decode_gdx_e4m3_msb_o1,
-        encode_gdx_e4m3_msb_o1,
+    from isiro_runtime.ops.tic.native_compute.isiro_kv.atoms.e4m3_msb_o1 import (
+        decode_isiro_kv_e4m3_msb_o1,
+        encode_isiro_kv_e4m3_msb_o1,
     )
 
     rng = np.random.default_rng(seed)
     # Synthetic e4m3 codes as uint8 page bytes.
     codes = rng.integers(0, 256, size=(1, 64, 2, 32), dtype=np.uint8)
-    packed = encode_gdx_e4m3_msb_o1(codes)
-    out = decode_gdx_e4m3_msb_o1(packed)
+    packed = encode_isiro_kv_e4m3_msb_o1(codes)
+    out = decode_isiro_kv_e4m3_msb_o1(packed)
     ok = bool(np.array_equal(out, codes))
     bpv = float(packed.avg_bpv_meter())
     if ok and not (bpv < 8.0):
@@ -119,15 +119,15 @@ def _roundtrip_fp8(seed: int = 11) -> dict[str, Any]:
 
 def _roundtrip_fp4(seed: int = 11) -> dict[str, Any]:
     import numpy as np
-    from isiro_runtime.ops.tic.native_compute.gdx.atoms.e2m1_o1 import (
-        decode_gdx_e2m1_o1,
-        encode_gdx_e2m1_o1,
+    from isiro_runtime.ops.tic.native_compute.isiro_kv.atoms.e2m1_o1 import (
+        decode_isiro_kv_e2m1_o1,
+        encode_isiro_kv_e2m1_o1,
     )
 
     rng = np.random.default_rng(seed)
     codes = rng.integers(0, 16, size=(1, 64, 2, 32), dtype=np.uint8)
-    packed = encode_gdx_e2m1_o1(codes)
-    out = decode_gdx_e2m1_o1(packed)
+    packed = encode_isiro_kv_e2m1_o1(codes)
+    out = decode_isiro_kv_e2m1_o1(packed)
     ok = bool(np.array_equal(out, codes))
     bpv = float(packed.avg_bpv_meter())
     if ok and not (bpv < 4.0):

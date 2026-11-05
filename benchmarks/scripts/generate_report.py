@@ -283,6 +283,7 @@ def _section_intro(
     compiler, runtime = _compiler_runtime_versions(summary)
     cmds = commands if isinstance(commands, dict) else {}
     isiro_kv = cmds.get("isiro_kv")
+    isiro_kv_only = bool(cmds.get("isiro_kv_only"))
     kv_dtype = cmds.get("kv_cache_dtype")
     compared = [
         "Compared:",
@@ -294,7 +295,13 @@ def _section_intro(
         ),
         "- **Isiro:** `isiro serve … --target vllm` (TIC weights; same vLLM version)",
     ]
-    if isiro_kv:
+    if isiro_kv_only and isiro_kv:
+        compared[-1] = (
+            f"- **Isiro KV-only:** `vllm serve` + `ISIRO_KV={isiro_kv}` "
+            "(same AWQ/HF weights as baseline; no TIC weight claim; cold KV "
+            "compress on vendor attention pages)"
+        )
+    elif isiro_kv:
         compared[-1] = (
             f"- **Isiro:** `isiro serve … --target vllm` with TIC weights and "
             f"`ISIRO_KV={isiro_kv}` (same vLLM version; cold KV compress on "
@@ -335,6 +342,16 @@ def _section_intro(
                 "KV tokens capacity applies Isiro KV cold packing on that budget. "
                 "Measured cold vs FA twin bytes (when the curve ran) are under "
                 "KV vs context.",
+                "",
+            ]
+        )
+    if isiro_kv_only:
+        lines.extend(
+            [
+                "TIME claim: **NO GO** on this path_a densify-then-FA arm "
+                "(capacity may win; equal-batch tok/s / ITL / TTFT are measured "
+                "regressions until ZipFusion-style fused tile invent lands a "
+                "wall dens/kv win).",
                 "",
             ]
         )
@@ -382,6 +399,10 @@ def _section_a(
         verify_label = "Weight bit-exactness"
         verify_cmd = "`isiro verify -r`"
         verify_status = _bit_exact_cell(correctness.get("bit_exact_ok"))
+    elif verify_mode in ("skipped", "skipped_kv_only"):
+        verify_label = "Integrity"
+        verify_cmd = "KV-only; same AWQ/HF weights"
+        verify_status = "SKIP"
     else:
         verify_label = "Integrity"
         verify_cmd = "`isiro verify`"

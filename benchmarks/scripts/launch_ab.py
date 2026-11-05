@@ -174,8 +174,15 @@ def _write_model_report(
     system_id: str,
     run_dir: Path,
 ) -> Path:
-    stamp = _report_stamp(run_dir, system_id)
-    report_dir = model_dir / f"{system_id}-report-{stamp}"
+    # Fixed publish dir (e.g. rtx-5090-report-isiro-kv) overrides the UTC stamp.
+    fixed = os.environ.get("ISIRO_BENCH_REPORT_DIR", "").strip()
+    if fixed:
+        report_dir = Path(fixed)
+        if not report_dir.is_absolute():
+            report_dir = model_dir / report_dir
+    else:
+        stamp = _report_stamp(run_dir, system_id)
+        report_dir = model_dir / f"{system_id}-report-{stamp}"
     report_out = report_dir / "report.md"
     report_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -308,6 +315,13 @@ def main(argv: list[str] | None = None) -> int:
     child_env["ISIRO_BENCH_CONFIG"] = str(config)
     child_env["MODEL_DIR"] = str(model_dir.resolve())
     child_env["MODEL_SLUG"] = model
+    _report_dir = (
+        child_env.get("ISIRO_BENCH_REPORT_DIR")
+        or peek_config_value(config, "ISIRO_BENCH_REPORT_DIR")
+        or ""
+    ).strip()
+    if _report_dir:
+        child_env["ISIRO_BENCH_REPORT_DIR"] = _report_dir
     # Defaults match published Graph ON report quality for bf16/fp8.
     # AWQ 27B+ bit-exact -r peaks host RAM (Hub+TIC+dense) and has OOM'd
     # desktop sessions; leave integrity-only unless the env opts in.
