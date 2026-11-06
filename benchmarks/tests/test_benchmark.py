@@ -1018,10 +1018,14 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("## Optional: Layer GEMM", report)
             self.assertIn("## Correctness", report)
             self.assertNotIn("## A. Correctness", report)
-            self.assertIn("## D. Generation (recall-matched KV, input 32 / output 256)", report)
+            self.assertNotIn(
+                "## D. Generation (recall-matched KV, input 32 / output 256)",
+                report,
+            )
             self.assertNotIn("## D. TTFT", report)
             self.assertNotIn("## E. Prefill TTFT", report)
-            self.assertIn("## C. Equal batch", report)
+            self.assertIn("## C. Concurrency", report)
+            self.assertNotIn("## C. Equal batch", report)
             self.assertNotIn("## D. Capacity", report)
             self.assertNotIn("## 1E. Equal-batch", report)
             self.assertNotIn("capacity benefit not active", report)
@@ -1081,7 +1085,8 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("## Correctness", report)
             self.assertIn("## A. GPU memory", report)
             self.assertIn("### Weights", report)
-            self.assertIn("## C. Equal batch", report)
+            self.assertIn("## C. Concurrency", report)
+            self.assertNotIn("## C. Equal batch", report)
             self.assertIn("## D. Capacity", report)
             self.assertIn("### Generation (recall-matched KV, input 32 / output 256)", report)
             self.assertNotIn("## E. Prefill TTFT", report)
@@ -1635,10 +1640,11 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("ISIRO_SERVE_CUDA_GRAPHS", report)
             self.assertNotIn("--both-graph-modes", report)
             self.assertEqual(report.count("## A. GPU memory"), 1)
-            self.assertEqual(report.count("## C. Equal batch"), 1)
+            self.assertEqual(report.count("## C. Concurrency"), 1)
             self.assertEqual(report.count("## D. Capacity"), 1)
             self.assertEqual(report.count("### Generation"), 1)
             self.assertNotIn("## C. Capacity", report)
+            self.assertNotIn("## C. Equal batch", report)
             self.assertIn("ITL (ms) p50 / p95 / p99", report)
             self.assertNotIn("† tok/s per Non-KV GB", report)
             self.assertNotIn("Reproduce:", report)
@@ -1700,7 +1706,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("| Compiler | `v0.1.0` |", report)
             self.assertIn("| Runtime | `v0.1.1` |", report)
 
-    def test_report_skips_equal_batch_when_redundant(self) -> None:
+    def test_report_concurrency_replaces_mixed_capacity_when_equal_batch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             run = Path(temp)
             summary = _sample_summary(ttft_tic_slower=True, experiment_kind="capacity")
@@ -1713,11 +1719,24 @@ class BenchmarkTests(unittest.TestCase):
                 tic_latency_ms=profile("isiro", "x", 32, 256)["latency_ms"],
             )
             _write_run(run, summary)
+            (run / "commands.json").write_text(
+                json.dumps(
+                    {
+                        "baseline_serve": ["vllm", "serve"],
+                        "tic_serve": ["isiro", "serve"],
+                        "isiro_kv": "fp8",
+                        "isiro_kv_only": True,
+                        "kv_cache_dtype": "fp8",
+                    }
+                ),
+                encoding="utf-8",
+            )
             report = render(run)
+            self.assertIn("## C. Concurrency", report)
+            self.assertIn("### Concurrent requests = 32", report)
             self.assertNotIn("## C. Equal batch", report)
+            self.assertNotIn("## D. Capacity", report)
             self.assertNotIn("Not equal batch (C).", report)
-            self.assertIn("## C. Capacity", report)
-            self.assertIn("### Generation", report)
 
     def test_report_isiro_kv_bitexact_and_lean_intro(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1780,14 +1799,18 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("TIC + KV compress", report)
             self.assertNotIn("ISIRO invent lock", report)
             self.assertNotIn("| Metric | Baseline | TIC |", report)
-            # Capacity section no longer duplicates vendor-slot KV tokens row.
-            self.assertIn("## D. Capacity", report)
-            cap = report.split("## D. Capacity", 1)[1]
-            cap_head = cap.split("### Generation", 1)[0]
-            self.assertIn("Concurrent requests", cap_head)
-            self.assertNotIn("| KV tokens capacity |", cap_head)
+            # Matched concurrency replaces mixed Capacity generation when
+            # equal_batch is present with Isiro KV on.
+            self.assertIn("## C. Concurrency", report)
+            self.assertNotIn("## D. Capacity", report)
+            conc = report.split("## C. Concurrency", 1)[1]
+            self.assertIn("Concurrent requests", conc)
+            self.assertNotIn("| KV tokens capacity |", conc.split("## Config")[0])
             # Coded capacity lives under Section A.
-            self.assertIn("### KV tokens capacity", report.split("## D. Capacity")[0])
+            self.assertIn(
+                "### KV tokens capacity",
+                report.split("## C. Concurrency")[0],
+            )
 
     def test_isiro_kv_vs_context_blurb_meters_savings_rate(self) -> None:
         from generate_report import _section_isiro_kv_bytes
@@ -1807,12 +1830,13 @@ class BenchmarkTests(unittest.TestCase):
         )
         blurb = "\n".join(lines)
         self.assertIn("### KV vs context", blurb)
-        self.assertIn("That save rate meters KV tokens capacity", blurb)
-        self.assertIn("(and Capacity concurrency)", blurb)
+        self.assertIn("That save rate meters KV tokens capacity.", blurb)
+        self.assertNotIn("Capacity concurrency", blurb)
 
-    def test_capacity_tok_s_shows_pct_gain_equal_batch_does_not(self) -> None:
-        from generate_report import _section_equal_batch, _section_generation
+    def test_concurrency_tables_no_mismatch_tok_s_pct(self) -> None:
+        from generate_report import _section_concurrency, _section_generation
 
+        # Legacy Capacity generation may still bold tok/s % when rendered.
         cap = _section_generation(
             {
                 "decode_output_tokens_per_sec": {
@@ -1826,42 +1850,78 @@ class BenchmarkTests(unittest.TestCase):
         )
         cap_txt = "\n".join(cap)
         self.assertIn("| Output tok/s | 525.23 | **946.34** (**+80%**) |", cap_txt)
-        eq = _section_equal_batch(
-            {
-                "max_num_seqs": 8,
-                "decode_output_tokens_per_sec": {
-                    "baseline": 525.23,
-                    "tic": 525.17,
-                },
-                "latency_ms": {
-                    "baseline": {
-                        "itl_p50": 14.76,
-                        "itl_p95": 15.13,
-                        "itl_p99": 15.36,
-                        "tpot_p50": 14.77,
-                        "tpot_p95": 14.86,
-                        "tpot_p99": 14.89,
-                        "ttft_p50": 132.77,
-                        "ttft_p95": 133.09,
-                        "ttft_p99": 133.11,
+        eq = _section_concurrency(
+            [
+                {
+                    "max_num_seqs": 8,
+                    "decode_output_tokens_per_sec": {
+                        "baseline": 525.23,
+                        "tic": 525.17,
                     },
-                    "tic": {
-                        "itl_p50": 14.76,
-                        "itl_p95": 15.12,
-                        "itl_p99": 15.28,
-                        "tpot_p50": 14.76,
-                        "tpot_p95": 14.85,
-                        "tpot_p99": 14.89,
-                        "ttft_p50": 134.06,
-                        "ttft_p95": 134.34,
-                        "ttft_p99": 134.37,
+                    "latency_ms": {
+                        "baseline": {
+                            "itl_p50": 14.76,
+                            "itl_p95": 15.13,
+                            "itl_p99": 15.36,
+                            "tpot_p50": 14.77,
+                            "tpot_p95": 14.86,
+                            "tpot_p99": 14.89,
+                            "ttft_p50": 132.77,
+                            "ttft_p95": 133.09,
+                            "ttft_p99": 133.11,
+                        },
+                        "tic": {
+                            "itl_p50": 14.76,
+                            "itl_p95": 15.12,
+                            "itl_p99": 15.28,
+                            "tpot_p50": 14.76,
+                            "tpot_p95": 14.85,
+                            "tpot_p99": 14.89,
+                            "ttft_p50": 134.06,
+                            "ttft_p95": 134.34,
+                            "ttft_p99": 134.37,
+                        },
                     },
-                },
-            }
+                }
+            ]
         )
         eq_txt = "\n".join(eq)
+        self.assertIn("## C. Concurrency", eq_txt)
         self.assertIn("| Output tok/s | 525.23 | 525.17 |", eq_txt)
-        self.assertNotIn("+%", eq_txt.split("| Output tok/s |", 1)[1].split("\n", 1)[0])
+        self.assertNotIn(
+            "+%", eq_txt.split("| Output tok/s |", 1)[1].split("\n", 1)[0]
+        )
+
+    def test_validate_concurrency_blocks_bans_baseline_reuse_under_higher_n(
+        self,
+    ) -> None:
+        from generate_report import validate_concurrency_blocks
+
+        errs = validate_concurrency_blocks(
+            [
+                {
+                    "max_num_seqs": 16,
+                    "baseline_reused_from_n": 8,
+                    "decode_output_tokens_per_sec": {
+                        "baseline": 1.0,
+                        "tic": 1.0,
+                    },
+                }
+            ]
+        )
+        self.assertTrue(any("reused from N=8" in e for e in errs), errs)
+        self.assertEqual(
+            validate_concurrency_blocks(
+                [
+                    {
+                        "max_num_seqs": 16,
+                        "baseline_max_num_seqs": 16,
+                        "tic_max_num_seqs": 16,
+                    }
+                ]
+            ),
+            [],
+        )
 
     def test_fold_coded_capacity_prefers_curve_over_synthetic_bitexact(self) -> None:
         from generate_report import _fold_coded_kv_capacity
@@ -2227,7 +2287,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn("capacity_tokens", src)
         self.assertIn("capacity_concurrency", src)
         self.assertIn("KV tokens capacity", src)
-        self.assertIn("Capacity concurrency", src)
+        self.assertIn("Concurrent requests (KV-scaled)", src)
+        self.assertNotIn('set_title("Capacity concurrency"', src)
 
     def test_isiro_kv_render_png_capacity_bars_2x1(self) -> None:
         """KV-only publish path: curve top + capacity bars bottom."""

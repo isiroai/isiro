@@ -335,10 +335,11 @@ def _section_intro(
         lines.extend(
             [
                 "Section A: loaded weights and Available KV GiB are shared "
-                "(same raw weights, same vendor util). KV tokens capacity and "
-                "Capacity concurrency follow the measured Isiro/Baseline token "
-                "ratio on that budget. KV bytes vs context are under KV vs "
-                "context when the curve ran.",
+                "(same raw weights, same vendor util). KV tokens capacity "
+                "follows the measured Isiro/Baseline token ratio on that "
+                "budget. KV bytes vs context are under KV vs context when "
+                "the curve ran. Section C concurrency uses the same N both "
+                "arms at each load point.",
                 "",
             ]
         )
@@ -358,11 +359,42 @@ def _section_intro(
     return lines
 
 
+def _concurrency_blocks(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Matched-N concurrency tables for section C (lowest N first)."""
+    by_n = summary.get("concurrency_by_n")
+    blocks: list[dict[str, Any]] = []
+    if isinstance(by_n, list):
+        blocks = [b for b in by_n if isinstance(b, dict)]
+    elif isinstance(summary.get("equal_batch"), dict):
+        blocks = [summary["equal_batch"]]
+    def _n(block: dict[str, Any]) -> int:
+        raw = block.get("max_num_seqs")
+        if raw is None:
+            raw = block.get("max_concurrency")
+        try:
+            return int(raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0
+
+    blocks = sorted(blocks, key=_n)
+    # Drop duplicate N (keep first).
+    seen: set[int] = set()
+    out: list[dict[str, Any]] = []
+    for block in blocks:
+        n = _n(block)
+        if n in seen:
+            continue
+        seen.add(n)
+        out.append(block)
+    return out
+
+
 def _kv_only_time_claim(summary: dict[str, Any]) -> str | None:
-    """Equal-batch TIME stamp for KV-only path (a): tok/s, ITL, TTFT vs Hub."""
-    eb = summary.get("equal_batch")
-    if not isinstance(eb, dict):
+    """Concurrency TIME stamp for KV-only path (a): lowest-N matched table."""
+    blocks = _concurrency_blocks(summary)
+    if not blocks:
         return None
+    eb = blocks[0]
     tps = eb.get("decode_output_tokens_per_sec") or {}
     lat = eb.get("latency_ms") or {}
     b_tps = tps.get("baseline")
@@ -384,8 +416,8 @@ def _kv_only_time_claim(summary: dict[str, Any]) -> str | None:
     go = tok_ok and itl_ok and ttft_ok
     verdict = "GO" if go else "NO GO"
     return (
-        f"TIME claim: **{verdict}** on equal-batch "
-        f"(conc={conc_txt}; tok/s {number(t_tps)} vs {number(b_tps)}; "
+        f"TIME claim: **{verdict}** on concurrency "
+        f"(N={conc_txt}; tok/s {number(t_tps)} vs {number(b_tps)}; "
         f"ITL {number(t_itl)} vs {number(b_itl)}; "
         f"TTFT {number(t_ttft)} vs {number(b_ttft)})."
     )
@@ -871,11 +903,7 @@ def _section_generation(
     as_subsection: bool = False,
 ) -> list[str]:
     arm = _arm_col()
-    equal_note = (
-        " Not equal batch (C)."
-        if mention_equal_batch
-        else ""
-    )
+    del mention_equal_batch
     heading = (
         "### Generation (recall-matched KV, input 32 / output 256)"
         if as_subsection
@@ -885,11 +913,8 @@ def _section_generation(
         heading,
         "",
         "Tok/s is aggregate system throughput across in-flight requests. "
-        "Per-request decode rate is reflected by ITL/TPOT. Concurrent "
-        "requests are in Capacity."
-        f"{equal_note} Latency-matched wins live in Equal batch (same conc as "
-        "Baseline). Higher Capacity concurrency raises aggregate tok/s and "
-        "can move TTFT/ITL.",
+        "Per-request decode rate is reflected by ITL/TPOT. Prefer section C "
+        "Concurrency for matched-N latency and tok/s.",
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
@@ -936,57 +961,108 @@ def _section_generation(
     return lines
 
 
-def _section_equal_batch(equal_batch: dict[str, Any]) -> list[str]:
+def _concurrency_n(block: dict[str, Any]) -> int | None:
+    raw = block.get("max_num_seqs")
+    if raw is None:
+        raw = block.get("max_concurrency")
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    return None
+
+
+def _section_concurrency_table(block: dict[str, Any]) -> list[str]:
+    """One matched-N Metric | Baseline | Isiro table (no tok/s % from N mismatch)."""
     arm = _arm_col()
-    tps = equal_batch.get("decode_output_tokens_per_sec") or {}
-    latency = equal_batch.get("latency_ms") or {}
-    b_lat = latency.get("baseline") or {}
-    t_lat = latency.get("tic") or {}
-    conc = equal_batch.get("max_num_seqs")
-    if conc is None:
-        conc = equal_batch.get("max_concurrency")
+    tps = block.get("decode_output_tokens_per_sec") or {}
+    latency = block.get("latency_ms") or {}
+    b_lat = latency.get("baseline") if isinstance(latency.get("baseline"), dict) else {}
+    t_lat = latency.get("tic") if isinstance(latency.get("tic"), dict) else {}
+    conc = _concurrency_n(block)
+    conc_txt = number(conc, 0) if conc is not None else "?"
+    baseline_cliff = bool(
+        block.get("baseline_admit_failed")
+        or block.get("baseline_status") in ("admit_fail", "cliff", "oom")
+    )
     lines = [
-        "## C. Equal batch",
-        "",
-        (
-            "Same concurrent-request ceiling as Baseline (latency-matched "
-            "surface). Capacity-matched generation in D raises concurrency for "
-            "aggregate tok/s; ITL/TTFT there are not the equal-batch claim."
-        ),
+        f"### Concurrent requests = {conc_txt}",
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
+        f"| Concurrent requests | {conc_txt} | {conc_txt} |",
     ]
-    if conc is not None:
+    if baseline_cliff:
         lines.append(
-            f"| Concurrent requests | {number(conc, 0)} | {number(conc, 0)} |"
+            f"| Output tok/s | admit fail / cliff | {number(tps.get('tic'))} |"
         )
-    lines.append(
-        (
-            "| Output tok/s | "
-            f"{number(tps.get('baseline'))} | "
-            f"{number(tps.get('tic'))} |"
+        if t_lat:
+            lines.append(
+                f"| ITL (ms) p50 / p95 / p99 | n/a | {_compact_pct(t_lat, 'itl')} |"
+            )
+            lines.append(
+                f"| TPOT (ms) p50 / p95 / p99 | n/a | {_compact_pct(t_lat, 'tpot')} |"
+            )
+            lines.append(
+                f"| TTFT (ms) p50 / p95 / p99 | n/a | {_compact_pct(t_lat, 'ttft')} |"
+            )
+    else:
+        lines.append(
+            (
+                "| Output tok/s | "
+                f"{number(tps.get('baseline'))} | "
+                f"{number(tps.get('tic'))} |"
+            )
         )
-    )
-    if b_lat and t_lat:
-        lines.extend(_compact_latency_rows(b_lat, t_lat))
+        if b_lat and t_lat:
+            lines.extend(_compact_latency_rows(b_lat, t_lat))
     lines.append("")
     return lines
 
 
-def _equal_batch_redundant(
-    capacity: dict[str, Any] | None,
-    equal_batch: dict[str, Any],
-    decode_rows: list[dict[str, Any]],
-) -> bool:
-    """Whether to omit Equal batch when it matches Capacity generation.
+def _section_concurrency(blocks: list[dict[str, Any]]) -> list[str]:
+    lines = [
+        "## C. Concurrency",
+        "",
+        (
+            "Same concurrent-request ceiling both arms at each N "
+            "(no mismatched Baseline/Isiro N). Section A KV tokens "
+            "capacity is why higher N is in scope."
+        ),
+        "",
+    ]
+    for block in blocks:
+        lines.extend(_section_concurrency_table(block))
+    return lines
 
-    Always keep Equal batch (C) in the customer report, even when Capacity
-    concurrency snaps onto Baseline (matched seqs, same tok/s). Omitting it
-    made AWQ matched-8 reports look like Capacity tok/s disappeared.
-    """
-    del capacity, equal_batch, decode_rows
-    return False
+
+def _section_equal_batch(equal_batch: dict[str, Any]) -> list[str]:
+    """Backward-compatible alias: single-N concurrency section."""
+    return _section_concurrency([equal_batch])
+
+
+def validate_concurrency_blocks(blocks: list[dict[str, Any]]) -> list[str]:
+    """Refuse mismatched N or Baseline@lower-N under a higher-N header."""
+    errors: list[str] = []
+    for block in blocks:
+        n = _concurrency_n(block)
+        if n is None or n < 1:
+            errors.append("concurrency block missing max_num_seqs")
+            continue
+        b_n = block.get("baseline_max_num_seqs")
+        t_n = block.get("tic_max_num_seqs")
+        if b_n is not None and int(b_n) != n:
+            errors.append(
+                f"baseline_max_num_seqs={b_n} != concurrent requests {n}"
+            )
+        if t_n is not None and int(t_n) != n:
+            errors.append(f"tic_max_num_seqs={t_n} != concurrent requests {n}")
+        if block.get("baseline_reused_from_n") is not None:
+            reused = int(block["baseline_reused_from_n"])
+            if reused != n:
+                errors.append(
+                    f"baseline reused from N={reused} under concurrent "
+                    f"requests = {n}"
+                )
+    return errors
 
 
 def _isiro_kv_curve_omit_reason(summary: dict[str, Any], alph: str) -> str:
@@ -1062,12 +1138,11 @@ def _section_isiro_kv_bytes(summary: dict[str, Any]) -> list[str]:
     fig_caption = "Figure. KV vs 1-user context."
     if isiro_kv_doc.get("capacity_bars"):
         fig_caption = (
-            "Figure. KV vs context (top); KV tokens capacity and "
-            "Capacity concurrency (bottom)."
+            "Figure. KV vs context (top); KV tokens capacity (bottom)."
         )
         capacity_line = (
-            " Bottom panel shows coded KV tokens capacity and Capacity "
-            "concurrent requests (same numbers as sections A and D)."
+            " Bottom panel shows coded KV tokens capacity "
+            "(same numbers as section A)."
         )
     elif weight_line:
         fig_caption = "Figure. Weights and KV vs 1-user context."
@@ -1076,8 +1151,7 @@ def _section_isiro_kv_bytes(summary: dict[str, Any]) -> list[str]:
         "",
         (
             f"`ISIRO_KV={alphabet}` on KV from a Project Gutenberg text "
-            f"forward. {save_line} That save rate meters KV tokens capacity "
-            f"(and Capacity concurrency)."
+            f"forward. {save_line} That save rate meters KV tokens capacity."
             f"{weight_line}{capacity_line}"
         ),
         "",
@@ -1098,11 +1172,6 @@ def _mode_sections(
     capacity = (
         summary.get("capacity")
         if isinstance(summary.get("capacity"), dict)
-        else None
-    )
-    equal_batch = (
-        summary.get("equal_batch")
-        if isinstance(summary.get("equal_batch"), dict)
         else None
     )
     decode_rows = _decode_rows(summary)
@@ -1150,14 +1219,27 @@ def _mode_sections(
         from needle_haystack import vram_report_lines
 
         lines.extend(vram_report_lines(str(haystack["vram_image"])))
-    skip_equal = equal_batch is not None and _equal_batch_redundant(
-        capacity, equal_batch, decode_rows
+    conc_blocks = _concurrency_blocks(summary)
+    # Matched-N concurrency replaces mixed Capacity generation on customer
+    # reports that carry equal_batch / concurrency_by_n (KV-only path-a).
+    skip_mixed_capacity = bool(conc_blocks) and (
+        kv_only
+        or isiro_kv_on
+        or isinstance(summary.get("concurrency_by_n"), list)
     )
-    show_equal = equal_batch is not None and not skip_equal
-    if show_equal:
-        lines.extend(_section_equal_batch(equal_batch))
-    cap_letter = "D" if show_equal else "C"
-    if capacity is not None and experiment_kind == "capacity":
+    if conc_blocks:
+        bad = validate_concurrency_blocks(conc_blocks)
+        if bad:
+            raise ValueError(
+                "concurrency fairness: " + "; ".join(bad)
+            )
+        lines.extend(_section_concurrency(conc_blocks))
+    if (
+        capacity is not None
+        and experiment_kind == "capacity"
+        and not skip_mixed_capacity
+    ):
+        cap_letter = "D" if conc_blocks else "C"
         lines.extend(
             _section_c(
                 capacity,
@@ -1171,17 +1253,17 @@ def _mode_sections(
             _section_generation(
                 capacity,
                 decode_rows,
-                mention_equal_batch=show_equal,
+                mention_equal_batch=False,
                 as_subsection=True,
             )
         )
-    else:
+    elif not conc_blocks:
         lines.extend(
             _section_generation(
                 None,
                 decode_rows,
-                letter=cap_letter,
-                mention_equal_batch=show_equal,
+                letter="C",
+                mention_equal_batch=False,
                 as_subsection=False,
             )
         )

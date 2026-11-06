@@ -11,9 +11,9 @@ Compared:
 - **Baseline:** vLLM (`vllm serve` / Docker `vllm/vllm-openai`) with `--kv-cache-dtype fp8`
 - **Isiro KV-only:** `vllm serve` + `ISIRO_KV=fp8` (same AWQ/HF weights as baseline; no TIC weight claim)
 
-Section A: loaded weights and Available KV GiB are shared (same raw weights, same vendor util). KV tokens capacity and Capacity concurrency follow the measured Isiro/Baseline token ratio on that budget. KV bytes vs context are under KV vs context when the curve ran.
+Section A: loaded weights and Available KV GiB are shared (same raw weights, same vendor util). KV tokens capacity follows the measured Isiro/Baseline token ratio on that budget. KV bytes vs context are under KV vs context when the curve ran. Section C concurrency uses the same N both arms at each load point.
 
-TIME claim: **GO** on equal-batch (conc=8; tok/s 525.17 vs 525.23; ITL 14.76 vs 14.76; TTFT 134.06 vs 132.77).
+TIME claim: **GO** on concurrency (N=8; tok/s 525.17 vs 525.23; ITL 14.76 vs 14.76; TTFT 134.06 vs 132.77).
 
 ## Correctness
 
@@ -50,15 +50,17 @@ Same Available KV GiB both arms. Isiro KV fits more tokens in that pool (measure
 
 ### KV vs context
 
-`ISIRO_KV=fp8` on KV from a Project Gutenberg text forward. At T=262,144: Baseline KV 8.00 GiB, Isiro KV 6.32 GiB; save 1.68 GiB (21.0%). That save rate meters KV tokens capacity (and Capacity concurrency).
+`ISIRO_KV=fp8` on KV from a Project Gutenberg text forward. At T=262,144: Baseline KV 8.00 GiB, Isiro KV 6.32 GiB; save 1.68 GiB (21.0%). That save rate meters KV tokens capacity.
 
 Figure. KV vs 1-user context.
 
 ![KV vs 1-user context](kv-bytes-vs-context.png)
 
-## C. Equal batch
+## C. Concurrency
 
-Same concurrent-request ceiling as Baseline (latency-matched surface). Capacity-matched generation in D raises concurrency for aggregate tok/s; ITL/TTFT there are not the equal-batch claim.
+Same concurrent-request ceiling both arms at each N (no mismatched Baseline/Isiro N). Section A KV tokens capacity is why higher N is in scope.
+
+### Concurrent requests = 8
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
@@ -68,26 +70,15 @@ Same concurrent-request ceiling as Baseline (latency-matched surface). Capacity-
 | TPOT (ms) p50 / p95 / p99 | 14.77 / 14.86 / 14.89 | 14.76 / 14.85 / 14.89 |
 | TTFT (ms) p50 / p95 / p99 | 132.77 / 133.09 / 133.11 | 134.06 / 134.34 / 134.37 |
 
-## D. Capacity
-
-Isiro concurrent requests = round(Baseline × Isiro/Baseline KV token capacity), then rounded up onto the vLLM CUDA-graph capture stride (multiples of 8) so FULL decode graphs cover concurrency.
-
-Concurrent requests are the serve max concurrent sequences (`max_num_seqs`); the bench load matches that ceiling in this A/B.
+### Concurrent requests = 16
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Concurrent requests | 8 | **16** (**+100%**) |
-
-### Generation (recall-matched KV, input 32 / output 256)
-
-Tok/s is aggregate system throughput across in-flight requests. Per-request decode rate is reflected by ITL/TPOT. Concurrent requests are in Capacity. Not equal batch (C). Latency-matched wins live in Equal batch (same conc as Baseline). Higher Capacity concurrency raises aggregate tok/s and can move TTFT/ITL.
-
-| Metric | Baseline | Isiro |
-|--------|----------|-------|
-| Output tok/s | 525.23 | **946.34** (**+80%**) |
-| ITL (ms) p50 / p95 / p99 | 14.76 / 15.13 / 15.36 | 16.05 / 16.67 / 16.85 |
-| TPOT (ms) p50 / p95 / p99 | 14.77 / 14.86 / 14.89 | 16.08 / 16.16 / 16.35 |
-| TTFT (ms) p50 / p95 / p99 | 132.77 / 133.09 / 133.11 | 225.47 / 226.36 / 226.37 |
+| Concurrent requests | 16 | 16 |
+| Output tok/s | 942.96 | 944.74 |
+| ITL (ms) p50 / p95 / p99 | 16.09 / 17.22 / 17.65 | 16.09 / 17.12 / 17.53 |
+| TPOT (ms) p50 / p95 / p99 | 16.19 / 16.46 / 16.46 | 16.14 / 16.41 / 16.41 |
+| TTFT (ms) p50 / p95 / p99 | 213.75 / 214.42 / 214.53 | 217.27 / 217.99 / 218.15 |
 
 ## Config
 

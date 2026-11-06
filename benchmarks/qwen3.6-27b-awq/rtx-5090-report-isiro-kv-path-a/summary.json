@@ -1,0 +1,277 @@
+{
+  "attention": {
+    "baseline": {
+      "attention_backend": "FLASH_ATTN",
+      "isiro_attn": "unset"
+    },
+    "tic": {
+      "attention_backend": "FLASH_ATTN",
+      "isiro_attn": "unset"
+    }
+  },
+  "commands_ref": "commands.json",
+  "correctness": {
+    "artifact_kind": "directory",
+    "bit_exact_ok": true,
+    "integrity_ok": true,
+    "kv_bit_exact_alphabet": "fp8",
+    "kv_bit_exact_avg_bpv": 3.9893445745828084,
+    "kv_bit_exact_fa_bpv": 8.0,
+    "kv_bit_exact_ok": true,
+    "serve_output_match_matched": 4,
+    "serve_output_match_ok": true,
+    "serve_output_match_prompt_count": 4,
+    "tic_sha256": "44efe77450430da94d6f22e658278ab4595136b09567f49b5231418c631b5e63",
+    "verify_command": [],
+    "verify_mode": "skipped"
+  },
+  "environment_ref": "environment.json",
+  "equal_batch": {
+    "baseline_ref": "equal_batch/baseline/generation-32-256.json",
+    "decode_output_tokens_per_sec": {
+      "baseline": 525.2268,
+      "tic": 525.1735
+    },
+    "label": "capacity benefit not active",
+    "latency_ms": {
+      "baseline": {
+        "e2e_p50": null,
+        "e2e_p95": null,
+        "e2e_p99": null,
+        "itl_p50": 14.764,
+        "itl_p95": 15.133,
+        "itl_p99": 15.36,
+        "tpot_p50": 14.767,
+        "tpot_p95": 14.855,
+        "tpot_p99": 14.893,
+        "ttft_p50": 132.771,
+        "ttft_p95": 133.087,
+        "ttft_p99": 133.108
+      },
+      "tic": {
+        "e2e_p50": null,
+        "e2e_p95": null,
+        "e2e_p99": null,
+        "itl_p50": 14.757,
+        "itl_p95": 15.125,
+        "itl_p99": 15.284,
+        "tpot_p50": 14.763,
+        "tpot_p95": 14.85,
+        "tpot_p99": 14.888,
+        "ttft_p50": 134.057,
+        "ttft_p95": 134.343,
+        "ttft_p99": 134.368
+      }
+    },
+    "max_concurrency": 8,
+    "max_num_seqs": 8,
+    "schema": "isiro-benchmark-equal-batch-v1",
+    "throughput_ratio_derived": 0.9999,
+    "tic_ref": "equal_batch/isiro/generation-32-256.json",
+    "baseline_max_num_seqs": 8,
+    "tic_max_num_seqs": 8
+  },
+  "experiment_kind": "equal-batch",
+  "fairness": {
+    "mismatches": [],
+    "passed": true
+  },
+  "footprint": {
+    "baseline": {
+      "gpu_process_memory_after_load_bytes_measured": 27692892160,
+      "gpu_requested_memory_bytes_derived": 28625957028,
+      "gpu_requested_memory_bytes_reported": 28625957028,
+      "model_loading_bytes_reported": 21388937134,
+      "non_kv_cache_memory_bytes_reported": 23697482056,
+      "on_disk_bytes_measured": 21853077544,
+      "weights_and_non_kv_from_process_bytes_derived": 23312025518,
+      "weights_and_non_kv_gpu_memory_bytes_derived": 23697482056
+    },
+    "on_disk_savings_pct_derived": 0.0,
+    "tic": {
+      "gpu_process_memory_after_load_bytes_measured": 27787264000,
+      "gpu_process_memory_after_ready_bytes_measured": 27562868736,
+      "gpu_process_memory_for_non_kv_bytes_measured": 27562868736,
+      "gpu_requested_memory_bytes_derived": 28625957028,
+      "gpu_requested_memory_bytes_reported": 28625957028,
+      "model_loading_bytes_reported": 21388937134,
+      "non_kv_cache_memory_bytes_reported": 23718956892,
+      "on_disk_bytes_measured": 21853077544,
+      "weights_and_non_kv_from_process_bytes_derived": 23203476931,
+      "weights_and_non_kv_gpu_memory_bytes_derived": 23718956892
+    }
+  },
+  "isiro_compiler": "kv-only",
+  "isiro_format": "kv-only",
+  "isiro_runtime": "kv-only",
+  "kv_cache": {
+    "baseline_memory_bytes_measured": 4380866642,
+    "baseline_tokens_measured": 77368,
+    "tic_memory_bytes_measured": 4359391805,
+    "tic_tokens_measured": 76458
+  },
+  "model": "qwen3.6-27b-awq",
+  "precision": "awq",
+  "profiles": [
+    {
+      "baseline": {
+        "latency_ms": {
+          "e2e_p50": null,
+          "e2e_p95": null,
+          "e2e_p99": null,
+          "itl_p50": 14.764,
+          "itl_p95": 15.133,
+          "itl_p99": 15.36,
+          "tpot_p50": 14.767,
+          "tpot_p95": 14.855,
+          "tpot_p99": 14.893,
+          "ttft_p50": 132.771,
+          "ttft_p95": 133.087,
+          "ttft_p99": 133.108
+        },
+        "throughput": {
+          "output_tokens_per_sec": 525.2268,
+          "requests_per_sec": 2.0517,
+          "total_output_tokens": 2048
+        }
+      },
+      "baseline_ref": "baseline/generation-32-256.json",
+      "input_tokens": 32,
+      "output_tokens": 256,
+      "profile": "generation-32-256",
+      "tic": {
+        "latency_ms": {
+          "e2e_p50": null,
+          "e2e_p95": null,
+          "e2e_p99": null,
+          "itl_p50": 16.052,
+          "itl_p95": 16.667,
+          "itl_p99": 16.85,
+          "tpot_p50": 16.081,
+          "tpot_p95": 16.162,
+          "tpot_p99": 16.352,
+          "ttft_p50": 225.474,
+          "ttft_p95": 226.364,
+          "ttft_p99": 226.367
+        },
+        "throughput": {
+          "output_tokens_per_sec": 946.3363,
+          "requests_per_sec": 3.6966,
+          "total_output_tokens": 4096
+        }
+      },
+      "tic_ref": "isiro/generation-32-256.json"
+    }
+  ],
+  "publish_quality": true,
+  "recorded_at": "2026-11-06T02:42:36.564915+00:00",
+  "run_id": "20261106T023314Z-rtx-5090",
+  "schema": "isiro-benchmark-summary-v1",
+  "smoke": false,
+  "system_id": "rtx-5090",
+  "concurrency_by_n": [
+    {
+      "baseline_ref": "equal_batch/baseline/generation-32-256.json",
+      "decode_output_tokens_per_sec": {
+        "baseline": 525.2268,
+        "tic": 525.1735
+      },
+      "label": "capacity benefit not active",
+      "latency_ms": {
+        "baseline": {
+          "e2e_p50": null,
+          "e2e_p95": null,
+          "e2e_p99": null,
+          "itl_p50": 14.764,
+          "itl_p95": 15.133,
+          "itl_p99": 15.36,
+          "tpot_p50": 14.767,
+          "tpot_p95": 14.855,
+          "tpot_p99": 14.893,
+          "ttft_p50": 132.771,
+          "ttft_p95": 133.087,
+          "ttft_p99": 133.108
+        },
+        "tic": {
+          "e2e_p50": null,
+          "e2e_p95": null,
+          "e2e_p99": null,
+          "itl_p50": 14.757,
+          "itl_p95": 15.125,
+          "itl_p99": 15.284,
+          "tpot_p50": 14.763,
+          "tpot_p95": 14.85,
+          "tpot_p99": 14.888,
+          "ttft_p50": 134.057,
+          "ttft_p95": 134.343,
+          "ttft_p99": 134.368
+        }
+      },
+      "max_concurrency": 8,
+      "max_num_seqs": 8,
+      "schema": "isiro-benchmark-equal-batch-v1",
+      "throughput_ratio_derived": 0.9999,
+      "tic_ref": "equal_batch/isiro/generation-32-256.json",
+      "baseline_max_num_seqs": 8,
+      "tic_max_num_seqs": 8
+    },
+    {
+      "schema": "isiro-benchmark-equal-batch-v1",
+      "label": "capacity benefit not active",
+      "max_num_seqs": 16,
+      "max_concurrency": 16,
+      "baseline_max_num_seqs": 16,
+      "tic_max_num_seqs": 16,
+      "decode_output_tokens_per_sec": {
+        "baseline": 942.9643,
+        "tic": 944.7426
+      },
+      "throughput_ratio_derived": 1.0019,
+      "latency_ms": {
+        "baseline": {
+          "e2e_p50": null,
+          "e2e_p95": null,
+          "e2e_p99": null,
+          "itl_p50": 16.091,
+          "itl_p95": 17.218,
+          "itl_p99": 17.646,
+          "tpot_p50": 16.189,
+          "tpot_p95": 16.464,
+          "tpot_p99": 16.464,
+          "ttft_p50": 213.753,
+          "ttft_p95": 214.418,
+          "ttft_p99": 214.525
+        },
+        "tic": {
+          "e2e_p50": null,
+          "e2e_p95": null,
+          "e2e_p99": null,
+          "itl_p50": 16.087,
+          "itl_p95": 17.116,
+          "itl_p99": 17.527,
+          "tpot_p50": 16.143,
+          "tpot_p95": 16.412,
+          "tpot_p99": 16.413,
+          "ttft_p50": 217.267,
+          "ttft_p95": 217.992,
+          "ttft_p99": 218.147
+        }
+      },
+      "run_id_baseline": "20261106T141511Z-rtx-5090",
+      "run_id_tic": "20261106T141511Z-rtx-5090"
+    }
+  ],
+  "isiro_kv_bytes": {
+    "image": "kv-bytes-vs-context.png",
+    "alphabet": "fp8",
+    "live_window": 512,
+    "fa_bpv": 8.0,
+    "max_t": 262144,
+    "baseline_kv_gib_at_max_t": 8.0,
+    "isiro_kv_gib_at_max_t": 6.32153754029423,
+    "save_gib_at_max_t": 1.67846245970577,
+    "save_at_max_t": 0.20980780746322125,
+    "payload_bpv_at_max_t": 6.318252877946469,
+    "ok": true
+  }
+}

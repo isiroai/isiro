@@ -1281,7 +1281,7 @@ def render_png(
         )
         ax_conc.set_xticks(x, labels)
         ax_conc.set_ylabel("Concurrent requests")
-        ax_conc.set_title("Capacity concurrency", fontsize=11, pad=6)
+        ax_conc.set_title("Concurrent requests (KV-scaled)", fontsize=11, pad=6)
         ax_conc.set_ylim(bottom=0.0)
         ax_conc.grid(True, axis="y", alpha=0.28)
         for bar, val in zip(bars1, (b_c, t_c)):
