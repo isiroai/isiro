@@ -50,7 +50,7 @@ Same Available KV GiB both arms. Isiro KV fits more tokens in that pool (measure
 
 ### KV vs context
 
-`ISIRO_KV=fp8` on KV from a Project Gutenberg text forward. At T=262,144: Baseline KV 8.00 GiB, Isiro KV 6.32 GiB; save 1.68 GiB (21.0%).
+`ISIRO_KV=fp8` on KV from a Project Gutenberg text forward. At T=262,144: Baseline KV 8.00 GiB, Isiro KV 6.32 GiB; save 1.68 GiB (21.0%). That save rate meters KV tokens capacity (and Capacity concurrency).
 
 Figure. KV vs 1-user context.
 
@@ -84,7 +84,7 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 525.23 | **946.34** |
+| Output tok/s | 525.23 | **946.34** (**+80%**) |
 | ITL (ms) p50 / p95 / p99 | 14.76 / 15.13 / 15.36 | 16.05 / 16.67 / 16.85 |
 | TPOT (ms) p50 / p95 / p99 | 14.77 / 14.86 / 14.89 | 16.08 / 16.16 / 16.35 |
 | TTFT (ms) p50 / p95 / p99 | 132.77 / 133.09 / 133.11 | 225.47 / 226.36 / 226.37 |

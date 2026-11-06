@@ -1727,9 +1727,13 @@ class BenchmarkTests(unittest.TestCase):
             )
             summary["correctness"]["kv_bit_exact_ok"] = True
             summary["correctness"]["kv_bit_exact_alphabet"] = "bf16"
-            # Bitexact bpv → coded capacity fold (no curve needed).
-            summary["correctness"]["kv_bit_exact_avg_bpv"] = 6.603098788094933
-            summary["correctness"]["kv_bit_exact_fa_bpv"] = 16.0
+            # Capacity fold from real curve only (never bitexact Shannon).
+            summary["isiro_kv_bytes"] = {
+                "save_at_max_t": 0.21,
+                "live_window": 512,
+                "payload_bpv_at_max_t": 6.32,
+                "fa_bpv": 8.0,
+            }
             summary["footprint"]["baseline"]["model_loading_bytes_reported"] = (
                 19 * 1024**3
             )
@@ -1785,6 +1789,80 @@ class BenchmarkTests(unittest.TestCase):
             # Coded capacity lives under Section A.
             self.assertIn("### KV tokens capacity", report.split("## D. Capacity")[0])
 
+    def test_isiro_kv_vs_context_blurb_meters_savings_rate(self) -> None:
+        from generate_report import _section_isiro_kv_bytes
+
+        lines = _section_isiro_kv_bytes(
+            {
+                "isiro_kv_bytes": {
+                    "image": "kv-bytes-vs-context.png",
+                    "alphabet": "fp8",
+                    "max_t": 262144,
+                    "baseline_kv_gib_at_max_t": 8.0,
+                    "isiro_kv_gib_at_max_t": 6.32,
+                    "save_gib_at_max_t": 1.68,
+                    "save_at_max_t": 0.21,
+                }
+            }
+        )
+        blurb = "\n".join(lines)
+        self.assertIn("### KV vs context", blurb)
+        self.assertIn("That save rate meters KV tokens capacity", blurb)
+        self.assertIn("(and Capacity concurrency)", blurb)
+
+    def test_capacity_tok_s_shows_pct_gain_equal_batch_does_not(self) -> None:
+        from generate_report import _section_equal_batch, _section_generation
+
+        cap = _section_generation(
+            {
+                "decode_output_tokens_per_sec": {
+                    "baseline": 525.23,
+                    "tic": 946.34,
+                }
+            },
+            [],
+            letter="D",
+            as_subsection=True,
+        )
+        cap_txt = "\n".join(cap)
+        self.assertIn("| Output tok/s | 525.23 | **946.34** (**+80%**) |", cap_txt)
+        eq = _section_equal_batch(
+            {
+                "max_num_seqs": 8,
+                "decode_output_tokens_per_sec": {
+                    "baseline": 525.23,
+                    "tic": 525.17,
+                },
+                "latency_ms": {
+                    "baseline": {
+                        "itl_p50": 14.76,
+                        "itl_p95": 15.13,
+                        "itl_p99": 15.36,
+                        "tpot_p50": 14.77,
+                        "tpot_p95": 14.86,
+                        "tpot_p99": 14.89,
+                        "ttft_p50": 132.77,
+                        "ttft_p95": 133.09,
+                        "ttft_p99": 133.11,
+                    },
+                    "tic": {
+                        "itl_p50": 14.76,
+                        "itl_p95": 15.12,
+                        "itl_p99": 15.28,
+                        "tpot_p50": 14.76,
+                        "tpot_p95": 14.85,
+                        "tpot_p99": 14.89,
+                        "ttft_p50": 134.06,
+                        "ttft_p95": 134.34,
+                        "ttft_p99": 134.37,
+                    },
+                },
+            }
+        )
+        eq_txt = "\n".join(eq)
+        self.assertIn("| Output tok/s | 525.23 | 525.17 |", eq_txt)
+        self.assertNotIn("+%", eq_txt.split("| Output tok/s |", 1)[1].split("\n", 1)[0])
+
     def test_fold_coded_capacity_prefers_curve_over_synthetic_bitexact(self) -> None:
         from generate_report import _fold_coded_kv_capacity
 
@@ -1811,6 +1889,26 @@ class BenchmarkTests(unittest.TestCase):
             int(kv["tic_tokens_coded"]) / float(kv["baseline_tokens_coded"]),
             1.5,
         )
+
+    def test_fold_coded_capacity_bans_synthetic_bitexact_shannon(self) -> None:
+        """Bitexact avg_bpv_meter (Shannon) must not drive capacity alone."""
+        from generate_report import _fold_coded_kv_capacity
+
+        summary = {
+            "kv_cache": {
+                "baseline_tokens_measured": 77368,
+                "tic_tokens_measured": 77368,
+            },
+            "correctness": {
+                "kv_bit_exact_avg_bpv": 3.99,
+                "kv_bit_exact_fa_bpv": 8.0,
+            },
+        }
+        _fold_coded_kv_capacity(summary)
+        kv = summary["kv_cache"]
+        self.assertEqual(int(kv["baseline_tokens_coded"]), 77368)
+        self.assertEqual(int(kv["tic_tokens_coded"]), 77368)
+        self.assertNotIn("isiro_kv_capacity_s", kv)
 
     def test_fold_isiro_kv_bitexact_required(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

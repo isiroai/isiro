@@ -592,9 +592,9 @@ def _fold_coded_kv_capacity(summary: dict[str, Any]) -> dict[str, Any]:
 
     s: float | None = None
     w = 512
-    # Prefer Gutenberg / real KV-vs-context curve for capacity. Bitexact uses a
-    # tiny synthetic page for roundtrip PASS only; its avg_bpv must not drive
-    # customer KV tokens capacity when a real curve exists.
+    # Capacity savings SSOT: Gutenberg / real KV-vs-context curve only.
+    # Bitexact avg_bpv is Shannon on a synthetic page (avg_bpv_meter); never
+    # fold it into customer KV tokens capacity.
     isiro_kv_doc = summary.get("isiro_kv_bytes")
     if isinstance(isiro_kv_doc, dict):
         raw_w = isiro_kv_doc.get("live_window")
@@ -603,14 +603,19 @@ def _fold_coded_kv_capacity(summary: dict[str, Any]) -> dict[str, Any]:
         raw_s = isiro_kv_doc.get("save_at_max_t")
         if isinstance(raw_s, (int, float)) and 0.0 < float(raw_s) < 1.0:
             s = float(raw_s)
-    if s is None:
-        corr = summary.get("correctness")
-        if isinstance(corr, dict):
-            avg = corr.get("kv_bit_exact_avg_bpv")
-            fa = corr.get("kv_bit_exact_fa_bpv")
-            if isinstance(avg, (int, float)) and isinstance(fa, (int, float)):
+        if s is None:
+            # Payload bpv from the same real curve (not bitexact Shannon).
+            payload = isiro_kv_doc.get("payload_bpv_at_max_t")
+            fa_bpv = isiro_kv_doc.get("fa_bpv")
+            if (
+                isinstance(payload, (int, float))
+                and isinstance(fa_bpv, (int, float))
+                and float(fa_bpv) > 0.0
+            ):
                 try:
-                    s = isiro_kv_cold_savings_from_bpv(float(avg), float(fa))
+                    s = isiro_kv_cold_savings_from_bpv(
+                        float(payload), float(fa_bpv)
+                    )
                 except ValueError:
                     s = None
     if s is None or s <= 0.0:
@@ -898,10 +903,20 @@ def _section_generation(
             and isinstance(t_tps, (int, float))
             and float(t_tps) > float(b_tps)
         )
+        tps_cell = bold_win(number(t_tps), win=tps_win)
+        if (
+            isinstance(b_tps, (int, float))
+            and isinstance(t_tps, (int, float))
+            and float(b_tps) > 0.0
+            and float(t_tps) != float(b_tps)
+        ):
+            gain = pct_gain_from_ratio(float(t_tps) / float(b_tps))
+            if gain:
+                tps_cell = f"{tps_cell} ({bold_win(gain, win=tps_win)})"
         lines.append(
             "| Output tok/s | "
             f"{number(b_tps)} | "
-            f"{bold_win(number(t_tps), win=tps_win)} |"
+            f"{tps_cell} |"
         )
     elif decode_rows:
         row = decode_rows[0]
@@ -1061,7 +1076,9 @@ def _section_isiro_kv_bytes(summary: dict[str, Any]) -> list[str]:
         "",
         (
             f"`ISIRO_KV={alphabet}` on KV from a Project Gutenberg text "
-            f"forward. {save_line}{weight_line}{capacity_line}"
+            f"forward. {save_line} That save rate meters KV tokens capacity "
+            f"(and Capacity concurrency)."
+            f"{weight_line}{capacity_line}"
         ),
         "",
         fig_caption,
@@ -1497,15 +1514,22 @@ def write_report(run_dir: Path, output: Path) -> Path:
             summary_path = temp / "summary.json"
             if summary_path.is_file():
                 summary = load_json(summary_path)
+                payload_bpv = last.get("payload_bpv") if pts else None
                 summary["isiro_kv_bytes"] = {
                     "image": dest_png.name,
                     "alphabet": isiro_kv_doc.get("alphabet"),
                     "live_window": isiro_kv_doc.get("live_window"),
+                    "fa_bpv": isiro_kv_doc.get("fa_bpv"),
                     "max_t": max_t,
                     "baseline_kv_gib_at_max_t": b_gib,
                     "isiro_kv_gib_at_max_t": t_gib,
                     "save_gib_at_max_t": save_gib,
                     "save_at_max_t": save_max,
+                    "payload_bpv_at_max_t": (
+                        float(payload_bpv)
+                        if isinstance(payload_bpv, (int, float))
+                        else None
+                    ),
                     "baseline_weight_gib": b_w_gib,
                     "isiro_weight_gib": t_w_gib,
                     "capacity_bars": bool(used_capacity_bars),
