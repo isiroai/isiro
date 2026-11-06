@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `kv-only` | runtime `kv-only` | 2026-11-05 23:16 UTC
+`awq` | `rtx-5090` | compiler `kv-only` | runtime `kv-only` | 2026-11-06 01:46 UTC
 
 Tooling:
 
@@ -11,47 +11,42 @@ Compared:
 - **Baseline:** vLLM (`vllm serve` / Docker `vllm/vllm-openai`) with `--kv-cache-dtype fp8`
 - **Isiro KV-only:** `vllm serve` + `ISIRO_KV=fp8` (same AWQ/HF weights as baseline; no TIC weight claim; cold KV compress on vendor attention pages)
 
-Section A Available KV is the vendor reserved pool (GiB). KV tokens capacity applies Isiro KV cold packing on that budget. Measured cold vs FA twin bytes (when the curve ran) are under KV vs context.
+Section A: loaded weights and Available KV GiB are shared (same raw weights, same vendor util). KV tokens capacity is Isiro KV cold packing on that budget; Capacity concurrency scales from the coded token ratio. Measured cold vs FA twin bytes (when the curve ran) are under KV vs context.
 
-TIME claim: **GO** on path **(a)** remeter `20261105T230832Z` (FUSED=0, fp8 KV,
-`LIVE_WINDOW=512`). Equal-batch TTFT/ITL/tok match or beat baseline (TTFT 41.61
-vs 43.02; ITL 13.17 vs 13.21; tok/s 75.27 vs 75.08). Match PASS; KV bitexact
-PASS. Dens invent stays off this stamp (`attend=(a)`).
+TIME claim: **NO GO** on path **(a)** equal-batch (conc=8; tok/s 524.76 vs 525.92; ITL 14.76 vs 14.77; TTFT 136.62 vs 126.86). Dens invent stays off this stamp (`attend=(a)`).
 
 ## Correctness
 
-| Metric | Baseline | Isiro |
-|--------|----------|-------|
-| On-disk model size | 21.85 GB | **21.85 GB** (**0.00% smaller**) |
-| Integrity | baseline weights | SKIP (KV-only; same AWQ/HF weights) |
-| KV bit-exactness | vendor KV pages | **PASS** (Isiro KV `fp8` cold roundtrip) |
-| Serve output match | - | **PASS** (4/4 prompts, temp=0, token IDs equal) |
+| Metric | Result |
+|--------|--------|
+| KV bit-exactness | **PASS** (Isiro KV `fp8` cold roundtrip) |
+| Serve output match | **PASS** (4/4 prompts, temp=0, token IDs equal) |
 
 ## A. GPU memory
 
-Savings % uses `1 - Isiro/Baseline` for loaded weights.
+Loaded weights are identical on both arms (no TIC weight claim).
 
 ### Weights
 
-| Metric | Baseline | Isiro | Savings % |
-|--------|----------|-------|-----------|
-| GPU memory for loaded weights | 19.92 GiB | 19.92 GiB | 0.00% |
+| Metric | Value |
+|--------|-------|
+| GPU memory for loaded weights | 19.92 GiB |
 
 ### Available KV
 
-| Metric | Baseline | Isiro |
-|--------|----------|-------|
-| Available KV | 4.11 GiB | 4.11 GiB |
+| Metric | Value |
+|--------|-------|
+| Available KV | 4.08 GiB |
 
-Available KV is the vendor reserved pool on the GPU (same util target as Baseline).
+Available KV is the vendor reserved pool on the GPU (same util target both arms; no TIC weight headroom).
 
 ### KV tokens capacity
 
-Weight compression grows Available KV. Isiro KV then stores more tokens in that memory (hot window stays dense; cold prefix is packed). With measured s=0.50 → scale 1/(1-s) ≈ 2.01 (hot-corrected).
+Same Available KV GiB both arms. Isiro KV stores more tokens in that memory (hot window stays dense; cold prefix is packed). With measured s=0.50 → scale 1/(1-s) ≈ 2.01 (hot-corrected).
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| KV tokens capacity | 77,368 | **154,635** (**+100%**) |
+| KV tokens capacity | 77,368 | **152,810** (**+98%**) |
 
 ### KV vs context
 
@@ -63,21 +58,21 @@ Same concurrent-request ceiling as Baseline (latency-matched surface). Capacity-
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Concurrent requests | 1 | 1 |
-| Output tok/s | 75.08 | 75.27 |
-| ITL (ms) p50 / p95 / p99 | 13.21 / 13.50 / 13.69 | 13.17 / 13.49 / 13.63 |
-| TPOT (ms) p50 / p95 / p99 | 13.20 / 13.20 / 13.20 | 13.17 / 13.17 / 13.17 |
-| TTFT (ms) p50 / p95 / p99 | 43.02 / 43.02 / 43.02 | 41.61 / 41.61 / 41.61 |
+| Concurrent requests | 8 | 8 |
+| Output tok/s | 525.92 | 524.76 |
+| ITL (ms) p50 / p95 / p99 | 14.77 / 15.29 / 15.70 | 14.76 / 15.15 / 15.35 |
+| TPOT (ms) p50 / p95 / p99 | 14.77 / 14.87 / 14.87 | 14.77 / 14.85 / 14.89 |
+| TTFT (ms) p50 / p95 / p99 | 126.86 / 127.28 / 127.41 | 136.62 / 136.96 / 136.96 |
 
 ## D. Capacity
 
-Concurrent requests are 1 on both sides. Not scaled from KV token capacity.
+Isiro concurrent requests = round(Baseline × coded Isiro/Baseline KV token capacity) from Isiro KV cold packing (hot-corrected), then rounded up onto the vLLM CUDA-graph capture stride (multiples of 8) so FULL decode graphs cover concurrency.
 
 Concurrent requests are the serve max concurrent sequences (`max_num_seqs`); the bench load matches that ceiling in this A/B.
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Concurrent requests | 1 | 1 |
+| Concurrent requests | 8 | **16** (**+100%**) |
 
 ### Generation (recall-matched KV, input 32 / output 256)
 
@@ -85,10 +80,10 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 75.08 | **75.27** |
-| ITL (ms) p50 / p95 / p99 | 13.21 / 13.50 / 13.69 | 13.17 / 13.49 / 13.63 |
-| TPOT (ms) p50 / p95 / p99 | 13.20 / 13.20 / 13.20 | 13.17 / 13.17 / 13.17 |
-| TTFT (ms) p50 / p95 / p99 | 43.02 / 43.02 / 43.02 | 41.61 / 41.61 / 41.61 |
+| Output tok/s | 525.92 | **947.32** |
+| ITL (ms) p50 / p95 / p99 | 14.77 / 15.29 / 15.70 | 16.07 / 16.61 / 16.84 |
+| TPOT (ms) p50 / p95 / p99 | 14.77 / 14.87 / 14.87 | 16.11 / 16.38 / 16.38 |
+| TTFT (ms) p50 / p95 / p99 | 126.86 / 127.28 / 127.41 | 215.37 / 215.63 / 215.80 |
 
 ## Config
 

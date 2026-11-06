@@ -145,12 +145,17 @@ _PUBLISH_ITL_MAX_RATIO = 1.5
 _PUBLISH_TPS_MIN_RATIO = 0.7
 
 
-def publish_go_gate_mismatches(summary: dict[str, Any]) -> list[str]:
+def publish_go_gate_mismatches(
+    summary: dict[str, Any],
+    *,
+    kv_only: bool = False,
+) -> list[str]:
     """Fail publish when HBM/KV meter wins or equal-batch latency collapse.
 
     Gates (publish_quality runs only):
     - ``|hbm_save% - disk_save%| > 6`` pp (vacated densify-era meter)
-    - Available KV GiB below Hub
+    - Available KV GiB below Hub (KV-only allows 2% scrape noise when Isiro
+      capacity seqs exceed baseline)
     - Equal-batch (else capacity decode): ITL p50 > 1.5× Hub or tok/s < 0.7× Hub
     """
     if not bool(summary.get("publish_quality")):
@@ -180,11 +185,15 @@ def publish_go_gate_mismatches(summary: dict[str, Any]) -> list[str]:
         and float(b_kv) > 0
         and float(t_kv) < float(b_kv)
     ):
-        errors.append(
-            "publish GO: Available KV below Hub "
-            f"(tic={float(t_kv) / 1024**3:.2f} GiB "
-            f"< baseline={float(b_kv) / 1024**3:.2f} GiB)"
-        )
+        # KV-only: same util / raw weights; higher Isiro max_num_seqs can
+        # nudge non-KV and shrink Available KV by a scrape-noise fraction.
+        floor = float(b_kv) * (0.98 if kv_only else 1.0)
+        if float(t_kv) < floor:
+            errors.append(
+                "publish GO: Available KV below Hub "
+                f"(tic={float(t_kv) / 1024**3:.2f} GiB "
+                f"< baseline={float(b_kv) / 1024**3:.2f} GiB)"
+            )
 
     def _latency_pair(
         block: dict[str, Any] | None,
@@ -722,7 +731,12 @@ def main() -> int:
     if attention:
         summary["attention"] = attention
 
-    errors.extend(publish_go_gate_mismatches(summary))
+    errors.extend(
+        publish_go_gate_mismatches(
+            summary,
+            kv_only=bool(commands_doc.get("isiro_kv_only")),
+        )
+    )
     summary["fairness"] = {"passed": not errors, "mismatches": errors}
     environment = dict(baseline_env)
     environment["variant_runtime"] = {

@@ -189,6 +189,89 @@ def scale_seqs_from_kv_measured(
     return align_seqs_to_cudagraph_stride(clamped, scale_hi)
 
 
+def default_scale_hi_from_coded(
+    baseline_seqs: int,
+    admission_tokens: int | float,
+    savings_s: float,
+    *,
+    live_window: int = 512,
+) -> int:
+    """Upper clamp from coded KV token capacity (KV-only / no weight headroom).
+
+    Allows one CUDA-graph stride bump above the rounded coded scale so
+    ``scale_seqs_from_kv_measured`` can align without clamping back to baseline.
+    """
+    if baseline_seqs < 1:
+        raise ValueError("baseline_seqs must be >= 1")
+    t_b = coded_kv_token_capacity(
+        admission_tokens,
+        savings_s=savings_s,
+        live_window=live_window,
+        apply_isiro_kv=False,
+    )
+    t_t = coded_kv_token_capacity(
+        admission_tokens,
+        savings_s=savings_s,
+        live_window=live_window,
+        apply_isiro_kv=True,
+    )
+    if t_b <= 0:
+        raise ValueError("baseline coded tokens must be positive")
+    implied = int(round(baseline_seqs * (float(t_t) / float(t_b))))
+    implied = max(baseline_seqs, implied)
+    stride = int(_CUDAGRAPH_CAPTURE_STRIDE)
+    if implied < stride:
+        return implied
+    # Headroom for align-up onto the capture grid.
+    return max(implied, ((implied + stride - 1) // stride) * stride)
+
+
+def scale_seqs_from_kv_coded(
+    baseline_seqs: int,
+    admission_tokens: int | float,
+    savings_s: float,
+    scale_hi: int,
+    *,
+    live_window: int = 512,
+) -> int:
+    """Scale max_num_seqs from Isiro KV coded token capacity (same Available KV)."""
+    t_b = coded_kv_token_capacity(
+        admission_tokens,
+        savings_s=savings_s,
+        live_window=live_window,
+        apply_isiro_kv=False,
+    )
+    t_t = coded_kv_token_capacity(
+        admission_tokens,
+        savings_s=savings_s,
+        live_window=live_window,
+        apply_isiro_kv=True,
+    )
+    return scale_seqs_from_kv_measured(baseline_seqs, t_b, t_t, scale_hi)
+
+
+def kv_scale_ratio_coded(
+    admission_tokens: int | float,
+    savings_s: float,
+    *,
+    live_window: int = 512,
+) -> float:
+    """Coded Isiro/Baseline KV token ratio (hot-corrected)."""
+    t_b = coded_kv_token_capacity(
+        admission_tokens,
+        savings_s=savings_s,
+        live_window=live_window,
+        apply_isiro_kv=False,
+    )
+    t_t = coded_kv_token_capacity(
+        admission_tokens,
+        savings_s=savings_s,
+        live_window=live_window,
+        apply_isiro_kv=True,
+    )
+    return kv_scale_ratio_measured(t_b, t_t)
+
+
 def kv_scale_ratio_measured(
     kv_baseline_tokens: int | float,
     kv_tic_tokens: int | float,
@@ -429,6 +512,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     rm.add_argument("--kv-baseline-tokens", type=int, required=True)
     rm.add_argument("--kv-tic-tokens", type=int, required=True)
+    sc = sub.add_parser(
+        "scale-seqs-coded",
+        help="TIC max_num_seqs from Isiro KV coded token capacity",
+    )
+    sc.add_argument("--baseline-seqs", type=int, required=True)
+    sc.add_argument("--admission-tokens", type=int, required=True)
+    sc.add_argument("--savings-s", type=float, required=True)
+    sc.add_argument("--live-window", type=int, default=512)
+    sc.add_argument("--scale-hi", type=int, default=0)
+    rc = sub.add_parser(
+        "kv-scale-ratio-coded",
+        help="coded Isiro/Baseline KV token ratio",
+    )
+    rc.add_argument("--admission-tokens", type=int, required=True)
+    rc.add_argument("--savings-s", type=float, required=True)
+    rc.add_argument("--live-window", type=int, default=512)
+    shc = sub.add_parser(
+        "default-scale-hi-coded",
+        help="scale_hi from coded KV token capacity (KV-only)",
+    )
+    shc.add_argument("--baseline-seqs", type=int, required=True)
+    shc.add_argument("--admission-tokens", type=int, required=True)
+    shc.add_argument("--savings-s", type=float, required=True)
+    shc.add_argument("--live-window", type=int, default=512)
     bt = sub.add_parser(
         "one-wave-batched-tokens",
         help="capacity harness max_num_batched_tokens (or empty if default fits)",
@@ -492,6 +599,43 @@ def main(argv: list[str] | None = None) -> int:
             args.kv_tic_tokens,
         )
         print(f"{ratio:.6f}")
+        return 0
+    if args.cmd == "scale-seqs-coded":
+        scale_hi = int(args.scale_hi)
+        if scale_hi < 1:
+            scale_hi = default_scale_hi_from_coded(
+                args.baseline_seqs,
+                args.admission_tokens,
+                args.savings_s,
+                live_window=args.live_window,
+            )
+        print(
+            scale_seqs_from_kv_coded(
+                args.baseline_seqs,
+                args.admission_tokens,
+                args.savings_s,
+                scale_hi,
+                live_window=args.live_window,
+            )
+        )
+        return 0
+    if args.cmd == "kv-scale-ratio-coded":
+        ratio = kv_scale_ratio_coded(
+            args.admission_tokens,
+            args.savings_s,
+            live_window=args.live_window,
+        )
+        print(f"{ratio:.6f}")
+        return 0
+    if args.cmd == "default-scale-hi-coded":
+        print(
+            default_scale_hi_from_coded(
+                args.baseline_seqs,
+                args.admission_tokens,
+                args.savings_s,
+                live_window=args.live_window,
+            )
+        )
         return 0
     if args.cmd == "one-wave-batched-tokens":
         budget = one_wave_batched_tokens(

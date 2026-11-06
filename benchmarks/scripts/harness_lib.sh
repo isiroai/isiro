@@ -2380,6 +2380,111 @@ scale_tic_seqs_from_baseline_kv() {
   echo "capacity KV-scale (weight-estimate): baseline_seqs=${BASELINE_CAPACITY_SEQS} tic_seqs=${TIC_CAPACITY_SEQS} conc=${BASELINE_CONC}/${TIC_CONC} est_kv_ratio=${ratio} scale_hi=${scale_hi}" >&2
 }
 
+read_isiro_kv_cold_savings_s() {
+  # Prints savings s in (0,1) from curve or bitexact; empty if unavailable.
+  python3 - \
+    "${RUN_DIR}/isiro_kv_bytes_curve.json" \
+    "${RUN_DIR}/isiro_kv_bitexact.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+def _s_from_curve(path: Path):
+    if not path.is_file():
+        return None
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    raw = doc.get("save_at_max_t")
+    if isinstance(raw, (int, float)) and 0.0 < float(raw) < 1.0:
+        return float(raw)
+    return None
+
+def _s_from_bitexact(path: Path):
+    if not path.is_file():
+        return None
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    avg = doc.get("avg_bpv")
+    fa = doc.get("fa_bpv")
+    if not isinstance(avg, (int, float)) or not isinstance(fa, (int, float)):
+        return None
+    fa_f = float(fa)
+    if fa_f <= 0:
+        return None
+    s = 1.0 - (float(avg) / fa_f)
+    if 0.0 < s < 1.0:
+        return s
+    return None
+
+curve, bitexact = Path(sys.argv[1]), Path(sys.argv[2])
+s = _s_from_curve(curve)
+if s is None:
+    s = _s_from_bitexact(bitexact)
+if s is None:
+    print("")
+else:
+    print(f"{s:.8f}")
+PY
+}
+
+scale_tic_seqs_from_coded_kv() {
+  # KV-only: same Available KV GiB; raise max_num_seqs from coded token capacity.
+  local kv_base_tokens savings_s live_w scale_hi ratio_coded
+  kv_base_tokens="$(read_env_kv_tokens "${RUN_DIR}/baseline_environment.json")"
+  savings_s="$(read_isiro_kv_cold_savings_s)"
+  if [[ -z "${savings_s}" ]]; then
+    echo "capacity KV-scale (coded): missing cold savings s (bitexact/curve); leaving matched seqs" >&2
+    TIC_CAPACITY_SEQS="${BASELINE_CAPACITY_SEQS}"
+    CAPACITY_SEQS_SCALE_MODE="matched"
+    CAPACITY_KV_SCALE_RATIO_MEAS=""
+    CAPACITY_SEQS_IMPLIED_KV_MEAS=""
+    CAPACITY_KV_MEASURED_SOURCE=""
+    _apply_tic_conc_from_seqs
+    write_capacity_json "${BASELINE_CAPACITY_SEQS}" "${TIC_CAPACITY_SEQS}" \
+      "${BASELINE_CONC}" "${TIC_CONC}"
+    return 0
+  fi
+  live_w="${ISIRO_KV_LIVE_WINDOW:-512}"
+  if [[ -n "${CAPACITY_SCALE_HI:-}" ]]; then
+    scale_hi="${CAPACITY_SCALE_HI}"
+  else
+    scale_hi="$(
+      python3 "${BENCH_ROOT}/scripts/capacity_plan.py" default-scale-hi-coded \
+        --baseline-seqs "${BASELINE_CAPACITY_SEQS}" \
+        --admission-tokens "${kv_base_tokens}" \
+        --savings-s "${savings_s}" \
+        --live-window "${live_w}"
+    )"
+  fi
+  if [[ "${scale_hi}" -lt "${BASELINE_CAPACITY_SEQS}" ]]; then
+    echo "CAPACITY_SCALE_HI=${scale_hi} must be >= baseline max_num_seqs=${BASELINE_CAPACITY_SEQS}" >&2
+    exit 2
+  fi
+  CAPACITY_SEARCH_HI="${scale_hi}"
+  TIC_CAPACITY_SEQS="$(
+    python3 "${BENCH_ROOT}/scripts/capacity_plan.py" scale-seqs-coded \
+      --baseline-seqs "${BASELINE_CAPACITY_SEQS}" \
+      --admission-tokens "${kv_base_tokens}" \
+      --savings-s "${savings_s}" \
+      --live-window "${live_w}" \
+      --scale-hi "${scale_hi}"
+  )"
+  ratio_coded="$(
+    python3 "${BENCH_ROOT}/scripts/capacity_plan.py" kv-scale-ratio-coded \
+      --admission-tokens "${kv_base_tokens}" \
+      --savings-s "${savings_s}" \
+      --live-window "${live_w}"
+  )"
+  CAPACITY_SEQS_SCALE_MODE="kv_coded"
+  CAPACITY_KV_SCALE_RATIO_MEAS="${ratio_coded}"
+  CAPACITY_SEQS_IMPLIED_KV_MEAS="${TIC_CAPACITY_SEQS}"
+  CAPACITY_KV_MEASURED_SOURCE="coded_capacity"
+  CAPACITY_KV_SCALE_RATIO_EST=""
+  CAPACITY_SEQS_IMPLIED_WEIGHT=""
+  _apply_tic_conc_from_seqs
+  write_capacity_json "${BASELINE_CAPACITY_SEQS}" "${TIC_CAPACITY_SEQS}" \
+    "${BASELINE_CONC}" "${TIC_CONC}"
+  echo "capacity KV-scale (coded): baseline_seqs=${BASELINE_CAPACITY_SEQS} tic_seqs=${TIC_CAPACITY_SEQS} conc=${BASELINE_CONC}/${TIC_CONC} coded_kv_ratio=${ratio_coded} s=${savings_s} W=${live_w} scale_hi=${scale_hi}" >&2
+}
+
 scale_tic_seqs_from_measured_kv() {
   # Opt-in: matched-seqs TIC probe, then scale from vLLM KV token ratio.
   local kv_bytes weight_b weight_t scale_hi ratio_est kv_base_tokens
@@ -2470,7 +2575,10 @@ if [[ "${EXPERIMENT_KIND}" == "capacity" ]]; then
     BASELINE_CAPACITY_SEQS="$(binary_search_max_seqs baseline)"
     CAPACITY_SEQS_SCALE_MODE="search"
   else
-    if [[ "${CAPACITY_KV_MEASURED}" -eq 1 ]]; then
+    if [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 && -n "${ISIRO_BENCH_KV}" ]]; then
+      echo "capacity operating point: baseline max_num_seqs=${SERVE_MAX_NUM_SEQS}; Isiro KV-only coded-token scaled" >&2
+      CAPACITY_SEQS_SCALE_MODE="kv_coded"
+    elif [[ "${CAPACITY_KV_MEASURED}" -eq 1 ]]; then
       echo "capacity operating point: baseline max_num_seqs=${SERVE_MAX_NUM_SEQS}; TIC measured-KV scaled (opt-in)" >&2
       CAPACITY_SEQS_SCALE_MODE="kv_measured"
     else
@@ -2711,7 +2819,10 @@ PY
 
 apply_capacity_kv_scale() {
   if [[ "${EXPERIMENT_KIND}" == "capacity" && "${CAPACITY_KV_SCALE}" -eq 1 ]]; then
-    if [[ "${CAPACITY_KV_MEASURED}" -eq 1 ]]; then
+    # KV-only: admission tokens match; scale from coded cold packing instead.
+    if [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 && -n "${ISIRO_BENCH_KV}" ]]; then
+      scale_tic_seqs_from_coded_kv
+    elif [[ "${CAPACITY_KV_MEASURED}" -eq 1 ]]; then
       scale_tic_seqs_from_measured_kv
     else
       scale_tic_seqs_from_baseline_kv

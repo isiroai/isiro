@@ -42,8 +42,11 @@ from capacity_plan import (  # noqa: E402
     coded_kv_token_capacity,
     concurrency_for_seqs,
     default_scale_hi,
+    default_scale_hi_from_coded,
     isiro_kv_capacity_scale,
     isiro_kv_cold_savings_from_bpv,
+    kv_scale_ratio_coded,
+    scale_seqs_from_kv_coded,
     scale_seqs_from_kv_estimate,
     scale_seqs_from_kv_measured,
     search_max,
@@ -653,7 +656,7 @@ class BenchmarkTests(unittest.TestCase):
         # Baseline arm: no Isiro KV.
         self.assertEqual(
             coded_kv_token_capacity(
-                47396, savings_s=0.42, live_window=512, apply_gdx=False
+                47396, savings_s=0.42, live_window=512, apply_isiro_kv=False
             ),
             47396,
         )
@@ -661,6 +664,20 @@ class BenchmarkTests(unittest.TestCase):
             isiro_kv_cold_savings_from_bpv(6.603098788094933, 16.0),
             1.0 - 6.603098788094933 / 16.0,
             places=9,
+        )
+
+    def test_scale_seqs_from_kv_coded(self) -> None:
+        # s=0.50 → coded ~2x admission; baseline 8 → ~16 (already on stride).
+        s = 0.50
+        adm = 77368
+        hi = default_scale_hi_from_coded(8, adm, s, live_window=512)
+        scaled = scale_seqs_from_kv_coded(8, adm, s, hi, live_window=512)
+        self.assertGreater(scaled, 8)
+        self.assertEqual(scaled % 8, 0)
+        # Hot window pulls ratio slightly below asymptotic 1/(1-s)=2.
+        self.assertGreater(kv_scale_ratio_coded(adm, s, live_window=512), 1.9)
+        self.assertAlmostEqual(
+            kv_scale_ratio_coded(adm, s, live_window=0), 2.0, places=6
         )
 
     def test_scale_seqs_from_kv_measured(self) -> None:
@@ -814,6 +831,16 @@ class BenchmarkTests(unittest.TestCase):
         }
         mismatches = publish_go_gate_mismatches(bad_kv)
         self.assertTrue(any("Available KV" in m for m in mismatches))
+        # KV-only: ~1% scrape noise from higher Isiro max_num_seqs is OK.
+        near = dict(bad_kv)
+        near["kv_cache"] = {
+            "baseline_memory_bytes_measured": 4 * 1024**3,
+            "tic_memory_bytes_measured": int(3.96 * 1024**3),
+        }
+        self.assertEqual(publish_go_gate_mismatches(near, kv_only=True), [])
+        self.assertTrue(
+            any("Available KV" in m for m in publish_go_gate_mismatches(near))
+        )
 
         # Joint snail: ITL and tok/s collapse (current AWQ remeter class).
         snail = {

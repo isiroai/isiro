@@ -333,7 +333,21 @@ def _section_intro(
         *compared,
         "",
     ]
-    if isiro_kv:
+    if isiro_kv_only and isiro_kv:
+        lines.extend(
+            [
+                "Section A: loaded weights and Available KV GiB are shared "
+                "(same raw weights, same vendor util). KV tokens capacity is "
+                "Isiro KV cold packing on that budget; Capacity concurrency "
+                "scales from the coded token ratio. Measured cold vs FA twin "
+                "bytes (when the curve ran) are under KV vs context.",
+                "",
+            ]
+        )
+        time_line = _kv_only_time_claim(summary)
+        if time_line:
+            lines.extend([time_line, ""])
+    elif isiro_kv:
         # Measured cold vs FA twin (when present) lives under KV vs context.
         # Coded token capacity (1/(1-s), hot-corrected) is under Section A.
         lines.extend(
@@ -345,37 +359,65 @@ def _section_intro(
                 "",
             ]
         )
-    if isiro_kv_only:
-        lines.extend(
-            [
-                "TIME claim: **NO GO** on this path_a densify-then-FA arm "
-                "(capacity may win; equal-batch tok/s / ITL / TTFT are measured "
-                "regressions until ZipFusion-style fused tile invent lands a "
-                "wall dens/kv win).",
-                "",
-            ]
-        )
     return lines
 
 
-def _serve_output_match_row(correctness: dict[str, Any]) -> str:
+def _kv_only_time_claim(summary: dict[str, Any]) -> str | None:
+    """Equal-batch TIME stamp for KV-only path (a): tok/s, ITL, TTFT vs Hub."""
+    eb = summary.get("equal_batch")
+    if not isinstance(eb, dict):
+        return None
+    tps = eb.get("decode_output_tokens_per_sec") or {}
+    lat = eb.get("latency_ms") or {}
+    b_tps = tps.get("baseline")
+    t_tps = tps.get("tic")
+    b_lat = lat.get("baseline") if isinstance(lat.get("baseline"), dict) else {}
+    t_lat = lat.get("tic") if isinstance(lat.get("tic"), dict) else {}
+    b_itl = b_lat.get("itl_p50")
+    t_itl = t_lat.get("itl_p50")
+    b_ttft = b_lat.get("ttft_p50")
+    t_ttft = t_lat.get("ttft_p50")
+    vals = (b_tps, t_tps, b_itl, t_itl, b_ttft, t_ttft)
+    if not all(isinstance(v, (int, float)) for v in vals):
+        return None
+    conc = eb.get("max_num_seqs") or eb.get("max_concurrency")
+    conc_txt = number(conc, 0) if isinstance(conc, (int, float)) else "?"
+    tok_ok = float(t_tps) >= float(b_tps) * 0.99
+    itl_ok = float(t_itl) <= float(b_itl) * 1.01
+    ttft_ok = float(t_ttft) <= float(b_ttft) * 1.01
+    go = tok_ok and itl_ok and ttft_ok
+    verdict = "GO" if go else "NO GO"
+    return (
+        f"TIME claim: **{verdict}** on path **(a)** equal-batch "
+        f"(conc={conc_txt}; tok/s {number(t_tps)} vs {number(b_tps)}; "
+        f"ITL {number(t_itl)} vs {number(b_itl)}; "
+        f"TTFT {number(t_ttft)} vs {number(b_ttft)}). "
+        "Dens invent stays off this stamp (`attend=(a)`)."
+    )
+
+
+def _serve_output_match_detail(correctness: dict[str, Any]) -> str:
     ok = correctness.get("serve_output_match_ok")
     if ok is None:
-        return "| Serve output match | - | not run |"
+        return "not run"
     status = _bit_exact_cell(ok)
+    status_cell = bold_win(status, win=status == "PASS")
     matched = correctness.get("serve_output_match_matched")
     total = correctness.get("serve_output_match_prompt_count")
-    status_cell = bold_win(status, win=status == "PASS")
     if isinstance(matched, int) and isinstance(total, int) and total > 0:
         if ok is True:
             detail = f"{matched}/{total} prompts, temp=0, token IDs equal"
         else:
             detail = f"{matched}/{total} prompts matched (temp=0 token IDs)"
         status_cell = f"{status_cell} ({detail})"
-    return f"| Serve output match | - | {status_cell} |"
+    return status_cell
 
 
-def _kv_bit_exact_row(correctness: dict[str, Any]) -> str | None:
+def _serve_output_match_row(correctness: dict[str, Any]) -> str:
+    return f"| Serve output match | - | {_serve_output_match_detail(correctness)} |"
+
+
+def _kv_bit_exact_detail(correctness: dict[str, Any]) -> str | None:
     ok = correctness.get("kv_bit_exact_ok")
     if ok is None:
         return None
@@ -385,13 +427,41 @@ def _kv_bit_exact_row(correctness: dict[str, Any]) -> str | None:
     detail = "Isiro KV cold roundtrip"
     if alphabet:
         detail = f"Isiro KV `{alphabet}` cold roundtrip"
-    return f"| KV bit-exactness | vendor KV pages | {status_cell} ({detail}) |"
+    return f"{status_cell} ({detail})"
+
+
+def _kv_bit_exact_row(correctness: dict[str, Any]) -> str | None:
+    detail = _kv_bit_exact_detail(correctness)
+    if detail is None:
+        return None
+    return f"| KV bit-exactness | vendor KV pages | {detail} |"
 
 
 def _section_a(
     footprint: dict[str, Any],
     correctness: dict[str, Any],
+    *,
+    kv_only: bool = False,
 ) -> list[str]:
+    if kv_only:
+        # No TIC weight claim: omit Integrity SKIP and identical on-disk size.
+        rows = [
+            "## Correctness",
+            "",
+            "| Metric | Result |",
+            "|--------|--------|",
+        ]
+        kv_detail = _kv_bit_exact_detail(correctness)
+        if kv_detail is not None:
+            rows.append(f"| KV bit-exactness | {kv_detail} |")
+        rows.extend(
+            [
+                f"| Serve output match | {_serve_output_match_detail(correctness)} |",
+                "",
+            ]
+        )
+        return rows
+
     baseline_fp = footprint["baseline"]
     tic_fp = footprint["tic"]
     verify_mode = str(correctness.get("verify_mode") or "integrity")
@@ -455,11 +525,30 @@ def _simple_gain_pct(baseline: Any, tic: Any) -> float | None:
     return (float(tic) / float(baseline) - 1.0) * 100.0
 
 
-def _section_gpu_excluding_kv(footprint: dict[str, Any]) -> list[str]:
+def _section_gpu_excluding_kv(
+    footprint: dict[str, Any],
+    *,
+    kv_only: bool = False,
+) -> list[str]:
     baseline_fp = footprint["baseline"]
     tic_fp = footprint["tic"]
     b_load = baseline_fp.get("model_loading_bytes_reported")
     t_load = tic_fp.get("model_loading_bytes_reported")
+    if kv_only:
+        # Same raw weights both arms; prefer baseline meter, else Isiro.
+        shared = b_load if isinstance(b_load, (int, float)) else t_load
+        return [
+            "## A. GPU memory",
+            "",
+            "Loaded weights are identical on both arms (no TIC weight claim).",
+            "",
+            "### Weights",
+            "",
+            "| Metric | Value |",
+            "|--------|-------|",
+            f"| GPU memory for loaded weights | {bytes_gib(shared)} |",
+            "",
+        ]
     load_win = (
         isinstance(b_load, (int, float))
         and isinstance(t_load, (int, float))
@@ -551,6 +640,7 @@ def _section_kv_reservation(
     kv: dict[str, Any],
     *,
     gib_only: bool = False,
+    kv_only: bool = False,
 ) -> list[str]:
     """Available KV GiB, then Isiro-KV-coded KV tokens capacity when metered."""
     b_tokens = kv.get("baseline_tokens_measured")
@@ -562,27 +652,41 @@ def _section_kv_reservation(
     if b_gib is None or t_gib is None:
         return []
     arm = _arm_col()
-    gib_win = float(t_gib) > float(b_gib)
-    lines = [
-        "### Available KV",
-        "",
-        f"| Metric | Baseline | {arm} |",
-        "|--------|----------|-------|",
-        (
-            f"| Available KV | {b_gib:.2f} GiB | "
-            f"{bold_win(f'{t_gib:.2f} GiB', win=gib_win)} |"
-        ),
-        "",
-    ]
-    # Pilot surface: GiB-only Available KV. Optional short honesty note.
-    if gib_only or kv.get("isiro_kv_capacity_s") is not None:
-        lines.extend(
-            [
-                "Available KV is the vendor reserved pool on the GPU "
-                "(same util target as Baseline).",
-                "",
-            ]
-        )
+    if kv_only:
+        shared_gib = b_gib
+        lines = [
+            "### Available KV",
+            "",
+            "| Metric | Value |",
+            "|--------|-------|",
+            f"| Available KV | {shared_gib:.2f} GiB |",
+            "",
+            "Available KV is the vendor reserved pool on the GPU "
+            "(same util target both arms; no TIC weight headroom).",
+            "",
+        ]
+    else:
+        gib_win = float(t_gib) > float(b_gib)
+        lines = [
+            "### Available KV",
+            "",
+            f"| Metric | Baseline | {arm} |",
+            "|--------|----------|-------|",
+            (
+                f"| Available KV | {b_gib:.2f} GiB | "
+                f"{bold_win(f'{t_gib:.2f} GiB', win=gib_win)} |"
+            ),
+            "",
+        ]
+        # Pilot surface: GiB-only Available KV. Optional short honesty note.
+        if gib_only or kv.get("isiro_kv_capacity_s") is not None:
+            lines.extend(
+                [
+                    "Available KV is the vendor reserved pool on the GPU "
+                    "(same util target as Baseline).",
+                    "",
+                ]
+            )
 
     b_coded = kv.get("baseline_tokens_coded")
     t_coded = kv.get("tic_tokens_coded")
@@ -606,14 +710,25 @@ def _section_kv_reservation(
             if isinstance(scale, (int, float))
             else number(1.0 / (1.0 - float(s)))
         )
+        if kv_only:
+            capacity_blurb = (
+                "Same Available KV GiB both arms. Isiro KV stores more tokens "
+                "in that memory (hot window stays dense; cold prefix is packed). "
+                f"With measured s={number(s)} → scale 1/(1-s) ≈ {scale_txt} "
+                "(hot-corrected)."
+            )
+        else:
+            capacity_blurb = (
+                "Weight compression grows Available KV. Isiro KV then stores more "
+                "tokens in that memory (hot window stays dense; cold prefix "
+                f"is packed). With measured s={number(s)} → scale 1/(1-s) ≈ "
+                f"{scale_txt} (hot-corrected)."
+            )
         lines.extend(
             [
                 "### KV tokens capacity",
                 "",
-                "Weight compression grows Available KV. Isiro KV then stores more "
-                "tokens in that memory (hot window stays dense; cold prefix "
-                f"is packed). With measured s={number(s)} → scale 1/(1-s) ≈ "
-                f"{scale_txt} (hot-corrected).",
+                capacity_blurb,
                 "",
                 f"| Metric | Baseline | {arm} |",
                 "|--------|----------|-------|",
@@ -671,6 +786,14 @@ def _section_c(
         scale_blurb = (
             f"Concurrent requests are {number(b_seqs, 0)} on both sides. "
             "Not scaled from KV token capacity."
+        )
+    elif scale_mode == "kv_coded":
+        scale_blurb = (
+            f"{arm} concurrent requests = round(Baseline × coded "
+            f"{arm}/Baseline KV token capacity) from Isiro KV cold packing "
+            "(hot-corrected), then rounded up onto the vLLM CUDA-graph "
+            "capture stride (multiples of 8) so FULL decode graphs cover "
+            "concurrency."
         )
     elif scale_mode == "kv_measured":
         scale_blurb = (
@@ -965,9 +1088,12 @@ def _mode_sections(
     isiro_kv_on = bool(str(cmds.get("isiro_kv") or "").strip()) or bool(
         isiro_kv_doc.get("image") or isiro_kv_doc.get("alphabet")
     )
+    kv_only = bool(cmds.get("isiro_kv_only"))
     lines: list[str] = []
-    lines.extend(_section_gpu_excluding_kv(footprint))
-    lines.extend(_section_kv_reservation(kv, gib_only=isiro_kv_on))
+    lines.extend(_section_gpu_excluding_kv(footprint, kv_only=kv_only))
+    lines.extend(
+        _section_kv_reservation(kv, gib_only=isiro_kv_on, kv_only=kv_only)
+    )
     lines.extend(_section_isiro_kv_bytes(summary))
     reserved_gib = pool_gib(
         kv.get("tic_memory_bytes_measured"),
@@ -1127,7 +1253,13 @@ def render(run_dir: Path) -> str:
     correctness = summary["correctness"]
     graph_mode = _graph_mode(commands)
     lines = _section_intro(summary, commands)
-    lines.extend(_section_a(footprint, correctness))
+    lines.extend(
+        _section_a(
+            footprint,
+            correctness,
+            kv_only=bool(commands.get("isiro_kv_only")),
+        )
+    )
     lines.extend(_mode_sections(summary, commands))
     story_path = run_dir / "stock_vllm_story.json"
     if story_path.is_file():
