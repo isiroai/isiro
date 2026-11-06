@@ -1,0 +1,116 @@
+{
+  "alphabet": "fp8",
+  "capture_t": 8192,
+  "error": null,
+  "fa_bpv": 8.0,
+  "fa_twin_mode": "vendor_fa_pages_tiled_sequence",
+  "head_dim": 256,
+  "kv_cache_dtype": "fp8",
+  "kv_heads": 4,
+  "kv_precision": "fp8",
+  "kv_source": "vendor_fa_pages",
+  "layers": 16,
+  "live_window": 512,
+  "model_dir": "Qwen3.6-27B-AWQ",
+  "n_full_layers": 16,
+  "n_sliding_layers": 0,
+  "ok": true,
+  "points": [
+    {
+      "T": 512,
+      "cold_t": 0,
+      "fa_twin_nbytes": 16777216,
+      "isiro_kv_cold_nbytes": 0,
+      "isiro_kv_total_nbytes": 16777216,
+      "payload_bpv": null,
+      "save_vs_fa": 0.0
+    },
+    {
+      "T": 1024,
+      "cold_t": 8192,
+      "fa_twin_nbytes": 33554432,
+      "isiro_kv_cold_nbytes": 15343317,
+      "isiro_kv_total_nbytes": 32120533,
+      "payload_bpv": 7.316263675689697,
+      "save_vs_fa": 0.04273352026939392
+    },
+    {
+      "T": 2048,
+      "cold_t": 24576,
+      "fa_twin_nbytes": 67108864,
+      "isiro_kv_cold_nbytes": 41804064,
+      "isiro_kv_total_nbytes": 58581280,
+      "payload_bpv": 6.6445770263671875,
+      "save_vs_fa": 0.12707090377807617
+    },
+    {
+      "T": 4096,
+      "cold_t": 57344,
+      "fa_twin_nbytes": 134217728,
+      "isiro_kv_cold_nbytes": 94180674,
+      "isiro_kv_total_nbytes": 110957890,
+      "payload_bpv": 6.415549278259277,
+      "save_vs_fa": 0.17329929769039154
+    },
+    {
+      "T": 8192,
+      "cold_t": 122880,
+      "fa_twin_nbytes": 268435456,
+      "isiro_kv_cold_nbytes": 198911679,
+      "isiro_kv_total_nbytes": 215688895,
+      "payload_bpv": 6.323231983184815,
+      "save_vs_fa": 0.19649625197052956
+    },
+    {
+      "T": 16384,
+      "cold_t": 253952,
+      "fa_twin_nbytes": 536870912,
+      "isiro_kv_cold_nbytes": 410912013,
+      "isiro_kv_total_nbytes": 427689229,
+      "payload_bpv": 6.320584404853081,
+      "save_vs_fa": 0.20336673222482204
+    },
+    {
+      "T": 32768,
+      "cold_t": 516096,
+      "fa_twin_nbytes": 1073741824,
+      "isiro_kv_cold_nbytes": 834912681,
+      "isiro_kv_total_nbytes": 851689897,
+      "payload_bpv": 6.319323653266545,
+      "save_vs_fa": 0.2068019723519683
+    },
+    {
+      "T": 65536,
+      "cold_t": 1040384,
+      "fa_twin_nbytes": 2147483648,
+      "isiro_kv_cold_nbytes": 1682914017,
+      "isiro_kv_total_nbytes": 1699691233,
+      "payload_bpv": 6.318708168240044,
+      "save_vs_fa": 0.2085195924155414
+    },
+    {
+      "T": 131072,
+      "cold_t": 2088960,
+      "fa_twin_nbytes": 4294967296,
+      "isiro_kv_cold_nbytes": 3378916689,
+      "isiro_kv_total_nbytes": 3395693905,
+      "payload_bpv": 6.3184040462269495,
+      "save_vs_fa": 0.20937840244732797
+    },
+    {
+      "T": 262144,
+      "cold_t": 4186112,
+      "fa_twin_nbytes": 8589934592,
+      "isiro_kv_cold_nbytes": 6770922033,
+      "isiro_kv_total_nbytes": 6787699249,
+      "payload_bpv": 6.318252877946469,
+      "save_vs_fa": 0.20980780746322125
+    }
+  ],
+  "schema": "isiro-benchmark-isiro-kv-bytes-curve-v3",
+  "sliding_window": null,
+  "source": "vendor_fa_pages",
+  "text": "gutenberg_1342",
+  "tiled_beyond_capture": true,
+  "weight_precision": "awq"
+}

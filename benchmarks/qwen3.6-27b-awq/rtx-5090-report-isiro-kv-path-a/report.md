@@ -9,17 +9,17 @@ Tooling:
 Compared:
 
 - **Baseline:** vLLM (`vllm serve` / Docker `vllm/vllm-openai`) with `--kv-cache-dtype fp8`
-- **Isiro KV-only:** `vllm serve` + `ISIRO_KV=fp8` (same AWQ/HF weights as baseline; no TIC weight claim; cold KV compress on vendor attention pages)
+- **Isiro KV-only:** `vllm serve` + `ISIRO_KV=fp8` (same AWQ/HF weights as baseline; no TIC weight claim)
 
-Section A: loaded weights and Available KV GiB are shared (same raw weights, same vendor util). KV tokens capacity is Isiro KV cold packing on that budget; Capacity concurrency scales from the coded token ratio. Measured cold vs FA twin bytes (when the curve ran) are under KV vs context.
+Section A: loaded weights and Available KV GiB are shared (same raw weights, same vendor util). KV tokens capacity and Capacity concurrency follow the measured Isiro/Baseline token ratio on that budget. KV bytes vs context are under KV vs context when the curve ran.
 
-TIME claim: **GO** on path **(a)** equal-batch (conc=8; tok/s 525.17 vs 525.23; ITL 14.76 vs 14.76; TTFT 134.06 vs 132.77). Dens invent stays off this stamp (`attend=(a)`).
+TIME claim: **GO** on equal-batch (conc=8; tok/s 525.17 vs 525.23; ITL 14.76 vs 14.76; TTFT 134.06 vs 132.77).
 
 ## Correctness
 
 | Metric | Result |
 |--------|--------|
-| KV bit-exactness | **PASS** (Isiro KV `fp8` cold roundtrip) |
+| KV bit-exactness | **PASS** (Isiro KV `fp8` roundtrip) |
 | Serve output match | **PASS** (4/4 prompts, temp=0, token IDs equal) |
 
 ## A. GPU memory
@@ -42,15 +42,19 @@ Available KV is the vendor reserved pool on the GPU (same util target both arms;
 
 ### KV tokens capacity
 
-Same Available KV GiB both arms. Isiro KV stores more tokens in that memory (hot window stays dense; cold prefix is packed). With measured s=0.50 → scale 1/(1-s) ≈ 2.01 (hot-corrected).
+Same Available KV GiB both arms. Isiro KV fits more tokens in that pool (measured scale ≈ 1.27).
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| KV tokens capacity | 77,368 | **152,810** (**+98%**) |
+| KV tokens capacity | 77,368 | **96,623** (**+25%**) |
 
 ### KV vs context
 
-`ISIRO_KV=fp8` is on for serve. kv-bytes-vs-context.png omitted: curve did not run (unset ISIRO_BENCH_SKIP_ISIRO_KV_CURVE; for AWQ/quant baselines ensure gptqmodel in the Isiro KV meter venv, or set ISIRO_BENCH_KV_MODEL_DIR to a fitting HF twin).
+`ISIRO_KV=fp8` on KV from a Project Gutenberg text forward. At T=262,144: Baseline KV 8.00 GiB, Isiro KV 6.32 GiB; save 1.68 GiB (21.0%).
+
+Figure. KV vs 1-user context.
+
+![KV vs 1-user context](kv-bytes-vs-context.png)
 
 ## C. Equal batch
 
@@ -66,7 +70,7 @@ Same concurrent-request ceiling as Baseline (latency-matched surface). Capacity-
 
 ## D. Capacity
 
-Isiro concurrent requests = round(Baseline × coded Isiro/Baseline KV token capacity) from Isiro KV cold packing (hot-corrected), then rounded up onto the vLLM CUDA-graph capture stride (multiples of 8) so FULL decode graphs cover concurrency.
+Isiro concurrent requests = round(Baseline × Isiro/Baseline KV token capacity), then rounded up onto the vLLM CUDA-graph capture stride (multiples of 8) so FULL decode graphs cover concurrency.
 
 Concurrent requests are the serve max concurrent sequences (`max_num_seqs`); the bench load matches that ceiling in this A/B.
 

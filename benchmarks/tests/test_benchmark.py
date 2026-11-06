@@ -1753,7 +1753,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn("**Isiro:**", report)
             self.assertIn("`ISIRO_KV=bf16`", report)
             self.assertIn("KV bit-exactness", report)
-            self.assertIn("Isiro KV `bf16` cold roundtrip", report)
+            self.assertIn("Isiro KV `bf16` roundtrip", report)
             self.assertIn("Available KV", report)
             self.assertIn("KV tokens capacity", report)
             self.assertIn("KV vs context", report)
@@ -1766,8 +1766,10 @@ class BenchmarkTests(unittest.TestCase):
                 report,
                 r"\| Available KV \| [0-9.]+ GiB \([0-9]+ tokens\) \|",
             )
-            self.assertIn("scale 1/(1-s)", report)
-            self.assertIn("hot-corrected", report)
+            self.assertIn("measured scale", report)
+            self.assertNotIn("hot window", report)
+            self.assertNotIn("cold prefix", report)
+            self.assertNotIn("hot-corrected", report)
             self.assertNotIn("coding-rate", report)
             self.assertNotIn("~29-31%", report)
             self.assertNotIn("ISIRO_KV_C=fp8", report)
@@ -1782,6 +1784,33 @@ class BenchmarkTests(unittest.TestCase):
             self.assertNotIn("| KV tokens capacity |", cap_head)
             # Coded capacity lives under Section A.
             self.assertIn("### KV tokens capacity", report.split("## D. Capacity")[0])
+
+    def test_fold_coded_capacity_prefers_curve_over_synthetic_bitexact(self) -> None:
+        from generate_report import _fold_coded_kv_capacity
+
+        summary = {
+            "kv_cache": {
+                "baseline_tokens_measured": 77368,
+                "tic_tokens_measured": 77368,
+            },
+            "correctness": {
+                "kv_bit_exact_avg_bpv": 3.99,
+                "kv_bit_exact_fa_bpv": 8.0,
+            },
+            "isiro_kv_bytes": {
+                "save_at_max_t": 0.21,
+                "live_window": 512,
+            },
+        }
+        _fold_coded_kv_capacity(summary)
+        kv = summary["kv_cache"]
+        # Curve s=0.21 → ~+26%, not synthetic bitexact s≈0.50 → ~+100%.
+        self.assertAlmostEqual(float(kv["isiro_kv_capacity_s"]), 0.21)
+        self.assertGreater(int(kv["tic_tokens_coded"]), int(kv["baseline_tokens_coded"]))
+        self.assertLess(
+            int(kv["tic_tokens_coded"]) / float(kv["baseline_tokens_coded"]),
+            1.5,
+        )
 
     def test_fold_isiro_kv_bitexact_required(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2096,6 +2125,61 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn('loc="lower left"', src)
         self.assertIn("KV (GiB)", src)
         self.assertIn("2, 1", src)  # 2x1 subplot layout
+        # KV-only capacity headline bars (path-a figure).
+        self.assertIn("capacity_tokens", src)
+        self.assertIn("capacity_concurrency", src)
+        self.assertIn("KV tokens capacity", src)
+        self.assertIn("Capacity concurrency", src)
+
+    def test_isiro_kv_render_png_capacity_bars_2x1(self) -> None:
+        """KV-only publish path: curve top + capacity bars bottom."""
+        import tempfile
+        from pathlib import Path
+
+        from isiro_kv_bytes_curve import render_png
+
+        doc = {
+            "ok": True,
+            "alphabet": "fp8",
+            "points": [
+                {
+                    "T": 512,
+                    "fa_twin_nbytes": 1 << 30,
+                    "isiro_kv_total_nbytes": 1 << 29,
+                },
+                {
+                    "T": 1024,
+                    "fa_twin_nbytes": 2 << 30,
+                    "isiro_kv_total_nbytes": 1 << 30,
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "kv-bytes-vs-context.png"
+            render_png(
+                doc,
+                out,
+                gpu="RTX 5090",
+                gpu_count=1,
+                model="Qwen3.6-27B-AWQ",
+                weight_precision="awq",
+                kv_precision="fp8",
+                capacity_tokens=(77368, 152810),
+                capacity_concurrency=(8, 16),
+            )
+            self.assertTrue(out.is_file())
+            self.assertGreater(out.stat().st_size, 8_000)
+
+    def test_isiro_kv_curve_omit_fp8_does_not_blame_gptqmodel(self) -> None:
+        from generate_report import _isiro_kv_curve_omit_reason
+
+        msg = _isiro_kv_curve_omit_reason({}, "fp8")
+        self.assertIn("curve did not run", msg)
+        self.assertNotIn("gptqmodel", msg)
+        self.assertNotIn("vendor FA pages", msg)
+        bf16 = _isiro_kv_curve_omit_reason({}, "bf16")
+        self.assertIn("curve did not run", bf16)
+        self.assertNotIn("gptqmodel", bf16)
 
     def test_bench_sse_patch_has_no_chunk_strip(self) -> None:
         patch = SCRIPTS / "patches" / "endpoint_request_func.py"

@@ -298,14 +298,12 @@ def _section_intro(
     if isiro_kv_only and isiro_kv:
         compared[-1] = (
             f"- **Isiro KV-only:** `vllm serve` + `ISIRO_KV={isiro_kv}` "
-            "(same AWQ/HF weights as baseline; no TIC weight claim; cold KV "
-            "compress on vendor attention pages)"
+            "(same AWQ/HF weights as baseline; no TIC weight claim)"
         )
     elif isiro_kv:
         compared[-1] = (
             f"- **Isiro:** `isiro serve … --target vllm` with TIC weights and "
-            f"`ISIRO_KV={isiro_kv}` (same vLLM version; cold KV compress on "
-            "vendor attention pages)"
+            f"`ISIRO_KV={isiro_kv}` (same vLLM version)"
         )
     lines = [
         f"# ISIRO Benchmark Report: `{model}`",
@@ -337,10 +335,10 @@ def _section_intro(
         lines.extend(
             [
                 "Section A: loaded weights and Available KV GiB are shared "
-                "(same raw weights, same vendor util). KV tokens capacity is "
-                "Isiro KV cold packing on that budget; Capacity concurrency "
-                "scales from the coded token ratio. Measured cold vs FA twin "
-                "bytes (when the curve ran) are under KV vs context.",
+                "(same raw weights, same vendor util). KV tokens capacity and "
+                "Capacity concurrency follow the measured Isiro/Baseline token "
+                "ratio on that budget. KV bytes vs context are under KV vs "
+                "context when the curve ran.",
                 "",
             ]
         )
@@ -348,14 +346,12 @@ def _section_intro(
         if time_line:
             lines.extend([time_line, ""])
     elif isiro_kv:
-        # Measured cold vs FA twin (when present) lives under KV vs context.
-        # Coded token capacity (1/(1-s), hot-corrected) is under Section A.
         lines.extend(
             [
                 "Section A Available KV is the vendor reserved pool (GiB). "
-                "KV tokens capacity applies Isiro KV cold packing on that budget. "
-                "Measured cold vs FA twin bytes (when the curve ran) are under "
-                "KV vs context.",
+                "KV tokens capacity uses the measured Isiro/Baseline token "
+                "ratio on that budget. KV bytes vs context are under KV vs "
+                "context when the curve ran.",
                 "",
             ]
         )
@@ -388,11 +384,10 @@ def _kv_only_time_claim(summary: dict[str, Any]) -> str | None:
     go = tok_ok and itl_ok and ttft_ok
     verdict = "GO" if go else "NO GO"
     return (
-        f"TIME claim: **{verdict}** on path **(a)** equal-batch "
+        f"TIME claim: **{verdict}** on equal-batch "
         f"(conc={conc_txt}; tok/s {number(t_tps)} vs {number(b_tps)}; "
         f"ITL {number(t_itl)} vs {number(b_itl)}; "
-        f"TTFT {number(t_ttft)} vs {number(b_ttft)}). "
-        "Dens invent stays off this stamp (`attend=(a)`)."
+        f"TTFT {number(t_ttft)} vs {number(b_ttft)})."
     )
 
 
@@ -424,9 +419,9 @@ def _kv_bit_exact_detail(correctness: dict[str, Any]) -> str | None:
     status = _bit_exact_cell(ok)
     status_cell = bold_win(status, win=status == "PASS")
     alphabet = correctness.get("kv_bit_exact_alphabet")
-    detail = "Isiro KV cold roundtrip"
+    detail = "Isiro KV roundtrip"
     if alphabet:
-        detail = f"Isiro KV `{alphabet}` cold roundtrip"
+        detail = f"Isiro KV `{alphabet}` roundtrip"
     return f"{status_cell} ({detail})"
 
 
@@ -597,14 +592,17 @@ def _fold_coded_kv_capacity(summary: dict[str, Any]) -> dict[str, Any]:
 
     s: float | None = None
     w = 512
+    # Prefer Gutenberg / real KV-vs-context curve for capacity. Bitexact uses a
+    # tiny synthetic page for roundtrip PASS only; its avg_bpv must not drive
+    # customer KV tokens capacity when a real curve exists.
     isiro_kv_doc = summary.get("isiro_kv_bytes")
     if isinstance(isiro_kv_doc, dict):
-        raw_s = isiro_kv_doc.get("save_at_max_t")
-        if isinstance(raw_s, (int, float)) and 0.0 < float(raw_s) < 1.0:
-            s = float(raw_s)
         raw_w = isiro_kv_doc.get("live_window")
         if isinstance(raw_w, (int, float)) and int(raw_w) > 0:
             w = int(raw_w)
+        raw_s = isiro_kv_doc.get("save_at_max_t")
+        if isinstance(raw_s, (int, float)) and 0.0 < float(raw_s) < 1.0:
+            s = float(raw_s)
     if s is None:
         corr = summary.get("correctness")
         if isinstance(corr, dict):
@@ -712,17 +710,13 @@ def _section_kv_reservation(
         )
         if kv_only:
             capacity_blurb = (
-                "Same Available KV GiB both arms. Isiro KV stores more tokens "
-                "in that memory (hot window stays dense; cold prefix is packed). "
-                f"With measured s={number(s)} → scale 1/(1-s) ≈ {scale_txt} "
-                "(hot-corrected)."
+                "Same Available KV GiB both arms. Isiro KV fits more tokens "
+                f"in that pool (measured scale ≈ {scale_txt})."
             )
         else:
             capacity_blurb = (
-                "Weight compression grows Available KV. Isiro KV then stores more "
-                "tokens in that memory (hot window stays dense; cold prefix "
-                f"is packed). With measured s={number(s)} → scale 1/(1-s) ≈ "
-                f"{scale_txt} (hot-corrected)."
+                "Weight compression grows Available KV. Isiro KV then fits more "
+                f"tokens in that pool (measured scale ≈ {scale_txt})."
             )
         lines.extend(
             [
@@ -789,11 +783,10 @@ def _section_c(
         )
     elif scale_mode == "kv_coded":
         scale_blurb = (
-            f"{arm} concurrent requests = round(Baseline × coded "
-            f"{arm}/Baseline KV token capacity) from Isiro KV cold packing "
-            "(hot-corrected), then rounded up onto the vLLM CUDA-graph "
-            "capture stride (multiples of 8) so FULL decode graphs cover "
-            "concurrency."
+            f"{arm} concurrent requests = round(Baseline × "
+            f"{arm}/Baseline KV token capacity), then rounded up onto the "
+            "vLLM CUDA-graph capture stride (multiples of 8) so FULL decode "
+            "graphs cover concurrency."
         )
     elif scale_mode == "kv_measured":
         scale_blurb = (
@@ -981,8 +974,17 @@ def _equal_batch_redundant(
     return False
 
 
+def _isiro_kv_curve_omit_reason(summary: dict[str, Any], alph: str) -> str:
+    """Customer omit copy when the KV-vs-context curve did not run."""
+    del summary
+    return (
+        f"`ISIRO_KV={alph}` is on for serve. "
+        "kv-bytes-vs-context.png omitted: curve did not run."
+    )
+
+
 def _section_isiro_kv_bytes(summary: dict[str, Any]) -> list[str]:
-    """KV vs Baseline FA twin curve (plus weights+KV panel when available)."""
+    """KV vs context curve (weights+KV panel when weight bytes differ)."""
     isiro_kv_doc = summary.get("isiro_kv_bytes")
     if not isinstance(isiro_kv_doc, dict) or not isiro_kv_doc.get("image"):
         # Isiro KV serve without curve (e.g. 27B bf16 twin OOMs): explicit omit.
@@ -994,13 +996,7 @@ def _section_isiro_kv_bytes(summary: dict[str, Any]) -> list[str]:
             return [
                 "### KV vs context",
                 "",
-                (
-                    f"`ISIRO_KV={alph}` is on for serve. "
-                    "kv-bytes-vs-context.png omitted: curve did not run "
-                    "(unset ISIRO_BENCH_SKIP_ISIRO_KV_CURVE; for AWQ/quant baselines "
-                    "ensure gptqmodel in the Isiro KV meter venv, or set "
-                    "ISIRO_BENCH_KV_MODEL_DIR to a fitting HF twin)."
-                ),
+                _isiro_kv_curve_omit_reason(summary, str(alph)),
                 "",
             ]
         return []
@@ -1047,17 +1043,30 @@ def _section_isiro_kv_bytes(summary: dict[str, Any]) -> list[str]:
             f"Baseline {number(b_tot)} GiB vs Isiro {number(t_tot)} GiB "
             f"(weights + KV)."
         )
+    capacity_line = ""
+    fig_caption = "Figure. KV vs 1-user context."
+    if isiro_kv_doc.get("capacity_bars"):
+        fig_caption = (
+            "Figure. KV vs context (top); KV tokens capacity and "
+            "Capacity concurrency (bottom)."
+        )
+        capacity_line = (
+            " Bottom panel shows coded KV tokens capacity and Capacity "
+            "concurrent requests (same numbers as sections A and D)."
+        )
+    elif weight_line:
+        fig_caption = "Figure. Weights and KV vs 1-user context."
     lines = [
         "### KV vs context",
         "",
         (
             f"`ISIRO_KV={alphabet}` on KV from a Project Gutenberg text "
-            f"forward. {save_line}{weight_line}"
+            f"forward. {save_line}{weight_line}{capacity_line}"
         ),
         "",
-        "Figure. Weights and KV vs 1-user context.",
+        fig_caption,
         "",
-        f"![Weights and KV vs 1-user context]({isiro_kv_doc['image']})",
+        f"![{fig_caption.removeprefix('Figure. ').rstrip('.')}]({isiro_kv_doc['image']})",
         "",
     ]
     return lines
@@ -1362,6 +1371,7 @@ def write_report(run_dir: Path, output: Path) -> Path:
                     )
             dest_png = output.parent / "kv-bytes-vs-context.png"
             # Re-render when summary has weight bytes so the 2x1 panel stays current.
+            used_capacity_bars = False
             try:
                 from isiro_kv_bytes_curve import render_png as _render_isiro_kv_png
 
@@ -1425,17 +1435,39 @@ def write_report(run_dir: Path, output: Path) -> Path:
                     or isiro_kv_doc.get("alphabet")
                     or ""
                 ).strip()
-                _render_isiro_kv_png(
-                    isiro_kv_doc,
-                    dest_png,
-                    gpu=str(env.get("gpu_model") or ""),
-                    gpu_count=env.get("gpu_count"),
-                    model=model_tag,
-                    weight_precision=w_prec,
-                    kv_precision=kv_prec,
+                render_kw: dict[str, Any] = {
+                    "gpu": str(env.get("gpu_model") or ""),
+                    "gpu_count": env.get("gpu_count"),
+                    "model": model_tag,
+                    "weight_precision": w_prec,
+                    "kv_precision": kv_prec,
+                }
+                used_capacity_bars = False
+                # KV-only / identical weights: 1x1 KV vs context (capacity and
+                # concurrency stay in markdown tables A/D; no bar panel).
+                kv_only_run = (
+                    str(
+                        cmds_for_prec.get("isiro_format")
+                        or summary_for_prec.get("compiler")
+                        or summary_for_prec.get("runtime")
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                    == "kv-only"
                 )
+                if kv_only_run or (
+                    isinstance(isiro_kv_doc.get("baseline_weight_bytes"), (int, float))
+                    and isinstance(isiro_kv_doc.get("isiro_weight_bytes"), (int, float))
+                    and int(isiro_kv_doc["baseline_weight_bytes"])
+                    == int(isiro_kv_doc["isiro_weight_bytes"])
+                ):
+                    isiro_kv_doc.pop("baseline_weight_bytes", None)
+                    isiro_kv_doc.pop("isiro_weight_bytes", None)
+                _render_isiro_kv_png(isiro_kv_doc, dest_png, **render_kw)
             except Exception:
                 _shutil.copy2(isiro_kv_png_src, dest_png)
+                used_capacity_bars = False
             pts = list(isiro_kv_doc.get("points") or [])
             save_max = None
             max_t = None
@@ -1452,7 +1484,7 @@ def write_report(run_dir: Path, output: Path) -> Path:
                 isiro_kv_b = last.get("isiro_kv_total_nbytes")
                 if isinstance(fa_b, (int, float)):
                     b_gib = float(fa_b) / float(1024**3)
-                if isinstance(gdx_b, (int, float)):
+                if isinstance(isiro_kv_b, (int, float)):
                     t_gib = float(isiro_kv_b) / float(1024**3)
                 if b_gib is not None and t_gib is not None:
                     save_gib = float(b_gib) - float(t_gib)
@@ -1476,6 +1508,7 @@ def write_report(run_dir: Path, output: Path) -> Path:
                     "save_at_max_t": save_max,
                     "baseline_weight_gib": b_w_gib,
                     "isiro_weight_gib": t_w_gib,
+                    "capacity_bars": bool(used_capacity_bars),
                     "ok": bool(isiro_kv_doc.get("ok")),
                 }
                 write_json(summary_path, summary)

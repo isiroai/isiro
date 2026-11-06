@@ -582,15 +582,6 @@ def measure_curve_from_vendor_pages(
             "error": "no positive token lengths",
             "points": [],
         }
-    if int(tok_list[-1]) > max_t_pages:
-        return {
-            "schema": SCHEMA,
-            "ok": False,
-            "error": (
-                f"tokens max {tok_list[-1]} exceeds vendor pages T={max_t_pages}"
-            ),
-            "points": [],
-        }
     model_path = Path(model_dir) if model_dir else path.parent
     layer_caps, cap_meta = _layer_caps_from_config(model_path)
     # Vendor FA dumps omit Mamba/GDN / linear_attn slabs. Keep only FA-capable
@@ -615,6 +606,58 @@ def measure_curve_from_vendor_pages(
             "n_sliding": 0,
         }
     fa_bpv = _fa_bpv(a)
+    tiled = bool(int(tok_list[-1]) > max_t_pages)
+    # Cache dump-slice packs: tiling reuses the same capture prefix per layer.
+    _pack_cache: dict[tuple[int, int, int], tuple[int, float]] = {}
+
+    def _pack_kv_pair(li: int, t0: int, t1: int) -> tuple[int, float]:
+        """Pack K∥V cold nbytes for dump slice [t0, t1)."""
+        key = (int(li), int(t0), int(t1))
+        hit = _pack_cache.get(key)
+        if hit is not None:
+            return hit
+        cold_t = int(t1) - int(t0)
+        if cold_t < 1:
+            _pack_cache[key] = (0, 0.0)
+            return 0, 0.0
+        pages = (
+            k_all[li, t0:t1, :, :],
+            v_all[li, t0:t1, :, :],
+        )
+        nbytes = 0
+        bpv_sum = 0.0
+        n = 0
+        for page in pages:
+            codes = _require_uint8_codes(
+                page.reshape(1, cold_t, kv_heads, head_dim),
+                where="vendor_page",
+            )
+            packed, bpv = _pack_codes_nbytes(a, codes)
+            nbytes += int(packed)
+            bpv_sum += float(bpv)
+            n += 1
+        out = (nbytes, (bpv_sum / max(n, 1)))
+        _pack_cache[key] = out
+        return out
+
+    def _pack_cold_tiled(li: int, cold_t_layer: int) -> tuple[int, float]:
+        """Pack cold nbytes; tile dump-prefix packs when cold_t > capture T."""
+        if cold_t_layer < 1:
+            return 0, 0.0
+        if cold_t_layer <= max_t_pages:
+            return _pack_kv_pair(li, 0, cold_t_layer)
+        n_full, rem = divmod(int(cold_t_layer), int(max_t_pages))
+        full_nb, full_bpv = _pack_kv_pair(li, 0, max_t_pages)
+        nbytes = int(full_nb) * int(n_full)
+        bpv_w = float(full_bpv) * float(n_full) * float(max_t_pages)
+        denom = float(n_full) * float(max_t_pages)
+        if rem > 0:
+            rem_nb, rem_bpv = _pack_kv_pair(li, 0, rem)
+            nbytes += int(rem_nb)
+            bpv_w += float(rem_bpv) * float(rem)
+            denom += float(rem)
+        return nbytes, (bpv_w / max(denom, 1.0))
+
     points: list[dict[str, Any]] = []
     for T in tok_list:
         fa_hot = 0
@@ -628,12 +671,6 @@ def measure_curve_from_vendor_pages(
             eff_t = _vendor_eff_t(int(T), cap)
             if eff_t < 1:
                 continue
-            # Vendor dump is a full-sequence prefix; sliding layers keep the
-            # last eff_t tokens of that prefix (same as HF slice path).
-            t_end = int(T)
-            t_start = t_end - eff_t
-            k_vis = k_all[li, t_start:t_end, :, :]
-            v_vis = v_all[li, t_start:t_end, :, :]
             hot_t = min(eff_t, int(live_window))
             cold_t_layer = max(0, eff_t - int(live_window))
             fa_hot += _layer_fa_nbytes(
@@ -648,15 +685,31 @@ def measure_curve_from_vendor_pages(
             cold_tokens += int(cold_t_layer)
             if cold_t_layer < 1:
                 continue
-            for page in (k_vis[:cold_t_layer], v_vis[:cold_t_layer]):
-                codes = _require_uint8_codes(
-                    page.reshape(1, cold_t_layer, kv_heads, head_dim),
-                    where="vendor_page",
-                )
-                packed, bpv = _pack_codes_nbytes(a, codes)
-                isiro_kv_cold += int(packed)
-                bpv_acc += float(bpv)
-                n_pack += 1
+            if int(T) <= max_t_pages:
+                # In-dump: sliding keeps last eff_t of the prefix (HF match).
+                t_end = int(T)
+                t_start = t_end - int(eff_t)
+                k_vis = k_all[li, t_start:t_end, :, :]
+                v_vis = v_all[li, t_start:t_end, :, :]
+                packed = 0
+                bpv_sum = 0.0
+                n = 0
+                for page in (k_vis[:cold_t_layer], v_vis[:cold_t_layer]):
+                    codes = _require_uint8_codes(
+                        page.reshape(1, cold_t_layer, kv_heads, head_dim),
+                        where="vendor_page",
+                    )
+                    nb, bpv = _pack_codes_nbytes(a, codes)
+                    packed += int(nb)
+                    bpv_sum += float(bpv)
+                    n += 1
+                bpv = bpv_sum / max(n, 1)
+            else:
+                # Beyond dump: tile capture-prefix packs (FA twin analytic).
+                packed, bpv = _pack_cold_tiled(li, cold_t_layer)
+            isiro_kv_cold += int(packed)
+            bpv_acc += float(bpv)
+            n_pack += 1
         fa_all = int(fa_cold + fa_hot)
         isiro_kv_total = int(isiro_kv_cold + fa_hot)
         if cold_tokens < 1:
@@ -688,6 +741,9 @@ def measure_curve_from_vendor_pages(
     alphabet_out = "fp8" if a in ("fp8_e4m3",) else (
         "fp4" if a in ("nvfp4", "e2m1") else a
     )
+    twin_mode = cap_meta.get("fa_twin_mode")
+    if tiled:
+        twin_mode = f"{twin_mode or 'vendor_fa_pages'}_tiled_sequence"
     return {
         "schema": SCHEMA,
         "ok": ok,
@@ -702,10 +758,12 @@ def measure_curve_from_vendor_pages(
         "layers": int(n_layers),
         "kv_heads": int(kv_heads),
         "head_dim": int(head_dim),
-        "fa_twin_mode": cap_meta.get("fa_twin_mode"),
+        "fa_twin_mode": twin_mode,
         "sliding_window": cap_meta.get("sliding_window"),
         "n_sliding_layers": cap_meta.get("n_sliding"),
         "n_full_layers": cap_meta.get("n_full"),
+        "capture_t": int(max_t_pages),
+        "tiled_beyond_capture": bool(tiled),
         "points": points,
         "error": err_msg,
     }
@@ -1104,6 +1162,12 @@ def measure_curve(
     }
 
 
+def _capacity_pair_ok(pair: tuple[Any, Any] | None) -> bool:
+    if pair is None or len(pair) != 2:
+        return False
+    return all(isinstance(v, (int, float)) and float(v) > 0 for v in pair)
+
+
 def render_png(
     doc: dict[str, Any],
     out: Path,
@@ -1113,8 +1177,16 @@ def render_png(
     model: str = "",
     weight_precision: str = "",
     kv_precision: str = "",
+    capacity_tokens: tuple[Any, Any] | None = None,
+    capacity_concurrency: tuple[Any, Any] | None = None,
 ) -> None:
-    """2x1: KV-only (top) and weights+KV (bottom). No Isiro KV in legend labels."""
+    """Render KV vs context PNG.
+
+    Layouts:
+    - capacity bars set: 2x1 (KV curve top; tokens + concurrency bars bottom)
+    - else weights bytes: 2x1 (KV top; weights+KV bottom)
+    - else: 1x1 KV-only
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -1144,6 +1216,9 @@ def render_png(
         and float(b_w) > 0
         and float(t_w) > 0
     )
+    has_capacity = _capacity_pair_ok(capacity_tokens) and _capacity_pair_ok(
+        capacity_concurrency
+    )
     w_prec = str(weight_precision or doc.get("weight_precision") or "").strip()
     kv_prec = str(
         kv_precision
@@ -1158,33 +1233,110 @@ def render_png(
         weight_precision=w_prec,
         kv_precision=kv_prec,
     )
-    if has_weights:
+    base_color = "#c0392b"
+    isiro_color = "#1f77b4"
+
+    def _plot_kv_curve(ax) -> None:
+        ax.plot(xs, fa, color=base_color, lw=1.9, label="Baseline (KV)")
+        ax.plot(xs, isiro_kv, color=isiro_color, lw=2.2, label="Isiro (KV)")
+        ax.set_title("KV vs context", fontsize=12, pad=8)
+        ax.set_xlabel("Context tokens T")
+        ax.set_ylabel("KV (GiB)")
+        ax.set_ylim(bottom=0.0)
+        ax.xaxis.set_major_formatter(FuncFormatter(_comma_x))
+        ax.tick_params(axis="x", labelbottom=True)
+        ax.grid(True, alpha=0.28)
+        ax.legend(frameon=False, loc="upper left")
+
+    def _plot_capacity_bars(ax_tok, ax_conc) -> None:
+        assert capacity_tokens is not None and capacity_concurrency is not None
+        b_tok, t_tok = float(capacity_tokens[0]), float(capacity_tokens[1])
+        b_c, t_c = (
+            float(capacity_concurrency[0]),
+            float(capacity_concurrency[1]),
+        )
+        labels = ["Baseline", "Isiro"]
+        x = [0, 1]
+        bars0 = ax_tok.bar(
+            x, [b_tok, t_tok], color=[base_color, isiro_color], width=0.62
+        )
+        ax_tok.set_xticks(x, labels)
+        ax_tok.set_ylabel("KV tokens")
+        ax_tok.set_title("KV tokens capacity", fontsize=11, pad=6)
+        ax_tok.set_ylim(bottom=0.0)
+        ax_tok.yaxis.set_major_formatter(FuncFormatter(_comma_x))
+        ax_tok.grid(True, axis="y", alpha=0.28)
+        for bar, val in zip(bars0, (b_tok, t_tok)):
+            ax_tok.annotate(
+                f"{int(round(val)):,}",
+                xy=(bar.get_x() + bar.get_width() / 2.0, bar.get_height()),
+                xytext=(0, 3),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+        bars1 = ax_conc.bar(
+            x, [b_c, t_c], color=[base_color, isiro_color], width=0.62
+        )
+        ax_conc.set_xticks(x, labels)
+        ax_conc.set_ylabel("Concurrent requests")
+        ax_conc.set_title("Capacity concurrency", fontsize=11, pad=6)
+        ax_conc.set_ylim(bottom=0.0)
+        ax_conc.grid(True, axis="y", alpha=0.28)
+        for bar, val in zip(bars1, (b_c, t_c)):
+            ax_conc.annotate(
+                f"{int(round(val))}",
+                xy=(bar.get_x() + bar.get_width() / 2.0, bar.get_height()),
+                xytext=(0, 3),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+    if has_capacity:
+        fig = plt.figure(figsize=(7.2, 7.6), dpi=140)
+        gs = fig.add_gridspec(2, 1, height_ratios=[1.45, 1.0], hspace=0.42)
+        ax0 = fig.add_subplot(gs[0])
+        _plot_kv_curve(ax0)
+        gs1 = gs[1].subgridspec(1, 2, wspace=0.38)
+        ax_tok = fig.add_subplot(gs1[0, 0])
+        ax_conc = fig.add_subplot(gs1[0, 1])
+        _plot_capacity_bars(ax_tok, ax_conc)
+        bottom = 0.08
+        if tagline:
+            fig.text(
+                0.5,
+                0.015,
+                tagline,
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color="#444444",
+            )
+            bottom = 0.10
+        fig.subplots_adjust(
+            left=0.12, right=0.96, bottom=bottom, top=0.95
+        )
+    elif has_weights:
         fig, (ax0, ax1) = plt.subplots(
             2, 1, figsize=(7.2, 7.6), dpi=140, sharex=False
         )
-        ax0.plot(xs, fa, color="#c0392b", lw=1.9, label="Baseline (KV)")
-        ax0.plot(xs, isiro_kv, color="#1f77b4", lw=2.2, label="Isiro (KV)")
-        ax0.set_title("KV vs context", fontsize=12, pad=8)
-        ax0.set_xlabel("Context tokens T")
-        ax0.set_ylabel("KV (GiB)")
-        ax0.set_ylim(bottom=0.0)
-        ax0.xaxis.set_major_formatter(FuncFormatter(_comma_x))
-        ax0.tick_params(axis="x", labelbottom=True)
-        ax0.grid(True, alpha=0.28)
-        ax0.legend(frameon=False, loc="upper left")
+        _plot_kv_curve(ax0)
         b_w_gib = float(b_w) / gib
         t_w_gib = float(t_w) / gib
         ax1.plot(
             xs,
             [b_w_gib + y for y in fa],
-            color="#c0392b",
+            color=base_color,
             lw=1.9,
             label="Baseline (weights + KV)",
         )
         ax1.plot(
             xs,
             [t_w_gib + y for y in isiro_kv],
-            color="#1f77b4",
+            color=isiro_color,
             lw=2.2,
             label="Isiro (weights + KV)",
         )
@@ -1196,7 +1348,6 @@ def render_png(
         ax1.tick_params(axis="x", labelbottom=True)
         ax1.grid(True, alpha=0.28)
         ax1.legend(frameon=False, loc="lower left")
-        # Tagline under both panels so it cannot overlap the top subtitle.
         bottom = 0.10
         if tagline:
             fig.text(
@@ -1214,15 +1365,7 @@ def render_png(
         )
     else:
         fig, ax = plt.subplots(figsize=(7.2, 4.4), dpi=140)
-        ax.plot(xs, fa, color="#c0392b", lw=1.9, label="Baseline (KV)")
-        ax.plot(xs, isiro_kv, color="#1f77b4", lw=2.2, label="Isiro (KV)")
-        ax.set_title("KV vs context", fontsize=12, pad=8)
-        ax.set_xlabel("Context tokens T")
-        ax.set_ylabel("KV (GiB)")
-        ax.set_ylim(bottom=0.0)
-        ax.xaxis.set_major_formatter(FuncFormatter(_comma_x))
-        ax.grid(True, alpha=0.28)
-        ax.legend(frameon=False)
+        _plot_kv_curve(ax)
         bottom = 0.14
         if tagline:
             fig.text(
