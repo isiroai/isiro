@@ -573,6 +573,25 @@ def main() -> int:
             ),
             None,
         )
+        # Refuse publish when timed capacity profiles disagree with capacity.json.
+        cap_b = (summary["capacity"].get("baseline") or {}).get("max_concurrency")
+        cap_t = (summary["capacity"].get("tic") or {}).get("max_concurrency")
+        for side, want, profiles in (
+            ("baseline", cap_b, baseline_profiles),
+            ("tic", cap_t, tic_profiles),
+        ):
+            if not isinstance(want, (int, float)):
+                continue
+            for _name, (_path, doc) in profiles.items():
+                got = (doc.get("bench_config") or {}).get("max_concurrency")
+                if got is None:
+                    continue
+                if int(got) != int(want):
+                    errors.append(
+                        f"capacity {side} profile max_concurrency={got} "
+                        f"!= capacity.json {int(want)} (refuse publish conc mismatch)"
+                    )
+                    break
         if decode is not None:
             b_tps = float(
                 decode["baseline"]["throughput"]["output_tokens_per_sec"]

@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `kv-only` | runtime `kv-only` | 2026-11-06 01:46 UTC
+`awq` | `rtx-5090` | compiler `kv-only` | runtime `kv-only` | 2026-11-06 02:42 UTC
 
 Tooling:
 
@@ -13,7 +13,7 @@ Compared:
 
 Section A: loaded weights and Available KV GiB are shared (same raw weights, same vendor util). KV tokens capacity is Isiro KV cold packing on that budget; Capacity concurrency scales from the coded token ratio. Measured cold vs FA twin bytes (when the curve ran) are under KV vs context.
 
-TIME claim: **NO GO** on path **(a)** equal-batch (conc=8; tok/s 524.76 vs 525.92; ITL 14.76 vs 14.77; TTFT 136.62 vs 126.86). Dens invent stays off this stamp (`attend=(a)`).
+TIME claim: **GO** on path **(a)** equal-batch (conc=8; tok/s 525.17 vs 525.23; ITL 14.76 vs 14.76; TTFT 134.06 vs 132.77). Dens invent stays off this stamp (`attend=(a)`).
 
 ## Correctness
 
@@ -59,10 +59,10 @@ Same concurrent-request ceiling as Baseline (latency-matched surface). Capacity-
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
 | Concurrent requests | 8 | 8 |
-| Output tok/s | 525.92 | 524.76 |
-| ITL (ms) p50 / p95 / p99 | 14.77 / 15.29 / 15.70 | 14.76 / 15.15 / 15.35 |
-| TPOT (ms) p50 / p95 / p99 | 14.77 / 14.87 / 14.87 | 14.77 / 14.85 / 14.89 |
-| TTFT (ms) p50 / p95 / p99 | 126.86 / 127.28 / 127.41 | 136.62 / 136.96 / 136.96 |
+| Output tok/s | 525.23 | 525.17 |
+| ITL (ms) p50 / p95 / p99 | 14.76 / 15.13 / 15.36 | 14.76 / 15.12 / 15.28 |
+| TPOT (ms) p50 / p95 / p99 | 14.77 / 14.86 / 14.89 | 14.76 / 14.85 / 14.89 |
+| TTFT (ms) p50 / p95 / p99 | 132.77 / 133.09 / 133.11 | 134.06 / 134.34 / 134.37 |
 
 ## D. Capacity
 
@@ -80,10 +80,10 @@ Tok/s is aggregate system throughput across in-flight requests. Per-request deco
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
-| Output tok/s | 525.92 | **947.32** |
-| ITL (ms) p50 / p95 / p99 | 14.77 / 15.29 / 15.70 | 16.07 / 16.61 / 16.84 |
-| TPOT (ms) p50 / p95 / p99 | 14.77 / 14.87 / 14.87 | 16.11 / 16.38 / 16.38 |
-| TTFT (ms) p50 / p95 / p99 | 126.86 / 127.28 / 127.41 | 215.37 / 215.63 / 215.80 |
+| Output tok/s | 525.23 | **946.34** |
+| ITL (ms) p50 / p95 / p99 | 14.76 / 15.13 / 15.36 | 16.05 / 16.67 / 16.85 |
+| TPOT (ms) p50 / p95 / p99 | 14.77 / 14.86 / 14.89 | 16.08 / 16.16 / 16.35 |
+| TTFT (ms) p50 / p95 / p99 | 132.77 / 133.09 / 133.11 | 225.47 / 226.36 / 226.37 |
 
 ## Config
 

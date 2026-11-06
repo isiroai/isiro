@@ -189,6 +189,17 @@ def scale_seqs_from_kv_measured(
     return align_seqs_to_cudagraph_stride(clamped, scale_hi)
 
 
+def ceil_seqs_to_cudagraph_stride(seqs: int) -> int:
+    """Round ``seqs`` up onto the vLLM FULL capture stride (or leave 1/2/4)."""
+    if seqs < 1:
+        raise ValueError("seqs must be >= 1")
+    stride = int(_CUDAGRAPH_CAPTURE_STRIDE)
+    n = int(seqs)
+    if n < stride:
+        return n
+    return ((n + stride - 1) // stride) * stride
+
+
 def default_scale_hi_from_coded(
     baseline_seqs: int,
     admission_tokens: int | float,
@@ -198,8 +209,8 @@ def default_scale_hi_from_coded(
 ) -> int:
     """Upper clamp from coded KV token capacity (KV-only / no weight headroom).
 
-    Allows one CUDA-graph stride bump above the rounded coded scale so
-    ``scale_seqs_from_kv_measured`` can align without clamping back to baseline.
+    Always ``max(implied, ceil_stride(implied))`` so align-up never snaps down
+    when scale_hi was set exactly to the rounded coded seqs.
     """
     if baseline_seqs < 1:
         raise ValueError("baseline_seqs must be >= 1")
@@ -219,11 +230,7 @@ def default_scale_hi_from_coded(
         raise ValueError("baseline coded tokens must be positive")
     implied = int(round(baseline_seqs * (float(t_t) / float(t_b))))
     implied = max(baseline_seqs, implied)
-    stride = int(_CUDAGRAPH_CAPTURE_STRIDE)
-    if implied < stride:
-        return implied
-    # Headroom for align-up onto the capture grid.
-    return max(implied, ((implied + stride - 1) // stride) * stride)
+    return max(implied, ceil_seqs_to_cudagraph_stride(implied))
 
 
 def scale_seqs_from_kv_coded(

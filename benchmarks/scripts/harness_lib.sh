@@ -690,18 +690,39 @@ start_tic_serve() {
     if [[ -n "${SERVE_KV_CACHE_DTYPE}" ]]; then
       kv_only_serve+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
     fi
-    # a+ fused must not bake FULL decode FA. Raw vllm docker does not go
-    # through isiro serve's FUSED→PIECEWISE pin; pass after IMAGE so docker
-    # does not eat the flag.
+    # Raw vllm docker does not go through isiro serve.yaml pins; pass after
+    # IMAGE so docker does not eat the flag. a+ fused: PIECEWISE (no FULL
+    # decode FA bake). Path (a) graphs-on: mirror TIC FULL_AND_PIECEWISE +
+    # capture size / dual-range when one-wave batched tokens fire.
     local _fused_on=0
     case "${ISIRO_KV_FUSED_ATTEND:-0}" in
       1|on|true|yes|ON|TRUE|YES) _fused_on=1 ;;
     esac
-    if [[ "${_fused_on}" -eq 1 && "${SERVE_ENFORCE_EAGER}" != "true" ]]; then
-      # mode 3 required: vLLM 0.31 overrides mode2+PIECEWISE to NONE.
+    if [[ "${SERVE_ENFORCE_EAGER}" != "true" ]]; then
+      local _kv_cc=""
+      local _ms_cap=16
+      if [[ "${SERVE_MAX_NUM_SEQS}" =~ ^[0-9]+$ ]] && [[ "${SERVE_MAX_NUM_SEQS}" -gt 16 ]]; then
+        _ms_cap="${SERVE_MAX_NUM_SEQS}"
+      fi
+      if [[ "${_fused_on}" -eq 1 ]]; then
+        # mode 3 required: vLLM 0.31 overrides mode2+PIECEWISE to NONE.
+        _kv_cc='{"mode":3,"cudagraph_mode":"PIECEWISE","inductor_compile_config":{"combo_kernels":true,"benchmark_combo_kernel":true}}'
+      else
+        local _mb=0
+        if [[ -n "${SERVE_MAX_NUM_BATCHED_TOKENS:-}" && "${SERVE_MAX_NUM_BATCHED_TOKENS}" =~ ^[0-9]+$ ]]; then
+          _mb="${SERVE_MAX_NUM_BATCHED_TOKENS}"
+        fi
+        if [[ "${_mb}" -gt 2048 ]]; then
+          _kv_cc="{\"mode\":3,\"cudagraph_mode\":\"FULL_AND_PIECEWISE\",\"compile_ranges_endpoints\":[2048,${_mb}],\"inductor_compile_config\":{\"combo_kernels\":true,\"benchmark_combo_kernel\":true}}"
+        else
+          _kv_cc='{"mode":3,"cudagraph_mode":"FULL_AND_PIECEWISE","inductor_compile_config":{"combo_kernels":true,"benchmark_combo_kernel":true}}'
+        fi
+      fi
       kv_only_serve+=(
         --compilation-config
-        '{"mode":3,"cudagraph_mode":"PIECEWISE","inductor_compile_config":{"combo_kernels":true,"benchmark_combo_kernel":true}}'
+        "${_kv_cc}"
+        --max-cudagraph-capture-size
+        "${_ms_cap}"
       )
     fi
     "${kv_only_serve[@]}" >"${log}" 2>&1 &
@@ -1255,7 +1276,16 @@ trap cleanup EXIT INT TERM
 # fits concurrent short prompts (avoids TTFT cliff past ~33 seqs @ 2048).
 # Empty = leave vendor default. Never set by product isiro serve.
 : "${SERVE_MAX_NUM_BATCHED_TOKENS:=}"
-: "${CAPACITY_BENCH_INPUT_TOKENS:=32}"
+# Keep one-wave planning on the same prefill M as equalize / generation-32.
+if [[ -n "${EQUALIZE_INPUT_TOKENS:-}" && "${EQUALIZE_INPUT_TOKENS}" =~ ^[0-9]+$ ]]; then
+  : "${CAPACITY_BENCH_INPUT_TOKENS:=${EQUALIZE_INPUT_TOKENS}}"
+else
+  : "${CAPACITY_BENCH_INPUT_TOKENS:=32}"
+fi
+
+# Non-empty when capacity arm used a one-wave batched-token overlay (equal-batch
+# must not reuse those TTFT meters as latency-matched).
+CAPACITY_ONE_WAVE_BATCHED_TOKENS=""
 
 apply_capacity_one_wave_batched_tokens() {
   # Sets SERVE_MAX_NUM_BATCHED_TOKENS from current BENCH_MAX_CONCURRENCY, or clears it.
@@ -1272,10 +1302,46 @@ apply_capacity_one_wave_batched_tokens() {
   )"
   if [[ -n "${budget}" ]]; then
     SERVE_MAX_NUM_BATCHED_TOKENS="${budget}"
+    CAPACITY_ONE_WAVE_BATCHED_TOKENS="${budget}"
     echo "capacity one-wave: max_num_batched_tokens=${budget} for conc=${conc} (harness overlay; not product setdefault)" >&2
   else
     SERVE_MAX_NUM_BATCHED_TOKENS=""
     echo "capacity one-wave: vendor default batched tokens fit conc=${conc}" >&2
+  fi
+}
+
+snapshot_capacity_serve_configs() {
+  # Keep capacity op-point configs under capacity/; equal-batch must not clobber.
+  mkdir -p "${RUN_DIR}/capacity"
+  for _cfg in baseline_serve_config.json isiro_serve_config.json; do
+    if [[ -f "${RUN_DIR}/${_cfg}" ]]; then
+      cp -f "${RUN_DIR}/${_cfg}" "${RUN_DIR}/capacity/${_cfg}"
+    fi
+  done
+  if [[ -f "${RUN_DIR}/capacity.json" ]]; then
+    python3 - \
+      "${RUN_DIR}/capacity.json" \
+      "${CAPACITY_ONE_WAVE_BATCHED_TOKENS}" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+one_wave = str(sys.argv[2] or "").strip()
+doc = json.loads(path.read_text(encoding="utf-8"))
+doc["one_wave_batched_tokens"] = int(one_wave) if one_wave.isdigit() else None
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  fi
+}
+
+restore_capacity_serve_configs() {
+  # After equal-batch cold start, restore capacity configs as the publish root.
+  if [[ -f "${RUN_DIR}/capacity/baseline_serve_config.json" ]]; then
+    cp -f "${RUN_DIR}/capacity/baseline_serve_config.json" \
+      "${RUN_DIR}/baseline_serve_config.json"
+  fi
+  if [[ -f "${RUN_DIR}/capacity/isiro_serve_config.json" ]]; then
+    cp -f "${RUN_DIR}/capacity/isiro_serve_config.json" \
+      "${RUN_DIR}/isiro_serve_config.json"
   fi
 }
 
@@ -1782,6 +1848,17 @@ if _kv_only:
     if doc["flashinfer_autotune"] is None:
         doc["flashinfer_autotune"] = False
         doc["sources"]["flashinfer_autotune"] = "harness_kv_only"
+    # Fairness compares cudagraph_mode when both sides present. Path (a)
+    # KV-only argv pins FULL_AND_PIECEWISE (FUSED=1 pins PIECEWISE).
+    if doc.get("cudagraph_mode") is None and not expect_enforce_eager:
+        _fused = str(
+            __import__("os").environ.get("ISIRO_KV_FUSED_ATTEND", "0")
+        ).strip().lower()
+        if _fused in ("1", "on", "true", "yes"):
+            doc["cudagraph_mode"] = "PIECEWISE"
+        else:
+            doc["cudagraph_mode"] = "FULL_AND_PIECEWISE"
+        doc["sources"]["cudagraph_mode"] = "harness_kv_only"
 
 required = (
     "max_model_len",
@@ -2945,11 +3022,17 @@ PY
         -n "${capacity_base_conc}" && \
         "${matched_conc}" == "${capacity_base_conc}" ]]; then
     # Reuse only when capacity timed prompts already match concurrency
-    # (PROMPTS_MATCH_CONCURRENCY). Else fairness fails on num_prompts.
+    # (PROMPTS_MATCH_CONCURRENCY) and capacity did not overlay one-wave
+    # batched tokens (those TTFT meters are capacity-shaped, not equal-batch).
     _cap_prompts="$(
       python3 -c "import json;print(json.load(open('${RUN_DIR}/baseline/generation-32-256.json')).get('bench_config',{}).get('num_prompts',''))" 2>/dev/null || true
     )"
-    if [[ "${_cap_prompts}" == "${matched_conc}" ]] && \
+    _one_wave="$(
+      python3 -c "import json;print(json.load(open('${RUN_DIR}/capacity.json')).get('one_wave_batched_tokens') or '')" 2>/dev/null || true
+    )"
+    if [[ -n "${_one_wave}" ]]; then
+      echo "equal-batch baseline: refuse capacity reuse (one_wave_batched_tokens=${_one_wave})" >&2
+    elif [[ "${_cap_prompts}" == "${matched_conc}" ]] && \
        copy_equal_batch_profile_from_capacity baseline; then
       reuse_baseline=1
       echo "equal-batch baseline: reused capacity timed profiles" >&2
@@ -3109,6 +3192,9 @@ PY
   fi
 }
 
+if [[ "${EXPERIMENT_KIND}" == "capacity" ]]; then
+  snapshot_capacity_serve_configs
+fi
 if [[ "${EXPERIMENT_KIND}" == "capacity" && "${CAPACITY_EQUAL_BATCH}" -eq 1 ]]; then
   MATCHED_EQ_SEQS="$(
     python3 -c "print(min(int('${BASELINE_CAPACITY_SEQS}'), int('${TIC_CAPACITY_SEQS}')))"
@@ -3121,6 +3207,7 @@ if [[ "${EXPERIMENT_KIND}" == "capacity" && "${CAPACITY_EQUAL_BATCH}" -eq 1 ]]; 
   echo "equal-batch transparency: max_num_seqs=${MATCHED_EQ_SEQS} concurrency=${MATCHED_EQ_CONC}" >&2
   restore_timed_graph_mode
   run_equal_batch_transparency "${MATCHED_EQ_SEQS}" "${MATCHED_EQ_CONC}"
+  restore_capacity_serve_configs
 elif [[ "${EXPERIMENT_KIND}" == "capacity" ]]; then
   echo "equal-batch transparency: skipped (set ISIRO_BENCH_EQUAL_BATCH=1 to enable)" >&2
 fi
