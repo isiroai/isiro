@@ -531,18 +531,7 @@ build_baseline_serve() {
   if [[ -n "${SERVE_KV_CACHE_DTYPE}" ]]; then
     BASELINE_SERVE+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
   fi
-  # Dens TIME twin: match Isiro FUSED PIECEWISE (mode 3) so fairness gate
-  # does not reject Hub FULL_AND_PIECEWISE vs fuse PIECEWISE.
-  local _fused_on=0
-  case "${ISIRO_KV_FUSED_ATTEND:-0}" in
-    1|on|true|yes|ON|TRUE|YES) _fused_on=1 ;;
-  esac
-  if [[ "${_fused_on}" -eq 1 && "${SERVE_ENFORCE_EAGER}" != "true" ]]; then
-    BASELINE_SERVE+=(
-      --compilation-config
-      '{"mode":3,"cudagraph_mode":"PIECEWISE","inductor_compile_config":{"combo_kernels":true,"benchmark_combo_kernel":true}}'
-    )
-  fi
+  # Dens TIME twin: same Hub FULL_AND_PIECEWISE as path_a / Isiro fused dens.
 }
 # Initial baseline command for dry-run / early logs; rebuilt after capacity search.
 build_baseline_serve
@@ -618,6 +607,9 @@ start_tic_serve() {
     if [[ -n "${ISIRO_KV_FUSED_DECODE:-}" ]]; then
       export ISIRO_KV_FUSED_DECODE
     fi
+    if [[ -n "${ISIRO_KV_FA_RECLAIM:-}" ]]; then
+      export ISIRO_KV_FA_RECLAIM
+    fi
   else
     unset ISIRO_KV || true
   fi
@@ -660,6 +652,9 @@ start_tic_serve() {
     if [[ -n "${ISIRO_KV_FUSED_DECODE:-}" ]]; then
       kv_only_serve+=(-e "ISIRO_KV_FUSED_DECODE=${ISIRO_KV_FUSED_DECODE}")
     fi
+    if [[ -n "${ISIRO_KV_FA_RECLAIM:-}" ]]; then
+      kv_only_serve+=(-e "ISIRO_KV_FA_RECLAIM=${ISIRO_KV_FA_RECLAIM}")
+    fi
     kv_only_serve+=(
       "${VLLM_IMAGE}"
       --model /model
@@ -690,33 +685,49 @@ start_tic_serve() {
     if [[ -n "${SERVE_KV_CACHE_DTYPE}" ]]; then
       kv_only_serve+=(--kv-cache-dtype "${SERVE_KV_CACHE_DTYPE}")
     fi
+    # From-live FA last-W clamp at EngineArgs (V1 leftover fill ignores a
+    # post-load-only pin). Matches isiro_kv_cli_pool_cap_bytes: DEFAULT_POOL
+    # scaled by (W*32+slack) / (512*32+slack). Skip when operator already set
+    # ISIRO_KV_SET_KV_CACHE_MEMORY / SERVE_KV_CACHE_MEMORY_BYTES.
+    if [[ "${ISIRO_BENCH_KV_SKIP_ENGINEARGS_CLAMP:-0}" == "1" ]]; then
+      SERVE_KV_CACHE_MEMORY_BYTES=""
+      echo "ISIRO_BENCH_KV_ONLY: skip EngineArgs kv-cache-memory-bytes (TIME under-cube)" >&2
+    elif [[ -z "${SERVE_KV_CACHE_MEMORY_BYTES:-}" && -z "${ISIRO_KV_SET_KV_CACHE_MEMORY:-}" ]]; then
+      local _w="${ISIRO_KV_LIVE_WINDOW:-512}"
+      local _slack=4096
+      local _lock_seqs=32
+      local _default_pool=1174405120
+      local _default_tok=$((512 * _lock_seqs + _slack))
+      local _tok=$((_w * _lock_seqs + _slack))
+      if [[ "${_w}" =~ ^[0-9]+$ ]] && [[ "${_tok}" -gt 0 ]]; then
+        SERVE_KV_CACHE_MEMORY_BYTES=$((_default_pool * _tok / _default_tok))
+      fi
+    elif [[ -n "${ISIRO_KV_SET_KV_CACHE_MEMORY:-}" && -z "${SERVE_KV_CACHE_MEMORY_BYTES:-}" ]]; then
+      SERVE_KV_CACHE_MEMORY_BYTES="${ISIRO_KV_SET_KV_CACHE_MEMORY}"
+    fi
+    if [[ -n "${SERVE_KV_CACHE_MEMORY_BYTES:-}" ]]; then
+      kv_only_serve+=(--kv-cache-memory-bytes "${SERVE_KV_CACHE_MEMORY_BYTES}")
+      echo "ISIRO_BENCH_KV_ONLY: FA live clamp EngineArgs kv-cache-memory-bytes=${SERVE_KV_CACHE_MEMORY_BYTES} (W=${ISIRO_KV_LIVE_WINDOW:-512})" >&2
+    fi
     # Raw vllm docker does not go through isiro serve.yaml pins; pass after
-    # IMAGE so docker does not eat the flag. a+ fused: PIECEWISE (no FULL
-    # decode FA bake). Path (a) graphs-on: mirror TIC FULL_AND_PIECEWISE +
-    # capture size / dual-range when one-wave batched tokens fire.
-    local _fused_on=0
-    case "${ISIRO_KV_FUSED_ATTEND:-0}" in
-      1|on|true|yes|ON|TRUE|YES) _fused_on=1 ;;
-    esac
+    # IMAGE so docker does not eat the flag. Path (a) and fused dens graphs-on:
+    # Hub FULL_AND_PIECEWISE + capture size / dual-range when one-wave batched
+    # tokens fire. Fused capture records dens (packed workspace), not FA.
     if [[ "${SERVE_ENFORCE_EAGER}" != "true" ]]; then
       local _kv_cc=""
-      local _ms_cap=16
-      if [[ "${SERVE_MAX_NUM_SEQS}" =~ ^[0-9]+$ ]] && [[ "${SERVE_MAX_NUM_SEQS}" -gt 16 ]]; then
+      # Capture grid 1,2,4,8,...  Do not floor at 16: N=8 packed pool is B=8.
+      local _ms_cap=8
+      if [[ "${SERVE_MAX_NUM_SEQS}" =~ ^[0-9]+$ ]] && [[ "${SERVE_MAX_NUM_SEQS}" -gt 8 ]]; then
         _ms_cap="${SERVE_MAX_NUM_SEQS}"
       fi
-      if [[ "${_fused_on}" -eq 1 ]]; then
-        # mode 3 required: vLLM 0.31 overrides mode2+PIECEWISE to NONE.
-        _kv_cc='{"mode":3,"cudagraph_mode":"PIECEWISE","inductor_compile_config":{"combo_kernels":true,"benchmark_combo_kernel":true}}'
+      local _mb=0
+      if [[ -n "${SERVE_MAX_NUM_BATCHED_TOKENS:-}" && "${SERVE_MAX_NUM_BATCHED_TOKENS}" =~ ^[0-9]+$ ]]; then
+        _mb="${SERVE_MAX_NUM_BATCHED_TOKENS}"
+      fi
+      if [[ "${_mb}" -gt 2048 ]]; then
+        _kv_cc="{\"mode\":3,\"cudagraph_mode\":\"FULL_AND_PIECEWISE\",\"compile_ranges_endpoints\":[2048,${_mb}],\"inductor_compile_config\":{\"combo_kernels\":true,\"benchmark_combo_kernel\":true}}"
       else
-        local _mb=0
-        if [[ -n "${SERVE_MAX_NUM_BATCHED_TOKENS:-}" && "${SERVE_MAX_NUM_BATCHED_TOKENS}" =~ ^[0-9]+$ ]]; then
-          _mb="${SERVE_MAX_NUM_BATCHED_TOKENS}"
-        fi
-        if [[ "${_mb}" -gt 2048 ]]; then
-          _kv_cc="{\"mode\":3,\"cudagraph_mode\":\"FULL_AND_PIECEWISE\",\"compile_ranges_endpoints\":[2048,${_mb}],\"inductor_compile_config\":{\"combo_kernels\":true,\"benchmark_combo_kernel\":true}}"
-        else
-          _kv_cc='{"mode":3,"cudagraph_mode":"FULL_AND_PIECEWISE","inductor_compile_config":{"combo_kernels":true,"benchmark_combo_kernel":true}}'
-        fi
+        _kv_cc='{"mode":3,"cudagraph_mode":"FULL_AND_PIECEWISE","inductor_compile_config":{"combo_kernels":true,"benchmark_combo_kernel":true}}'
       fi
       kv_only_serve+=(
         --compilation-config
@@ -1293,6 +1304,21 @@ apply_capacity_one_wave_batched_tokens() {
     SERVE_MAX_NUM_BATCHED_TOKENS=""
     return 0
   fi
+  # TIME leftover cube: keep vendor default batched tokens (GLM / 042704Z).
+  if [[ "${ISIRO_BENCH_KV_SKIP_ENGINEARGS_CLAMP:-0}" == "1" ]]; then
+    SERVE_MAX_NUM_BATCHED_TOKENS=""
+    CAPACITY_ONE_WAVE_BATCHED_TOKENS=""
+    return 0
+  fi
+  # Skip last-W is decode / post-codes. conc×8K one-wave OOMs the FA cube.
+  # One prompt-length wave lets a full prefix prefill, then decode skip seats.
+  local pin="${CAPACITY_BENCH_INPUT_TOKENS:-0}"
+  if [[ "${pin}" =~ ^[0-9]+$ ]] && [[ "${pin}" -gt 2048 ]]; then
+    SERVE_MAX_NUM_BATCHED_TOKENS="${pin}"
+    CAPACITY_ONE_WAVE_BATCHED_TOKENS="${pin}"
+    echo "capacity one-wave: max_num_batched_tokens=${pin} (one ${pin}-token prefill; decode skip seats)" >&2
+    return 0
+  fi
   local conc="${BENCH_MAX_CONCURRENCY:-${SERVE_MAX_NUM_SEQS}}"
   local budget
   budget="$(
@@ -1849,15 +1875,9 @@ if _kv_only:
         doc["flashinfer_autotune"] = False
         doc["sources"]["flashinfer_autotune"] = "harness_kv_only"
     # Fairness compares cudagraph_mode when both sides present. Path (a)
-    # KV-only argv pins FULL_AND_PIECEWISE (FUSED=1 pins PIECEWISE).
+    # and fused dens KV-only argv pin FULL_AND_PIECEWISE.
     if doc.get("cudagraph_mode") is None and not expect_enforce_eager:
-        _fused = str(
-            __import__("os").environ.get("ISIRO_KV_FUSED_ATTEND", "0")
-        ).strip().lower()
-        if _fused in ("1", "on", "true", "yes"):
-            doc["cudagraph_mode"] = "PIECEWISE"
-        else:
-            doc["cudagraph_mode"] = "FULL_AND_PIECEWISE"
+        doc["cudagraph_mode"] = "FULL_AND_PIECEWISE"
         doc["sources"]["cudagraph_mode"] = "harness_kv_only"
 
 required = (
@@ -2055,6 +2075,10 @@ run_profiles() {
   for name in "${SELECTED_PROFILES[@]}"; do
     _selected["${name}"]=1
   done
+  # Optional pool-full / long-context override keeps profile name generation-32-256
+  # so compare_ab / equal-batch paths stay stable.
+  local _gen_in="${ISIRO_BENCH_GEN_INPUT_TOKENS:-32}"
+  local _gen_out="${ISIRO_BENCH_GEN_OUTPUT_TOKENS:-256}"
   while read -r profile input_tokens output_tokens; do
     [[ -n "${_selected[${profile}]:-}" ]] || continue
     python3 "${BENCH_ROOT}/scripts/run_bench.py" \
@@ -2075,11 +2099,11 @@ run_profiles() {
       --raw-dir "${RAW_DIR}/${variant}" \
       --out "${RUN_DIR}/${variant}/${profile}.json" \
       --vllm-image "${VLLM_IMAGE}"
-  done <<'PROFILES'
+  done <<PROFILES
 ttft-128 128 64
 ttft-512 512 64
 ttft-2048 2048 64
-generation-32-256 32 256
+generation-32-256 ${_gen_in} ${_gen_out}
 generation-16384-256 16384 256
 PROFILES
 }
@@ -2652,20 +2676,44 @@ if [[ "${EXPERIMENT_KIND}" == "capacity" ]]; then
     BASELINE_CAPACITY_SEQS="$(binary_search_max_seqs baseline)"
     CAPACITY_SEQS_SCALE_MODE="search"
   else
-    if [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 && -n "${ISIRO_BENCH_KV}" ]]; then
+    if [[ "${ISIRO_BENCH_KV_SKIP_ENGINEARGS_CLAMP:-0}" == "1" ]]; then
+      echo "capacity operating point: TIME leftover cube; matched max_num_seqs=${SERVE_MAX_NUM_SEQS} (no coded scale)" >&2
+      CAPACITY_SEQS_SCALE_MODE="fixed"
+      BASELINE_CAPACITY_SEQS="${SERVE_MAX_NUM_SEQS}"
+      TIC_CAPACITY_SEQS="${SERVE_MAX_NUM_SEQS}"
+      CAPACITY_SEARCH_LO="${SERVE_MAX_NUM_SEQS}"
+      CAPACITY_KV_SCALE=0
+    elif [[ -n "${ISIRO_BENCH_KV_TIC_SEQS:-}" ]]; then
+      echo "capacity operating point: baseline max_num_seqs=${SERVE_MAX_NUM_SEQS}; Isiro skip-on seqs=${ISIRO_BENCH_KV_TIC_SEQS}" >&2
+      CAPACITY_SEQS_SCALE_MODE="kv_skip"
+      BASELINE_CAPACITY_SEQS="${SERVE_MAX_NUM_SEQS}"
+      TIC_CAPACITY_SEQS="${ISIRO_BENCH_KV_TIC_SEQS}"
+      CAPACITY_SEARCH_LO="${SERVE_MAX_NUM_SEQS}"
+      CAPACITY_SEARCH_HI="${ISIRO_BENCH_KV_TIC_SEQS}"
+      CAPACITY_KV_SCALE=0
+      _apply_tic_conc_from_seqs
+    elif [[ "${ISIRO_BENCH_KV_ONLY}" -eq 1 && -n "${ISIRO_BENCH_KV}" ]]; then
       echo "capacity operating point: baseline max_num_seqs=${SERVE_MAX_NUM_SEQS}; Isiro KV-only coded-token scaled" >&2
       CAPACITY_SEQS_SCALE_MODE="kv_coded"
+      BASELINE_CAPACITY_SEQS="${SERVE_MAX_NUM_SEQS}"
+      TIC_CAPACITY_SEQS="${SERVE_MAX_NUM_SEQS}"
+      CAPACITY_SEARCH_LO="${SERVE_MAX_NUM_SEQS}"
+      CAPACITY_KV_SCALE=1
     elif [[ "${CAPACITY_KV_MEASURED}" -eq 1 ]]; then
       echo "capacity operating point: baseline max_num_seqs=${SERVE_MAX_NUM_SEQS}; TIC measured-KV scaled (opt-in)" >&2
       CAPACITY_SEQS_SCALE_MODE="kv_measured"
+      BASELINE_CAPACITY_SEQS="${SERVE_MAX_NUM_SEQS}"
+      TIC_CAPACITY_SEQS="${SERVE_MAX_NUM_SEQS}"
+      CAPACITY_SEARCH_LO="${SERVE_MAX_NUM_SEQS}"
+      CAPACITY_KV_SCALE=1
     else
       echo "capacity operating point: baseline max_num_seqs=${SERVE_MAX_NUM_SEQS}; TIC KV-scaled from weight estimate (default)" >&2
       CAPACITY_SEQS_SCALE_MODE="kv_estimate"
+      BASELINE_CAPACITY_SEQS="${SERVE_MAX_NUM_SEQS}"
+      TIC_CAPACITY_SEQS="${SERVE_MAX_NUM_SEQS}"
+      CAPACITY_SEARCH_LO="${SERVE_MAX_NUM_SEQS}"
+      CAPACITY_KV_SCALE=1
     fi
-    BASELINE_CAPACITY_SEQS="${SERVE_MAX_NUM_SEQS}"
-    TIC_CAPACITY_SEQS="${SERVE_MAX_NUM_SEQS}"
-    CAPACITY_SEARCH_LO="${SERVE_MAX_NUM_SEQS}"
-    CAPACITY_KV_SCALE=1
   fi
   if [[ "${CAPACITY_SEARCH_ENABLED}" -eq 1 ]]; then
     require_quiet_gpu
@@ -2678,11 +2726,7 @@ if [[ "${EXPERIMENT_KIND}" == "capacity" ]]; then
       --bench-cap "${BENCH_MAX_CONCURRENCY_CAP}"
   )"
   if [[ "${CAPACITY_KV_SCALE}" -eq 0 ]]; then
-    TIC_CONC="$(
-      python3 "${BENCH_ROOT}/scripts/capacity_plan.py" concurrency \
-        --max-num-seqs "${TIC_CAPACITY_SEQS}" \
-        --bench-cap "${BENCH_MAX_CONCURRENCY_CAP}"
-    )"
+    _apply_tic_conc_from_seqs
     write_capacity_json "${BASELINE_CAPACITY_SEQS}" "${TIC_CAPACITY_SEQS}" \
       "${BASELINE_CONC}" "${TIC_CONC}"
   else

@@ -832,6 +832,12 @@ def _section_c(
             "up onto the vLLM CUDA-graph capture stride (multiples of 8) so "
             "FULL decode graphs cover concurrency."
         )
+    elif scale_mode == "kv_skip":
+        scale_blurb = (
+            f"{arm} concurrent requests use last-W skip so Isiro seats more "
+            "8K sequences than vendor FA can hold at this prompt length. "
+            "Baseline stays at its max legal N."
+        )
     elif scale_mode == "kv_estimate":
         scale_blurb = (
             f"{arm} concurrent requests = round(Baseline × estimated KV "
@@ -904,11 +910,17 @@ def _section_generation(
 ) -> list[str]:
     arm = _arm_col()
     del mention_equal_batch
-    heading = (
-        "### Generation (recall-matched KV, input 32 / output 256)"
-        if as_subsection
-        else f"## {letter}. Generation (recall-matched KV, input 32 / output 256)"
+    in_tok, out_tok = 32, 256
+    if decode_rows:
+        try:
+            in_tok = int(decode_rows[0].get("input_tokens") or 32)
+            out_tok = int(decode_rows[0].get("output_tokens") or 256)
+        except (TypeError, ValueError):
+            in_tok, out_tok = 32, 256
+    gen_label = (
+        f"Generation (recall-matched KV, input {in_tok} / output {out_tok})"
     )
+    heading = f"### {gen_label}" if as_subsection else f"## {letter}. {gen_label}"
     lines = [
         heading,
         "",
@@ -983,13 +995,38 @@ def _section_concurrency_table(block: dict[str, Any]) -> list[str]:
         block.get("baseline_admit_failed")
         or block.get("baseline_status") in ("admit_fail", "cliff", "oom")
     )
+    in_tok = block.get("input_tokens")
+    out_tok = block.get("output_tokens")
+    peak_t = block.get("peak_tokens_per_seq")
+    if peak_t is None and isinstance(in_tok, (int, float)) and isinstance(
+        out_tok, (int, float)
+    ):
+        peak_t = int(in_tok) + int(out_tok)
+    shape_bits: list[str] = []
+    if isinstance(in_tok, (int, float)) and isinstance(out_tok, (int, float)):
+        shape_bits.append(
+            f"input {number(in_tok, 0)} / output {number(out_tok, 0)}"
+        )
+    if isinstance(peak_t, (int, float)):
+        shape_bits.append(f"peak T={number(peak_t, 0)}/seq")
+    shape_line = (
+        f"Timed load: {'; '.join(shape_bits)}."
+        if shape_bits
+        else ""
+    )
     lines = [
         f"### Concurrent requests = {conc_txt}",
         "",
-        f"| Metric | Baseline | {arm} |",
-        "|--------|----------|-------|",
-        f"| Concurrent requests | {conc_txt} | {conc_txt} |",
     ]
+    if shape_line:
+        lines.extend([shape_line, ""])
+    lines.extend(
+        [
+            f"| Metric | Baseline | {arm} |",
+            "|--------|----------|-------|",
+            f"| Concurrent requests | {conc_txt} | {conc_txt} |",
+        ]
+    )
     if baseline_cliff:
         lines.append(
             f"| Output tok/s | admit fail / cliff | {number(tps.get('tic'))} |"
@@ -1227,6 +1264,10 @@ def _mode_sections(
         or isiro_kv_on
         or isinstance(summary.get("concurrency_by_n"), list)
     )
+    # Skip-on 8K seating: publish Isiro N vs baseline max legal N even when
+    # matched-N equal-batch is also in the report.
+    if str((capacity or {}).get("seqs_scale_mode") or "") == "kv_skip":
+        skip_mixed_capacity = False
     if conc_blocks:
         bad = validate_concurrency_blocks(conc_blocks)
         if bad:
