@@ -715,9 +715,19 @@ start_tic_serve() {
     # tokens fire. Fused capture records dens (packed workspace), not FA.
     if [[ "${SERVE_ENFORCE_EAGER}" != "true" ]]; then
       local _kv_cc=""
-      # Capture grid 1,2,4,8,...  Do not floor at 16: N=8 packed pool is B=8.
+      # Fused packed decode: capture grid includes B=8 (do not floor at 16).
+      # Path-a FUSED=0 matches Hub admit-align: floor 16 so N=8 TTFT does not
+      # cliff. Raise with max_num_seqs when capacity scales past 16.
+      local _fused_on=0
+      case "${ISIRO_KV_FUSED_ATTEND:-0}" in 1|true|yes|on) _fused_on=1 ;; esac
+      case "${ISIRO_KV_FUSED_DECODE:-0}" in 1|true|yes|on) _fused_on=1 ;; esac
       local _ms_cap=8
-      if [[ "${SERVE_MAX_NUM_SEQS}" =~ ^[0-9]+$ ]] && [[ "${SERVE_MAX_NUM_SEQS}" -gt 8 ]]; then
+      if [[ "${_fused_on}" -eq 0 ]]; then
+        _ms_cap=16
+        if [[ "${SERVE_MAX_NUM_SEQS}" =~ ^[0-9]+$ ]] && [[ "${SERVE_MAX_NUM_SEQS}" -gt 16 ]]; then
+          _ms_cap="${SERVE_MAX_NUM_SEQS}"
+        fi
+      elif [[ "${SERVE_MAX_NUM_SEQS}" =~ ^[0-9]+$ ]] && [[ "${SERVE_MAX_NUM_SEQS}" -gt 8 ]]; then
         _ms_cap="${SERVE_MAX_NUM_SEQS}"
       fi
       local _mb=0
