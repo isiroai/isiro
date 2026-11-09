@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `kv-only` | runtime `kv-only` | 2026-11-09 17:29 UTC
+`awq` | `rtx-5090` | compiler `kv-only` | runtime `kv-only` | 2026-11-09 16:44 UTC
 
 Tooling:
 
@@ -14,6 +14,8 @@ Compared:
 Section A: loaded weights and Available KV GiB are shared (same raw weights, same vendor util). KV tokens capacity follows the measured Isiro/Baseline token ratio on that budget. KV bytes vs context are under KV vs context when the curve ran. Section C concurrency uses the same N both arms at each load point.
 
 TIME claim: **NO GO** on concurrency (N=8; tok/s 94.72 vs 95.51; ITL 16.89 vs 16.00; TTFT 10,497.90 vs 10,540.26).
+
+This scrape is an 8192-token prefix (TTFT in seconds). That is a long-prefix probe, not a short-turn voice shape. Voice-length TIME is matched generation-32 in `rtx-5090-report-isiro-kv-path-a` (TTFT ~133 ms, N=8 and N=16 both arms). Mixed Baseline@8 vs Isiro@16 is not the claim.
 
 ## Correctness
 
@@ -36,7 +38,7 @@ Loaded weights are identical on both arms (no TIC weight claim).
 
 | Metric | Value |
 |--------|-------|
-| Available KV | 4.00 GiB |
+| Available KV | 4.08 GiB |
 
 Available KV is the vendor reserved pool on the GPU (same util target both arms; no TIC weight headroom).
 
@@ -57,27 +59,6 @@ Same concurrent-request ceiling both arms at each N (no mismatched Baseline/Isir
 | ITL (ms) p50 / p95 / p99 | 16.00 / 309.78 / 551.75 | 16.89 / 301.58 / 547.44 |
 | TPOT (ms) p50 / p95 / p99 | 41.94 / 67.95 / 70.27 | 42.72 / 68.54 / 70.85 |
 | TTFT (ms) p50 / p95 / p99 | 10,540.26 / 16,886.12 / 17,288.36 | 10,497.90 / 16,842.34 / 17,236.26 |
-
-## D. Capacity
-
-Isiro concurrent requests use last-W skip so Isiro seats more 8K sequences than vendor FA can hold at this prompt length. Baseline stays at its max legal N.
-
-Concurrent requests are the serve max concurrent sequences (`max_num_seqs`); the bench load matches that ceiling in this A/B.
-
-| Metric | Baseline | Isiro |
-|--------|----------|-------|
-| Concurrent requests | 8 | **16** (**+100%**) |
-
-### Generation (recall-matched KV, input 8192 / output 256)
-
-Tok/s is aggregate system throughput across in-flight requests. Per-request decode rate is reflected by ITL/TPOT. Prefer section C Concurrency for matched-N latency and tok/s.
-
-| Metric | Baseline | Isiro |
-|--------|----------|-------|
-| Output tok/s | 93.85 | **102.13** (**+9%**) |
-| ITL (ms) p50 / p95 / p99 | 15.96 / 16.38 / 400.87 | 17.78 / 18.24 / 2,188.84 |
-| TPOT (ms) p50 / p95 / p99 | 32.00 / 59.14 / 61.61 | 68.28 / 127.06 / 132.16 |
-| TTFT (ms) p50 / p95 / p99 | 13,609.76 / 17,749.56 / 17,755.83 | 22,573.23 / 35,553.32 / 35,583.37 |
 
 ## Config
 

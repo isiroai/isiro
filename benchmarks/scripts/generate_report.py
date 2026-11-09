@@ -1264,10 +1264,6 @@ def _mode_sections(
         or isiro_kv_on
         or isinstance(summary.get("concurrency_by_n"), list)
     )
-    # Skip-on 8K seating: publish Isiro N vs baseline max legal N even when
-    # matched-N equal-batch is also in the report.
-    if str((capacity or {}).get("seqs_scale_mode") or "") == "kv_skip":
-        skip_mixed_capacity = False
     if conc_blocks:
         bad = validate_concurrency_blocks(conc_blocks)
         if bad:
