@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -82,6 +83,8 @@ from serve_output_match import (  # noqa: E402
     compare_captures,
     greedy_chat_payload,
     greedy_protocol_errors,
+    load_eos_token_ids,
+    strip_trailing_eos,
     thinking_controls_present,
 )
 
@@ -1611,6 +1614,157 @@ class BenchmarkTests(unittest.TestCase):
         self.assertFalse(fail["serve_output_match_ok"])
         self.assertEqual(fail["matched"], 1)
 
+    def test_serve_output_match_trailing_eos_aliases(self) -> None:
+        eos = (248046, 248044)
+        baseline = {
+            "schema": "isiro-benchmark-output-match-v1",
+            "kind": "capture",
+            "seed": 17,
+            "max_tokens": 32,
+            "enable_thinking": False,
+            "prompts": [
+                {
+                    "index": 0,
+                    "prompt": "ping",
+                    "token_ids": [57104, 248046],
+                    "text": "pong",
+                    "finish_reason": "stop",
+                },
+                {
+                    "index": 1,
+                    "prompt": "2+2",
+                    "token_ids": [19, 248046],
+                    "text": "4",
+                    "finish_reason": "stop",
+                },
+            ],
+        }
+        isiro = {
+            **baseline,
+            "prompts": [
+                {
+                    **baseline["prompts"][0],
+                    "token_ids": [57104, 248044],
+                },
+                {
+                    **baseline["prompts"][1],
+                    "token_ids": [19, 248044],
+                },
+            ],
+        }
+        without_eos = compare_captures(baseline, isiro)
+        self.assertFalse(without_eos["serve_output_match_ok"])
+        self.assertEqual(without_eos["matched"], 0)
+        aliased = compare_captures(baseline, isiro, eos_token_ids=eos)
+        self.assertTrue(aliased["serve_output_match_ok"])
+        self.assertEqual(aliased["matched"], 2)
+        self.assertEqual(aliased["details"][0]["compare_mode"], "token_ids_eos")
+        self.assertEqual(aliased["eos_token_ids"], [248046, 248044])
+        content_fail = compare_captures(
+            baseline,
+            {
+                **isiro,
+                "prompts": [
+                    {**isiro["prompts"][0], "token_ids": [9, 248044]},
+                    isiro["prompts"][1],
+                ],
+            },
+            eos_token_ids=eos,
+        )
+        self.assertFalse(content_fail["serve_output_match_ok"])
+        self.assertEqual(content_fail["matched"], 1)
+        interior = compare_captures(
+            baseline,
+            {
+                **isiro,
+                "prompts": [
+                    {
+                        **isiro["prompts"][0],
+                        "token_ids": [57104, 248044, 19],
+                    },
+                    isiro["prompts"][1],
+                ],
+            },
+            eos_token_ids=eos,
+        )
+        self.assertFalse(interior["serve_output_match_ok"])
+        self.assertEqual(
+            strip_trailing_eos([57104, 248046, 248044], frozenset(eos)),
+            [57104],
+        )
+
+    def test_load_eos_token_ids_from_generation_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            model = Path(temp)
+            (model / "generation_config.json").write_text(
+                json.dumps({"eos_token_id": [248046, 248044]}),
+                encoding="utf-8",
+            )
+            self.assertEqual(load_eos_token_ids(model), [248046, 248044])
+            (model / "generation_config.json").write_text(
+                json.dumps({"eos_token_id": 2}),
+                encoding="utf-8",
+            )
+            self.assertEqual(load_eos_token_ids(model), [2])
+
+    def test_fold_serve_output_match_eos_from_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp)
+            model = run / "hf-model"
+            model.mkdir()
+            (model / "generation_config.json").write_text(
+                json.dumps({"eos_token_id": [248046, 248044]}),
+                encoding="utf-8",
+            )
+            (run / "commands.json").write_text(
+                json.dumps(
+                    {
+                        "baseline_serve": [
+                            "docker",
+                            "run",
+                            "-v",
+                            f"{model}:/model:ro",
+                            "--model",
+                            "/model",
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            baseline = {
+                "max_tokens": 32,
+                "enable_thinking": False,
+                "prompts": [
+                    {
+                        "index": 0,
+                        "prompt": "a",
+                        "token_ids": [1, 248046],
+                        "text": "x",
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+            isiro = {
+                **baseline,
+                "prompts": [
+                    {**baseline["prompts"][0], "token_ids": [1, 248044]}
+                ],
+            }
+            (run / "output_match_baseline.json").write_text(
+                json.dumps(baseline), encoding="utf-8"
+            )
+            (run / "output_match_isiro.json").write_text(
+                json.dumps(isiro), encoding="utf-8"
+            )
+            correctness: dict = {}
+            fold_serve_output_match(run, correctness)
+            self.assertTrue(correctness["serve_output_match_ok"])
+            self.assertEqual(correctness["serve_output_match_matched"], 1)
+            folded = json.loads(
+                (run / "output_match.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(folded["details"][0]["compare_mode"], "token_ids_eos")
+
     def test_report_single_graph_on_shape(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             run = Path(temp)
@@ -2385,6 +2539,68 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn(str(_SSE_PATCH.resolve()), joined)
             self.assertIn(_VLLM_SSE_IN_IMAGE, joined)
             self.assertIn("--extra-body", cmd)
+            self.assertIn("--dataset-name", cmd)
+            self.assertEqual(cmd[cmd.index("--dataset-name") + 1], "random")
+
+    def test_run_bench_gutenberg_dataset_not_random(self) -> None:
+        from run_bench import _bench_dataset_name, bench_command
+
+        model_raw = (
+            os.environ.get("BASELINE_MODEL_DIR")
+            or os.environ.get("ISIRO_BENCH_MODEL_DIR")
+            or ""
+        ).strip()
+        model_dir = Path(model_raw) if model_raw else None
+        tok_json = (model_dir / "tokenizer.json") if model_dir is not None else None
+        if model_dir is None or tok_json is None or not tok_json.is_file():
+            self.skipTest("BASELINE_MODEL_DIR tokenizer.json missing")
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / "raw"
+            raw.mkdir()
+            serve = Path(temp) / "serve.json"
+            serve.write_text("{}", encoding="utf-8")
+            args = __import__("argparse").Namespace(
+                variant="isiro",
+                profile="generation-32-256",
+                run_id="t",
+                model="m",
+                tokenizer=str(model_dir),
+                api_url="http://127.0.0.1:8000",
+                backend="openai-chat",
+                endpoint="/chat/completions",
+                input_tokens=128,
+                output_tokens=16,
+                num_prompts=2,
+                num_warmups=0,
+                max_concurrency=2,
+                seed=17,
+                replicates=1,
+                serve_config=serve,
+                raw_dir=raw,
+                out=Path(temp) / "out.json",
+                vllm_image="vllm/vllm-openai:v0.31.0",
+                dry_run=True,
+                raw_input=[],
+                extra_body="",
+            )
+            old = os.environ.get("ISIRO_BENCH_DATASET")
+            os.environ["ISIRO_BENCH_DATASET"] = "gutenberg"
+            try:
+                self.assertEqual(_bench_dataset_name(), "gutenberg")
+                cmd = bench_command(args, raw / "isiro-generation-32-256-r1.json")
+            finally:
+                if old is None:
+                    os.environ.pop("ISIRO_BENCH_DATASET", None)
+                else:
+                    os.environ["ISIRO_BENCH_DATASET"] = old
+            joined = " ".join(cmd)
+            self.assertIn("--dataset-name", cmd)
+            self.assertEqual(cmd[cmd.index("--dataset-name") + 1], "custom")
+            self.assertIn("gutenberg_1342.jsonl", joined)
+            self.assertIn("--skip-chat-template", cmd)
+            self.assertNotIn("--random-input-len", cmd)
+            self.assertTrue((raw / "gutenberg_1342.jsonl").is_file())
+            self.assertIn("/opt/isiro_pandas", joined)
 
 
 class ResolveFp8BaselineQuantizationTests(unittest.TestCase):

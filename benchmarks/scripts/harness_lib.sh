@@ -1715,6 +1715,7 @@ capture_serve_output_match() {
     --variant "${variant}" \
     --seed "${BENCH_SEED}" \
     --max-tokens 32 \
+    --model-dir "${BASELINE_MODEL_DIR}" \
     --out "${RUN_DIR}/output_match_${variant}.json"
 }
 

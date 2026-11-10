@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 SCHEMA = "isiro-benchmark-output-match-v1"
 THINK_MARKERS = ("<think>", "</think>", "<|im_start|>think")
@@ -24,6 +25,12 @@ DEFAULT_PROMPTS: tuple[str, ...] = (
     "What is 2+2? Answer with only the number.",
     "Name the capital of France in one word.",
     "Reply with exactly one word in lowercase: hello",
+)
+
+_MODEL_ENV_KEYS = (
+    "BASELINE_MODEL_DIR",
+    "TIC_MODEL_DIR",
+    "ISIRO_BENCH_MODEL_DIR",
 )
 
 
@@ -214,6 +221,116 @@ def greedy_protocol_errors(capture: dict[str, Any]) -> list[str]:
     return errors
 
 
+def load_eos_token_ids(model_dir: Path | None) -> list[int]:
+    """Read ``eos_token_id`` from ``generation_config.json`` (int or list)."""
+    if model_dir is None:
+        return []
+    path = Path(model_dir) / "generation_config.json"
+    if not path.is_file():
+        return []
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(doc, dict):
+        return []
+    return _coerce_id_list(doc.get("eos_token_id"))
+
+
+def model_dir_from_env() -> Path | None:
+    """Harness model tree (generation_config.json lives here)."""
+    for key in _MODEL_ENV_KEYS:
+        raw = os.environ.get(key, "").strip()
+        if not raw:
+            continue
+        path = Path(raw)
+        if path.is_dir():
+            return path
+    return None
+
+
+def model_dir_from_commands(run_dir: Path | None) -> Path | None:
+    """Host path of the Docker ``:/model`` bind from ``commands.json``."""
+    if run_dir is None:
+        return None
+    path = Path(run_dir) / "commands.json"
+    if not path.is_file():
+        return None
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    text = json.dumps(doc)
+    for part in text.replace(",", " ").replace('"', " ").split():
+        if ":/model" not in part:
+            continue
+        host = part.split(":/model", 1)[0]
+        candidate = Path(host)
+        if candidate.is_dir() and (candidate / "generation_config.json").is_file():
+            return candidate
+    return None
+
+
+def _coerce_id_list(raw: Any) -> list[int]:
+    if isinstance(raw, bool):
+        return []
+    if isinstance(raw, int):
+        return [raw]
+    if not isinstance(raw, list):
+        return []
+    out: list[int] = []
+    seen: set[int] = set()
+    for item in raw:
+        try:
+            token_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        if token_id in seen:
+            continue
+        seen.add(token_id)
+        out.append(token_id)
+    return out
+
+
+def collect_eos_token_ids(
+    *docs: dict[str, Any],
+    model_dir: Path | None = None,
+    run_dir: Path | None = None,
+) -> list[int]:
+    """EOS set: capture JSON, then generation_config via model dir / run."""
+    found: list[int] = []
+    seen: set[int] = set()
+
+    def _add(ids: Iterable[int]) -> None:
+        for token_id in ids:
+            value = int(token_id)
+            if value in seen:
+                continue
+            seen.add(value)
+            found.append(value)
+
+    for doc in docs:
+        if not isinstance(doc, dict):
+            continue
+        raw = doc.get("eos_token_ids")
+        if raw is not None:
+            _add(_coerce_id_list(raw))
+    if found:
+        return found
+    resolved = model_dir or model_dir_from_commands(run_dir)
+    return load_eos_token_ids(resolved)
+
+
+def strip_trailing_eos(token_ids: list[int], eos: frozenset[int]) -> list[int]:
+    """Drop trailing stop tokens that are in the model's eos set."""
+    if not eos:
+        return list(token_ids)
+    out = list(token_ids)
+    while out and out[-1] in eos:
+        out.pop()
+    return out
+
+
 def capture_variant(
     *,
     api_url: str,
@@ -223,6 +340,7 @@ def capture_variant(
     max_tokens: int,
     prompts: tuple[str, ...] = DEFAULT_PROMPTS,
     timeout: float = 120.0,
+    model_dir: Path | None = None,
 ) -> dict[str, Any]:
     base = api_url.rstrip("/")
     if not base.endswith("/v1"):
@@ -271,6 +389,11 @@ def capture_variant(
         "enable_thinking": False,
         "prompts": results,
     }
+    eos_ids = collect_eos_token_ids(
+        model_dir=model_dir or model_dir_from_env()
+    )
+    if eos_ids:
+        doc["eos_token_ids"] = eos_ids
     protocol = greedy_protocol_errors(doc)
     if protocol:
         raise RuntimeError(
@@ -283,7 +406,25 @@ def capture_variant(
 def compare_captures(
     baseline: dict[str, Any],
     tic: dict[str, Any],
+    *,
+    eos_token_ids: Iterable[int] | None = None,
+    model_dir: Path | None = None,
+    run_dir: Path | None = None,
 ) -> dict[str, Any]:
+    """Greedy token-ID compare.
+
+    Content IDs must match. Trailing tokens in the model's
+    ``generation_config.json`` ``eos_token_id`` set are equivalent stops
+    (Qwen lists both ``<|im_end|>`` and ``<|endoftext|>``). Interior IDs
+    still compare exactly. Missing eos set keeps exact list equality.
+    """
+    if eos_token_ids is None:
+        eos_list = collect_eos_token_ids(
+            baseline, tic, model_dir=model_dir, run_dir=run_dir
+        )
+    else:
+        eos_list = _coerce_id_list(list(eos_token_ids))
+    eos = frozenset(eos_list)
     b_prompts = baseline.get("prompts") or []
     t_prompts = tic.get("prompts") or []
     matched = 0
@@ -295,8 +436,17 @@ def compare_captures(
         b_ids = b.get("token_ids")
         t_ids = t.get("token_ids")
         if isinstance(b_ids, list) and isinstance(t_ids, list):
-            ok = b_ids == t_ids
-            mode = "token_ids"
+            if b_ids == t_ids:
+                ok = True
+                mode = "token_ids"
+            elif eos and (
+                strip_trailing_eos(b_ids, eos) == strip_trailing_eos(t_ids, eos)
+            ):
+                ok = True
+                mode = "token_ids_eos"
+            else:
+                ok = False
+                mode = "token_ids"
         else:
             ok = (b.get("text") or "") == (t.get("text") or "")
             mode = "text_fallback"
@@ -322,7 +472,7 @@ def compare_captures(
         and matched == len(b_prompts)
         and all(item["ok"] for item in details)
     )
-    return {
+    doc = {
         "schema": SCHEMA,
         "kind": "compare",
         "prompt_count": len(b_prompts),
@@ -335,6 +485,9 @@ def compare_captures(
         "tic_seed": tic.get("seed"),
         "max_tokens": baseline.get("max_tokens"),
     }
+    if eos_list:
+        doc["eos_token_ids"] = eos_list
+    return doc
 
 
 def main() -> int:
@@ -348,6 +501,12 @@ def main() -> int:
     capture.add_argument("--out", type=Path, required=True)
     capture.add_argument("--seed", type=int, default=0)
     capture.add_argument("--max-tokens", type=int, default=32)
+    capture.add_argument(
+        "--model-dir",
+        type=Path,
+        default=None,
+        help="HF tree with generation_config.json (eos_token_id)",
+    )
 
     compare = sub.add_parser(
         "compare", help="Compare baseline/isiro capture JSON files"
@@ -355,6 +514,12 @@ def main() -> int:
     compare.add_argument("--baseline", type=Path, required=True)
     compare.add_argument("--tic", type=Path, required=True)
     compare.add_argument("--out", type=Path, required=True)
+    compare.add_argument("--model-dir", type=Path, default=None)
+    compare.add_argument(
+        "--eos-token-ids",
+        default=None,
+        help="comma-separated eos ids (overrides generation_config)",
+    )
 
     args = parser.parse_args()
     if args.command == "capture":
@@ -364,6 +529,7 @@ def main() -> int:
             variant=args.variant,
             seed=args.seed,
             max_tokens=args.max_tokens,
+            model_dir=args.model_dir,
         )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -372,7 +538,19 @@ def main() -> int:
 
     baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
     tic = json.loads(args.tic.read_text(encoding="utf-8"))
-    doc = compare_captures(baseline, tic)
+    eos_arg: list[int] | None = None
+    if args.eos_token_ids:
+        eos_arg = [
+            int(part.strip())
+            for part in str(args.eos_token_ids).split(",")
+            if part.strip()
+        ]
+    doc = compare_captures(
+        baseline,
+        tic,
+        eos_token_ids=eos_arg,
+        model_dir=args.model_dir or model_dir_from_env(),
+    )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(args.out)

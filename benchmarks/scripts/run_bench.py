@@ -31,6 +31,122 @@ _VLLM_SSE_IN_IMAGE = (
     "/usr/local/lib/python3.12/dist-packages/vllm/benchmarks/lib/"
     "endpoint_request_func.py"
 )
+_GUTENBERG_FIXTURE = (
+    Path(__file__).resolve().parent.parent / "fixtures" / "pride_and_prejudice.txt"
+)
+
+
+def _bench_dataset_name() -> str:
+    raw = (os.environ.get("ISIRO_BENCH_DATASET") or "random").strip().lower()
+    if raw in ("gutenberg", "gutenberg_1342", "pride_and_prejudice"):
+        return "gutenberg"
+    return "random"
+
+
+def _gutenberg_prefix_text(*, tokenizer_dir: str | None, n_tokens: int) -> str:
+    """Decode the first ``n_tokens`` of Gutenberg #1342. Fail closed if missing."""
+    if not _GUTENBERG_FIXTURE.is_file():
+        raise RuntimeError(
+            f"Gutenberg fixture required: {_GUTENBERG_FIXTURE} "
+            "(Pride and Prejudice / gutenberg_1342)"
+        )
+    text = _GUTENBERG_FIXTURE.read_text(encoding="utf-8")
+    tok_json = None
+    if tokenizer_dir:
+        cand = Path(tokenizer_dir) / "tokenizer.json"
+        if cand.is_file():
+            tok_json = cand
+    if tok_json is None:
+        raise RuntimeError(
+            "Gutenberg bench needs a local tokenizer.json "
+            "(pass --tokenizer <model-dir>)"
+        )
+    try:
+        from tokenizers import Tokenizer
+    except ImportError:
+        py = (os.environ.get("ISIRO_BENCH_PYTHON") or "").strip()
+        if not py:
+            raise RuntimeError(
+                "Gutenberg bench needs tokenizers, or ISIRO_BENCH_PYTHON "
+                "pointing at a venv that has it"
+            )
+        dest = Path("/tmp") / "isiro_gutenberg_prefix.txt"
+        script = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "from tokenizers import Tokenizer\n"
+            "fix, tokp, n, out = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]\n"
+            "tok = Tokenizer.from_file(tokp)\n"
+            "ids = tok.encode(Path(fix).read_text(encoding='utf-8')).ids\n"
+            "if len(ids) < n:\n"
+            "    raise SystemExit(f'gutenberg tokens {len(ids)} < {n}')\n"
+            "Path(out).write_text(tok.decode(ids[:n], skip_special_tokens=True), "
+            "encoding='utf-8')\n"
+        )
+        completed = subprocess.run(
+            [
+                py,
+                "-c",
+                script,
+                str(_GUTENBERG_FIXTURE),
+                str(tok_json),
+                str(int(n_tokens)),
+                str(dest),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "Gutenberg token cut failed: "
+                + (completed.stderr.strip() or completed.stdout.strip())
+            )
+        return dest.read_text(encoding="utf-8")
+    tok = Tokenizer.from_file(str(tok_json))
+    ids = tok.encode(text).ids
+    if len(ids) < int(n_tokens):
+        raise RuntimeError(
+            f"Gutenberg fixture has {len(ids)} tokens, need {int(n_tokens)}"
+        )
+    return tok.decode(ids[: int(n_tokens)], skip_special_tokens=True)
+
+
+def write_gutenberg_jsonl(
+    dest: Path,
+    *,
+    tokenizer_dir: str | None,
+    n_tokens: int,
+    n_prompts: int,
+    output_tokens: int,
+) -> Path:
+    """JSONL for vLLM ``--dataset-name custom``. One Gutenberg prefix per prompt."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    prompt = _gutenberg_prefix_text(tokenizer_dir=tokenizer_dir, n_tokens=n_tokens)
+    with dest.open("w", encoding="utf-8") as fh:
+        for _ in range(max(1, int(n_prompts))):
+            fh.write(
+                json.dumps(
+                    {"prompt": prompt, "output_tokens": int(output_tokens)},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    return dest
+
+
+def _pandas_site_packages() -> Path | None:
+    """Host pandas for the vLLM bench image (custom JSONL loader)."""
+    candidates: list[Path] = []
+    py = (os.environ.get("ISIRO_BENCH_PYTHON") or "").strip()
+    if py:
+        candidates.append(Path(py).resolve().parent.parent / "lib")
+    candidates.append(Path.home() / ".isiro" / "bench-venv" / "lib")
+    for lib in candidates:
+        hits = sorted(lib.glob("python*/site-packages/pandas"))
+        if hits:
+            return hits[0].parent
+    return None
 
 
 def bench_prefix(
@@ -38,6 +154,7 @@ def bench_prefix(
     vllm_image: str | None,
     raw_dir: Path,
     extra_mounts: list[Path] | None = None,
+    need_pandas: bool = False,
 ) -> list[str]:
     """Host `vllm` if present; else `docker run … --entrypoint vllm <VLLM_IMAGE>`."""
     binary = shutil.which("vllm")
@@ -70,6 +187,21 @@ def bench_prefix(
             cmd.extend(["-v", f"{resolved}:{resolved}:ro"])
     # Prefer --tokenizer on a local dir (see BENCH_TOKENIZER). Do not pass Hub
     # tokens on the docker argv (dry-run / logs would echo them).
+    if need_pandas:
+        site = _pandas_site_packages()
+        if site is None:
+            raise RuntimeError(
+                "Gutenberg custom dataset needs host pandas "
+                "(ISIRO_BENCH_PYTHON / ~/.isiro/bench-venv)"
+            )
+        cmd.extend(["-e", "PYTHONPATH=/opt/isiro_pandas"])
+        for name in ("pandas", "dateutil"):
+            src = site / name
+            if src.is_dir():
+                cmd.extend(["-v", f"{src.resolve()}:/opt/isiro_pandas/{name}:ro"])
+        six_py = site / "six.py"
+        if six_py.is_file():
+            cmd.extend(["-v", f"{six_py.resolve()}:/opt/isiro_pandas/six.py:ro"])
     cmd.extend(["--entrypoint", "vllm", vllm_image])
     return cmd
 
@@ -88,10 +220,23 @@ def bench_command(args: argparse.Namespace, result_path: Path) -> list[str]:
     extra_mounts: list[Path] = []
     if tok and Path(tok).is_dir():
         extra_mounts.append(Path(tok))
+    dataset = _bench_dataset_name()
+    gutenberg_jsonl: Path | None = None
+    if dataset == "gutenberg":
+        gutenberg_jsonl = args.raw_dir / "gutenberg_1342.jsonl"
+        write_gutenberg_jsonl(
+            gutenberg_jsonl,
+            tokenizer_dir=tok,
+            n_tokens=int(args.input_tokens),
+            n_prompts=max(int(args.num_prompts), int(args.num_warmups) + 1),
+            output_tokens=int(args.output_tokens),
+        )
+        extra_mounts.append(gutenberg_jsonl)
     prefix = bench_prefix(
         vllm_image=args.vllm_image,
         raw_dir=args.raw_dir,
         extra_mounts=extra_mounts,
+        need_pandas=(dataset == "gutenberg"),
     )
     cmd = [
         *prefix,
@@ -110,8 +255,6 @@ def bench_command(args: argparse.Namespace, result_path: Path) -> list[str]:
         cmd.extend(["--tokenizer", tok])
     cmd.extend(
         [
-            "--dataset-name",
-            "random",
             "--num-prompts",
             str(args.num_prompts),
             "--num-warmups",
@@ -124,10 +267,34 @@ def bench_command(args: argparse.Namespace, result_path: Path) -> list[str]:
             "1.0",
             "--seed",
             str(args.seed),
-            "--random-input-len",
-            str(args.input_tokens),
-            "--random-output-len",
-            str(args.output_tokens),
+        ]
+    )
+    if dataset == "gutenberg":
+        assert gutenberg_jsonl is not None
+        cmd.extend(
+            [
+                "--dataset-name",
+                "custom",
+                "--dataset-path",
+                str(gutenberg_jsonl.resolve()),
+                "--custom-output-len",
+                str(args.output_tokens),
+                "--skip-chat-template",
+            ]
+        )
+    else:
+        cmd.extend(
+            [
+                "--dataset-name",
+                "random",
+                "--random-input-len",
+                str(args.input_tokens),
+                "--random-output-len",
+                str(args.output_tokens),
+            ]
+        )
+    cmd.extend(
+        [
             "--metric-percentiles",
             "50,95,99",
             "--save-result",
@@ -255,7 +422,7 @@ def main() -> int:
             "backend": args.backend,
             "endpoint": args.endpoint,
             "model_id": args.model,
-            "dataset_name": "random",
+            "dataset_name": _bench_dataset_name(),
             "num_prompts": args.num_prompts,
             "num_warmups": args.num_warmups,
             "request_rate": "inf",

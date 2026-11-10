@@ -24,13 +24,17 @@ from benchmark_lib import (
     write_json,
 )
 from capacity_plan import scale_seqs_from_kv_measured
-from serve_output_match import compare_captures
+from serve_output_match import (
+    collect_eos_token_ids,
+    compare_captures,
+    model_dir_from_env,
+)
 
 
 def _apply_serve_output_match(
     correctness: dict[str, Any], match_doc: dict[str, Any]
 ) -> None:
-    """Fold exact greedy token-ID compare. Skip the row if thinking was still on."""
+    """Fold greedy token-ID compare (trailing eos aliases allowed). Skip if thinking on."""
     if match_doc.get("protocol_ok") is False:
         correctness.pop("serve_output_match_ok", None)
         correctness.pop("serve_output_match_matched", None)
@@ -50,7 +54,18 @@ def fold_serve_output_match(
     baseline_match = run_dir / "output_match_baseline.json"
     isiro_match = run_dir / "output_match_isiro.json"
     if baseline_match.is_file() and isiro_match.is_file():
-        match_doc = compare_captures(load_json(baseline_match), load_json(isiro_match))
+        baseline_doc = load_json(baseline_match)
+        isiro_doc = load_json(isiro_match)
+        match_doc = compare_captures(
+            baseline_doc,
+            isiro_doc,
+            eos_token_ids=collect_eos_token_ids(
+                baseline_doc,
+                isiro_doc,
+                model_dir=model_dir_from_env(),
+                run_dir=run_dir,
+            ),
+        )
         write_json(run_dir / "output_match.json", match_doc)
         _apply_serve_output_match(correctness, match_doc)
         return
