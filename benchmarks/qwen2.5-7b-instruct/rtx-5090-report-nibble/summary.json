@@ -1,0 +1,203 @@
+{
+  "attention": {
+    "baseline": {
+      "attention_backend": "FLASH_ATTN",
+      "isiro_attn": "unset"
+    },
+    "tic": {
+      "attention_backend": "CUSTOM",
+      "isiro_attn": "unset"
+    }
+  },
+  "capacity": {
+    "baseline": {
+      "max_concurrency": 32,
+      "max_num_seqs": 32
+    },
+    "batch_ratio_derived": 1.0,
+    "decode_output_tokens_per_sec": {
+      "baseline": 2815.6237,
+      "tic": 1958.9972
+    },
+    "efficiency_tok_per_s_per_non_kv_gb_derived": {
+      "baseline": 168.7422,
+      "tic": 149.5458
+    },
+    "experiment_kind": "capacity",
+    "gpu_memory_utilization": 0.9,
+    "graph_mode": "graphs",
+    "kv_cache_memory_ratio_measured": 1.215,
+    "kv_token_capacity_ratio_measured": 1.2153,
+    "max_model_len": 8192,
+    "one_wave_batched_tokens": null,
+    "schema": "isiro-benchmark-capacity-v1",
+    "search_hi": 32,
+    "search_lo": 32,
+    "seqs_scale_mode": "fixed",
+    "throughput_ratio_derived": 0.6958,
+    "tic": {
+      "max_concurrency": 32,
+      "max_num_seqs": 32
+    }
+  },
+  "commands_ref": "commands.json",
+  "correctness": {
+    "artifact_kind": "file",
+    "integrity_ok": true,
+    "serve_output_match_matched": 4,
+    "serve_output_match_ok": true,
+    "serve_output_match_prompt_count": 4,
+    "tic_sha256": "3a16fd7b38b1b4f74632152d4b585731154e2bbe9e8d214fe5590b4b9da244a4",
+    "verify_command": [
+      "isiro",
+      "verify",
+      "models/llm/Qwen2.5-7B-Instruct-TIC-nibble/model.tic"
+    ],
+    "verify_mode": "integrity"
+  },
+  "environment_ref": "environment.json",
+  "equal_batch": {
+    "baseline_ref": "equal_batch/baseline/generation-32-256.json",
+    "decode_output_tokens_per_sec": {
+      "baseline": 2815.6237,
+      "tic": 1958.9972
+    },
+    "label": "capacity benefit not active",
+    "latency_ms": {
+      "baseline": {
+        "e2e_p50": null,
+        "e2e_p95": null,
+        "e2e_p99": null,
+        "itl_p50": 10.698,
+        "itl_p95": 11.946,
+        "itl_p99": 12.188,
+        "tpot_p50": 10.82,
+        "tpot_p95": 11.144,
+        "tpot_p99": 11.18,
+        "ttft_p50": 147.356,
+        "ttft_p95": 147.973,
+        "ttft_p99": 148.174
+      },
+      "tic": {
+        "e2e_p50": null,
+        "e2e_p95": null,
+        "e2e_p99": null,
+        "itl_p50": 13.954,
+        "itl_p95": 15.588,
+        "itl_p99": 29.005,
+        "tpot_p50": 14.139,
+        "tpot_p95": 14.14,
+        "tpot_p99": 14.175,
+        "ttft_p50": 573.613,
+        "ttft_p95": 573.856,
+        "ttft_p99": 573.93
+      }
+    },
+    "max_concurrency": 32,
+    "max_num_seqs": 32,
+    "schema": "isiro-benchmark-equal-batch-v1",
+    "throughput_ratio_derived": 0.6958,
+    "tic_ref": "equal_batch/isiro/generation-32-256.json"
+  },
+  "experiment_kind": "capacity",
+  "fairness": {
+    "mismatches": [
+      "equal_batch: run_id: baseline='20261119T001223Z-rtx-5090', tic='20261119T050915Z-rtx-5090' (equal-batch latency must be same-run; refuse reused baseline)",
+      "publish GO: equal_batch tok/s collapse (tic=1959.00 < 0.7\u00d7 baseline=2815.62)"
+    ],
+    "passed": false
+  },
+  "footprint": {
+    "baseline": {
+      "gpu_process_memory_after_load_bytes_measured": 30611079168,
+      "gpu_requested_memory_bytes_derived": 30300994273,
+      "gpu_requested_memory_bytes_reported": 30300994273,
+      "model_loading_bytes_reported": 15343770665,
+      "non_kv_cache_memory_bytes_reported": 16685947945,
+      "on_disk_bytes_measured": 15231271888,
+      "weights_and_non_kv_from_process_bytes_derived": 17124881859,
+      "weights_and_non_kv_gpu_memory_bytes_derived": 16685947945
+    },
+    "on_disk_savings_pct_derived": 24.768,
+    "tic": {
+      "gpu_process_memory_after_load_bytes_measured": 31980519424,
+      "gpu_process_memory_after_ready_bytes_measured": 30955012096,
+      "gpu_process_memory_for_non_kv_bytes_measured": 30955012096,
+      "gpu_requested_memory_bytes_derived": 30300994273,
+      "gpu_requested_memory_bytes_reported": 30300994273,
+      "model_loading_bytes_reported": 11746735555,
+      "non_kv_cache_memory_bytes_reported": 13099650253,
+      "on_disk_bytes_measured": 11458770436,
+      "weights_and_non_kv_from_process_bytes_derived": 14569711862,
+      "weights_and_non_kv_gpu_memory_bytes_derived": 13099650253
+    }
+  },
+  "isiro_compiler": "v0.1.1",
+  "isiro_format": "v0.1.1",
+  "isiro_runtime": "v0.1.1",
+  "kv_cache": {
+    "baseline_memory_bytes_measured": 13486197309,
+    "baseline_tokens_measured": 235120,
+    "tic_memory_bytes_measured": 16385300234,
+    "tic_tokens_measured": 285744
+  },
+  "model": "qwen2.5-7b-instruct",
+  "precision": "bf16",
+  "profiles": [
+    {
+      "baseline": {
+        "latency_ms": {
+          "e2e_p50": null,
+          "e2e_p95": null,
+          "e2e_p99": null,
+          "itl_p50": 10.698,
+          "itl_p95": 11.946,
+          "itl_p99": 12.188,
+          "tpot_p50": 10.82,
+          "tpot_p95": 11.144,
+          "tpot_p99": 11.18,
+          "ttft_p50": 147.356,
+          "ttft_p95": 147.973,
+          "ttft_p99": 148.174
+        },
+        "throughput": {
+          "output_tokens_per_sec": 2815.6237,
+          "requests_per_sec": 10.9985,
+          "total_output_tokens": 8192
+        }
+      },
+      "baseline_ref": "baseline/generation-32-256.json",
+      "input_tokens": 32,
+      "output_tokens": 256,
+      "profile": "generation-32-256",
+      "tic": {
+        "latency_ms": {
+          "e2e_p50": null,
+          "e2e_p95": null,
+          "e2e_p99": null,
+          "itl_p50": 13.954,
+          "itl_p95": 15.588,
+          "itl_p99": 29.005,
+          "tpot_p50": 14.139,
+          "tpot_p95": 14.14,
+          "tpot_p99": 14.175,
+          "ttft_p50": 573.613,
+          "ttft_p95": 573.856,
+          "ttft_p99": 573.93
+        },
+        "throughput": {
+          "output_tokens_per_sec": 1958.9972,
+          "requests_per_sec": 7.6523,
+          "total_output_tokens": 8192
+        }
+      },
+      "tic_ref": "isiro/generation-32-256.json"
+    }
+  ],
+  "publish_quality": true,
+  "recorded_at": "2026-11-19T05:16:55.808743+00:00",
+  "run_id": "20261119T050915Z-rtx-5090",
+  "schema": "isiro-benchmark-summary-v1",
+  "smoke": false,
+  "system_id": "rtx-5090"
+}
