@@ -1,0 +1,50 @@
+Loading .tic metadata from …/gemma-4-12B-it-fp8/rtx-5090-report-cold-attend/logs/tic-bundle-probe ...
+  Config/tokenizer : …/gemma-4-12B-it-fp8/rtx-5090-report-cold-attend/logs/tic-bundle-probe (from TIC bundle)
+Using serve settings from …/rtx-5090-report-cold-attend/logs/tic-bundle-probe/serve.yaml (CLI --host/--port override when set)
+Starting engine (kernel cache speeds later starts)...
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/isiro/.isiro/serve-site/isiro_runtime/serve.py", line 54, in <module>
+    _main()
+  File "/isiro/.isiro/serve-site/isiro_runtime/serve.py", line 50, in _main
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/isiro/.isiro/serve-site/isiro_runtime/cli.py", line 402, in main
+    return _cmd_serve(args)
+           ^^^^^^^^^^^^^^^^
+  File "/isiro/.isiro/serve-site/isiro_runtime/cli.py", line 940, in _cmd_serve
+    return _cmd_serve_impl(args)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/isiro/.isiro/serve-site/isiro_runtime/cli.py", line 1113, in _cmd_serve_impl
+    return _cmd_serve_vllm(args, max_model_len)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/isiro/.isiro/serve-site/isiro_runtime/cli.py", line 1536, in _cmd_serve_vllm
+    apply_serve_attention_policy(
+  File "/isiro/.isiro/serve-site/isiro_runtime/targets/vllm_isiro_fa_attn.py", line 957, in apply_serve_attention_policy
+    mode = apply_isiro_fa_kv_cache_policy(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/isiro/.isiro/serve-site/isiro_runtime/targets/vllm_isiro_fa_attn.py", line 835, in apply_isiro_fa_kv_cache_policy
+    return activate_gdx_route(
+           ^^^^^^^^^^^^^^^^^^^
+  File "/isiro/.isiro/serve-site/isiro_runtime/targets/gdx_route.py", line 201, in activate_gdx_route
+    mode = apply_gdx_kv_cache_policy(target_options, env=envmap)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/isiro/.isiro/serve-site/isiro_runtime/targets/vllm_gdx_kv_o1.py", line 897, in apply_gdx_kv_cache_policy
+    from isiro_runtime.ops.tic.native_compute.gdx.gdx_mla_latent import (
+ModuleNotFoundError: No module named 'isiro_runtime.ops.tic.native_compute.gdx.gdx_mla_latent'
+
+────────────────────────────────────────────────────────────────────────
+Isiro Runtime · Powered by TIC
+
+      █████████    █████     ███████            runtime:  v0.1.1
+          █         ███     █                   target:   vllm 0.31.0
+          █          █      █                   model:    google/gemma-4-12B-it
+          █         ███     █                   format:   v0.1.0  .tic
+          █        █████     ███████            weights ↓ 4.7%
+────────────────────────────────────────────────────────────────────────
+
+license: developer
+Runtime target tags: isiro status --compat
+────────────────────────────────────────────────────────────────────────
+

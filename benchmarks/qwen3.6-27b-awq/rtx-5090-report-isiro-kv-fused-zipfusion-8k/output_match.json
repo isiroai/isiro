@@ -1,0 +1,74 @@
+{
+  "baseline_seed": 17,
+  "details": [
+    {
+      "baseline_text": "pong",
+      "baseline_token_ids": [
+        57104,
+        248046
+      ],
+      "compare_mode": "token_ids",
+      "index": 0,
+      "ok": false,
+      "tic_text": "pong",
+      "tic_token_ids": [
+        57104,
+        248044
+      ]
+    },
+    {
+      "baseline_text": "4",
+      "baseline_token_ids": [
+        19,
+        248046
+      ],
+      "compare_mode": "token_ids",
+      "index": 1,
+      "ok": false,
+      "tic_text": "4",
+      "tic_token_ids": [
+        19,
+        248044
+      ]
+    },
+    {
+      "baseline_text": "Paris",
+      "baseline_token_ids": [
+        57590,
+        248046
+      ],
+      "compare_mode": "token_ids",
+      "index": 2,
+      "ok": false,
+      "tic_text": "Paris",
+      "tic_token_ids": [
+        57590,
+        248044
+      ]
+    },
+    {
+      "baseline_text": "hello",
+      "baseline_token_ids": [
+        14556,
+        248046
+      ],
+      "compare_mode": "token_ids",
+      "index": 3,
+      "ok": false,
+      "tic_text": "hello",
+      "tic_token_ids": [
+        14556,
+        248044
+      ]
+    }
+  ],
+  "kind": "compare",
+  "matched": 0,
+  "max_tokens": 32,
+  "prompt_count": 4,
+  "protocol_errors": [],
+  "protocol_ok": true,
+  "schema": "isiro-benchmark-output-match-v1",
+  "serve_output_match_ok": false,
+  "tic_seed": 17
+}

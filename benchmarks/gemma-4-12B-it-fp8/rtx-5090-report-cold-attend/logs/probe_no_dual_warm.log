@@ -1,0 +1,192 @@
+Loading .tic metadata from …/gemma-4-12B-it-fp8/rtx-5090-report-cold-attend/logs/tic-bundle-probe ...
+  Config/tokenizer : …/gemma-4-12B-it-fp8/rtx-5090-report-cold-attend/logs/tic-bundle-probe (from TIC bundle)
+Using serve settings from …/rtx-5090-report-cold-attend/logs/tic-bundle-probe/serve.yaml (CLI --host/--port override when set)
+Starting engine (kernel cache speeds later starts)...
+ISIRO_GDX=bf16 route=path_a; beside vendor_fa; kv_cache_dtype=bfloat16; LIVE_WINDOW=512
+
+────────────────────────────────────────────────────────────────────────
+Isiro Runtime · Powered by TIC
+
+      █████████    █████     ███████            runtime:  v0.1.1
+          █         ███     █                   target:   vllm 0.31.0
+          █          █      █                   model:    google/gemma-4-12B-it
+          █         ███     █                   format:   v0.1.0  .tic
+          █        █████     ███████            weights ↓ 4.7%
+────────────────────────────────────────────────────────────────────────
+
+license: developer
+Runtime target tags: isiro status --compat
+────────────────────────────────────────────────────────────────────────
+
+(MainProcess pid=7) INFO 10-13 18:25:13 [model.py:699] Resolved architecture: Gemma4UnifiedForConditionalGeneration
+(MainProcess pid=7) INFO 10-13 18:25:13 [model.py:2109] Using max model len 8192
+(MainProcess pid=7) INFO 10-13 18:25:24 [arg_utils.py:3089] Raising max_num_batched_tokens from 2048 to 2496 to accommodate 'video' input for prefix-LM model /home/kunle/repos/isiroai/isiro/benchmarks/gemma-4-12B-it-fp8/rtx-5090-report-cold-attend/logs/tic-bundle-probe.
+(MainProcess pid=7) INFO 10-13 18:25:24 [scheduler.py:308] Chunked prefill is enabled with max_num_batched_tokens=2496.
+(MainProcess pid=7) WARNING 10-13 18:25:24 [vllm.py:1706] Enforce eager set, disabling torch.compile, CUDAGraphs, and JIT kernel warmup. This is equivalent to setting -cc.mode=none -cc.cudagraph_mode=none and --kernel_config.enable_jit_warmup=False
+(MainProcess pid=7) WARNING 10-13 18:25:24 [vllm.py:1750] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(MainProcess pid=7) INFO 10-13 18:25:24 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(MainProcess pid=7) INFO 10-13 18:25:24 [vllm.py:1968] Cudagraph is disabled under eager mode
+(MainProcess pid=7) WARNING 10-13 18:25:24 [cuda.py:339] Forcing --disable_chunked_mm_input for models with multimodal-bidirectional attention.
+(MainProcess pid=7) INFO 10-13 18:25:24 [compilation.py:331] Enabled custom fusions: norm_quant, act_quant
+(EngineCore pid=219) INFO 10-13 18:25:46 [__init__.py:113] Registered model loader `TICModelLoader` with load format `tic`
+(EngineCore pid=219) INFO 10-13 18:25:49 [register.py:100] maxil: registered Maxil linear kernels (maxil=Marlin twin + W=A; maxil_gemm=alias) on platform=CUDA
+(EngineCore pid=219) INFO 10-13 18:25:49 [parallel_state.py:1825] world_size=1 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_5dac4d3a84104f3ebdb88869a4b556fe backend=nccl
+(EngineCore pid=219) INFO 10-13 18:25:49 [parallel_state.py:2269] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, ETP rank 0, EP rank N/A, EPLB rank N/A
+(EngineCore pid=219) INFO 10-13 18:25:49 [gpu_worker.py:479] Using V2 Model Runner
+(EngineCore pid=219) INFO 10-13 18:25:50 [model_runner.py:375] Loading model from scratch...
+Loading weights: 1/1005 layers
+Loading weights: 16/1005 layers
+(EngineCore pid=219) INFO 10-13 18:25:53 [cuda.py:466] Using AttentionBackendEnum.CUSTOM backend.
+(EngineCore pid=219) INFO 10-13 18:25:53 [cuda.py:466] Using AttentionBackendEnum.CUSTOM backend.
+Loading weights: 17/1005 layers
+Loading weights: 238/1005 layers
+Loading weights: 362/1005 layers
+Loading weights: 364/1005 layers
+Loading weights: 378/1005 layers
+Loading weights: 400/1005 layers
+Loading weights: 417/1005 layers
+Loading weights: 438/1005 layers
+Loading weights: 459/1005 layers
+Loading weights: 476/1005 layers
+Loading weights: 495/1005 layers
+Loading weights: 515/1005 layers
+(MainProcess pid=7) INFO 10-13 18:25:57 [base.py:255] Multi-modal warmup completed in 21.690s
+Loading weights: 537/1005 layers
+Loading weights: 557/1005 layers
+Loading weights: 574/1005 layers
+Loading weights: 592/1005 layers
+Loading weights: 610/1005 layers
+Loading weights: 627/1005 layers
+Loading weights: 644/1005 layers
+Loading weights: 663/1005 layers
+Loading weights: 683/1005 layers
+Loading weights: 700/1005 layers
+Loading weights: 719/1005 layers
+Loading weights: 740/1005 layers
+Loading weights: 757/1005 layers
+Loading weights: 778/1005 layers
+Loading weights: 792/1005 layers
+Loading weights: 809/1005 layers
+Loading weights: 824/1005 layers
+Loading weights: 843/1005 layers
+Loading weights: 865/1005 layers
+Loading weights: 882/1005 layers
+Loading weights: 904/1005 layers
+Loading weights: 922/1005 layers
+Loading weights: 938/1005 layers
+Loading weights: 955/1005 layers
+Loading weights: 971/1005 layers
+Loading weights: 994/1005 layers
+Loading weights: 100%|████████████████████████████| 1005/1005 layers
+(EngineCore pid=219) INFO 10-13 18:26:07 [model_runner.py:407] Model loading took 12.09 GiB memory and 16.992175 seconds
+(EngineCore pid=219) INFO 10-13 18:26:07 [topk_topp_sampler.py:96] FlashInfer top-p/top-k sampling disabled via VLLM_USE_FLASHINFER_SAMPLER=0.
+(EngineCore pid=219) INFO 10-13 18:26:07 [torch_utils.py:286] Reducing Torch threads from 16 to 1 for serving. Set OMP_NUM_THREADS in the external environment to override.
+(EngineCore pid=219) INFO 10-13 18:26:07 [utils.py:343] Using LBNHC KV cache layout.
+(EngineCore pid=219) INFO 10-13 18:26:28 [encoder_runner.py:131] Encoder cache will be initialized with a budget of 2496 tokens, and profiled with 1 video items of the maximum feature size.
+[rank0]:[W1013 18:26:28.935509076 CUDACachingAllocator.cpp:508] expandable_segments: memory mapping failed with OOM on device 0 while trying to map 20971520 bytes (free: 35717120, total: 33671348224).
+(EngineCore pid=219) INFO 10-13 18:26:29 [gpu_worker.py:692] Available KV cache memory: 14.9 GiB
+gdx_kv_o1 attach n=96 alphabet=bf16 live_hbm=on fa_wrap=0 triton_warm=1 triton_warm_shape=1 warm_ms=179
+pf_hybrid_reopen_after_kv hybrid=1 lean=1 mode=hybrid_flag_only dense_w_slots=8
+(EngineCore pid=219) INFO 10-13 18:26:29 [kv_cache_utils.py:2464] GPU KV cache size: 62,093 tokens, Maximum concurrency for 8,192 tokens per request: 7.58x
+(EngineCore pid=219) INFO 10-13 18:26:31 [kernel_warmup.py:255] Skipping FlashInfer autotune because it is disabled.
+(EngineCore pid=219) INFO 10-13 18:26:32 [core.py:380] init engine (profile, create kv cache, warmup model) took 24.89 s
+(EngineCore pid=219) INFO 10-13 18:26:32 [kv_cache_utils.py:772] kv cache group sizes [16, 16, 16, 16, 16, 64]
+(EngineCore pid=219) INFO 10-13 18:26:32 [kv_cache_utils.py:773] kv lcm block sizes 64
+(EngineCore pid=219) WARNING 10-13 18:26:32 [vllm.py:1706] Enforce eager set, disabling torch.compile, CUDAGraphs, and JIT kernel warmup. This is equivalent to setting -cc.mode=none -cc.cudagraph_mode=none and --kernel_config.enable_jit_warmup=False
+(EngineCore pid=219) WARNING 10-13 18:26:32 [vllm.py:1750] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(EngineCore pid=219) INFO 10-13 18:26:32 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(EngineCore pid=219) INFO 10-13 18:26:32 [vllm.py:1968] Cudagraph is disabled under eager mode
+(EngineCore pid=219) INFO 10-13 18:26:32 [compilation.py:331] Enabled custom fusions: norm_quant, act_quant
+(MainProcess pid=7) INFO 10-13 18:26:32 [factories.py:76] Scale-out endpoints are disabled. Set --enable-scale-out to enable them.
+(MainProcess pid=7) INFO 10-13 18:26:34 [hf.py:646] Detected the chat template content format to be 'openai'. You can set `--chat-template-content-format` to override this.
+
+Engine ready (API not open yet)
+Warming inference kernels...
+(MainProcess pid=7) WARNING 10-13 18:26:34 [input_processor.py:375] Passing raw prompts to InputProcessor is deprecated and will be removed in the future. You should instead pass the outputs of Renderer.render_cmpl() or Renderer.render_chat().
+gdx_kv_o1 meter={'n_attach': 96, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+Kernel warmup complete.
+
+ISIRO serve ready
+  Base URL:   http://127.0.0.1:8000/v1
+  Health:     http://127.0.0.1:8000/health
+  Metrics:    http://127.0.0.1:8000/metrics
+  API:        POST /v1/chat/completions  GET /v1/models
+  Extensions: GET /v1/stats  GET /v1/license
+  Chat UI:    http://localhost:3000  (Open WebUI)
+  Attention:  vendor FA (CUSTOM drop-in; ISIRO_ATTN unset; ISIRO_ATTN=0 for vendor auto-select)
+
+INFO:     Started server process [7]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     172.17.0.1:60522 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     172.17.0.1:60534 - "GET /v1/models HTTP/1.1" 200 OK
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 2, 'n_live_persist': 2, 'n_pages': 2, 'f_cold': 1.0, 'save_vs_all_fa': 0.233763910108997, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 1, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 4, 'n_live_persist': 4, 'n_pages': 4, 'f_cold': 1.0, 'save_vs_all_fa': 0.22171949571178806, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 2, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 6, 'n_live_persist': 6, 'n_pages': 6, 'f_cold': 1.0, 'save_vs_all_fa': 0.21794630891533306, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 3, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 8, 'n_live_persist': 8, 'n_pages': 8, 'f_cold': 1.0, 'save_vs_all_fa': 0.2167053991748441, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 4, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 10, 'n_live_persist': 10, 'n_pages': 10, 'f_cold': 1.0, 'save_vs_all_fa': 0.2164288797686177, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 5, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 12, 'n_live_persist': 12, 'n_pages': 12, 'f_cold': 1.0, 'save_vs_all_fa': 0.1977535077869984, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 6, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 14, 'n_live_persist': 14, 'n_pages': 14, 'f_cold': 1.0, 'save_vs_all_fa': 0.20123596191406246, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 7, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 16, 'n_live_persist': 16, 'n_pages': 16, 'f_cold': 1.0, 'save_vs_all_fa': 0.20375403891150756, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 8, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 18, 'n_live_persist': 18, 'n_pages': 18, 'f_cold': 1.0, 'save_vs_all_fa': 0.2061548466090466, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 9, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 20, 'n_live_persist': 20, 'n_pages': 20, 'f_cold': 1.0, 'save_vs_all_fa': 0.2079970435464289, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 10, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 22, 'n_live_persist': 22, 'n_pages': 22, 'f_cold': 1.0, 'save_vs_all_fa': 0.20900239501761042, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 11, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 24, 'n_live_persist': 24, 'n_pages': 24, 'f_cold': 1.0, 'save_vs_all_fa': 0.20010242960236957, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 12, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 26, 'n_live_persist': 26, 'n_pages': 26, 'f_cold': 1.0, 'save_vs_all_fa': 0.19995814319412641, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 13, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 28, 'n_live_persist': 28, 'n_pages': 28, 'f_cold': 1.0, 'save_vs_all_fa': 0.1999405497889365, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 14, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 30, 'n_live_persist': 30, 'n_pages': 30, 'f_cold': 1.0, 'save_vs_all_fa': 0.20061582704313907, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 15, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 32, 'n_live_persist': 32, 'n_pages': 32, 'f_cold': 1.0, 'save_vs_all_fa': 0.2013631232986196, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 16, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 34, 'n_live_persist': 34, 'n_pages': 34, 'f_cold': 1.0, 'save_vs_all_fa': 0.2020208059066788, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 17, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 36, 'n_live_persist': 36, 'n_pages': 36, 'f_cold': 1.0, 'save_vs_all_fa': 0.19599709459530412, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 18, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 38, 'n_live_persist': 38, 'n_pages': 38, 'f_cold': 1.0, 'save_vs_all_fa': 0.19681672127016125, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 19, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 40, 'n_live_persist': 40, 'n_pages': 40, 'f_cold': 1.0, 'save_vs_all_fa': 0.19733330511277725, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 20, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 42, 'n_live_persist': 42, 'n_pages': 42, 'f_cold': 1.0, 'save_vs_all_fa': 0.19767715290028565, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 21, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 44, 'n_live_persist': 44, 'n_pages': 44, 'f_cold': 1.0, 'save_vs_all_fa': 0.19800240207857478, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 22, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 46, 'n_live_persist': 46, 'n_pages': 46, 'f_cold': 1.0, 'save_vs_all_fa': 0.19818953489265778, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 23, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 48, 'n_live_persist': 48, 'n_pages': 48, 'f_cold': 1.0, 'save_vs_all_fa': 0.19361951860231552, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 24, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 50, 'n_live_persist': 50, 'n_pages': 50, 'f_cold': 1.0, 'save_vs_all_fa': 0.19388943613449494, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 25, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 52, 'n_live_persist': 52, 'n_pages': 52, 'f_cold': 1.0, 'save_vs_all_fa': 0.19403683955338358, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 26, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 54, 'n_live_persist': 54, 'n_pages': 54, 'f_cold': 1.0, 'save_vs_all_fa': 0.19419687794100848, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 27, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 56, 'n_live_persist': 56, 'n_pages': 56, 'f_cold': 1.0, 'save_vs_all_fa': 0.19429056967458413, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 28, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 58, 'n_live_persist': 58, 'n_pages': 58, 'f_cold': 1.0, 'save_vs_all_fa': 0.1944802381264661, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 29, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 60, 'n_live_persist': 60, 'n_pages': 60, 'f_cold': 1.0, 'save_vs_all_fa': 0.1908251620291198, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 30, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 62, 'n_live_persist': 62, 'n_pages': 62, 'f_cold': 1.0, 'save_vs_all_fa': 0.19106296788802968, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 31, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 64, 'n_live_persist': 64, 'n_pages': 64, 'f_cold': 1.0, 'save_vs_all_fa': 0.19129905733352992, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 32, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 66, 'n_live_persist': 66, 'n_pages': 66, 'f_cold': 1.0, 'save_vs_all_fa': 0.1915653860861518, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 33, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 68, 'n_live_persist': 68, 'n_pages': 68, 'f_cold': 1.0, 'save_vs_all_fa': 0.19181445616780834, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 34, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 70, 'n_live_persist': 70, 'n_pages': 70, 'f_cold': 1.0, 'save_vs_all_fa': 0.19205322068737396, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 35, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 72, 'n_live_persist': 72, 'n_pages': 72, 'f_cold': 1.0, 'save_vs_all_fa': 0.18902451553774446, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 36, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 74, 'n_live_persist': 74, 'n_pages': 74, 'f_cold': 1.0, 'save_vs_all_fa': 0.1893829421429125, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 37, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 76, 'n_live_persist': 76, 'n_pages': 76, 'f_cold': 1.0, 'save_vs_all_fa': 0.18965283184023962, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 38, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 78, 'n_live_persist': 78, 'n_pages': 78, 'f_cold': 1.0, 'save_vs_all_fa': 0.18999996782742468, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 39, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 80, 'n_live_persist': 80, 'n_pages': 80, 'f_cold': 1.0, 'save_vs_all_fa': 0.19027404577176388, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 40, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 82, 'n_live_persist': 82, 'n_pages': 82, 'f_cold': 1.0, 'save_vs_all_fa': 0.19062386789629537, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 41, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 84, 'n_live_persist': 84, 'n_pages': 84, 'f_cold': 1.0, 'save_vs_all_fa': 0.1880228705172845, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 42, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 86, 'n_live_persist': 86, 'n_pages': 86, 'f_cold': 1.0, 'save_vs_all_fa': 0.18831930504831285, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 43, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 88, 'n_live_persist': 88, 'n_pages': 88, 'f_cold': 1.0, 'save_vs_all_fa': 0.1886358064617748, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 44, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 90, 'n_live_persist': 90, 'n_pages': 90, 'f_cold': 1.0, 'save_vs_all_fa': 0.1889209851794902, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 45, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 92, 'n_live_persist': 92, 'n_pages': 92, 'f_cold': 1.0, 'save_vs_all_fa': 0.18922169449634652, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 46, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 94, 'n_live_persist': 94, 'n_pages': 94, 'f_cold': 1.0, 'save_vs_all_fa': 0.18953770708802908, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 47, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 96, 'n_live_persist': 96, 'n_pages': 96, 'f_cold': 1.0, 'save_vs_all_fa': 0.18740819529637398, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 48, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+INFO:     172.17.0.1:60538 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(EngineCore pid=219) INFO 10-13 18:26:40 [core.py:1409] [shutdown] EngineCore: trigger received signal=SIGTERM
+(EngineCore pid=219) INFO 10-13 18:26:40 [core.py:1558] [shutdown] EngineCore: start mode=abort timeout=0s
+(EngineCore pid=219) INFO 10-13 18:26:40 [core.py:1589] [shutdown] EngineCore: request processing complete; starting resource teardown
+(EngineCore pid=219) INFO 10-13 18:26:40 [core.py:1422] [shutdown] EngineCore: exiting busy loop
+gdx_kv_o1 meter={'n_attach': 96, 'n_deposit': 96, 'n_live_persist': 96, 'n_pages': 96, 'f_cold': 1.0, 'save_vs_all_fa': 0.18740819529637398, 'n_skip_unarmed': 48, 'n_deposit_kv_pair': 48, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}
+(MainProcess pid=7) INFO 10-13 18:26:44 [utils.py:638] [shutdown] Process manager: send sigterm to process EngineCore
+(MainProcess pid=7) WARNING 10-13 18:26:44 [core_client.py:809] [shutdown] MPClient: engine core exited unexpectedly; starting cleanup
+(MainProcess pid=7) INFO 10-13 18:26:44 [core_client.py:762] [shutdown] MPClient: start timeout=default
+(MainProcess pid=7) INFO 10-13 18:26:44 [core_client.py:764] [shutdown] MPClient: stopping engine manager
+(MainProcess pid=7) INFO 10-13 18:26:44 [core_client.py:766] [shutdown] MPClient: engine manager stopped
+(MainProcess pid=7) INFO 10-13 18:26:44 [core_client.py:767] [shutdown] MPClient: cleaning up background resources
+(MainProcess pid=7) INFO 10-13 18:26:44 [core_client.py:769] [shutdown] MPClient: complete
+(MainProcess pid=7) ERROR 10-13 18:26:44 [async_llm.py:871] AsyncLLM output_handler failed.
+(MainProcess pid=7) ERROR 10-13 18:26:44 [async_llm.py:871] Traceback (most recent call last):
+(MainProcess pid=7) ERROR 10-13 18:26:44 [async_llm.py:871]   File "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/async_llm.py", line 817, in output_handler
+(MainProcess pid=7) ERROR 10-13 18:26:44 [async_llm.py:871]     outputs = await engine_core.get_output_async()
+(MainProcess pid=7) ERROR 10-13 18:26:44 [async_llm.py:871]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(MainProcess pid=7) ERROR 10-13 18:26:44 [async_llm.py:871]   File "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core_client.py", line 1215, in get_output_async
+(MainProcess pid=7) ERROR 10-13 18:26:44 [async_llm.py:871]     raise self._format_exception(outputs) from None
+(MainProcess pid=7) ERROR 10-13 18:26:44 [async_llm.py:871] vllm.v1.engine.exceptions.EngineDeadError: EngineCore encountered an issue. See stack trace (above) for the root cause.

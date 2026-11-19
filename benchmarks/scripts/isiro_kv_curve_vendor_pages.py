@@ -449,6 +449,7 @@ def capture_vendor_pages(
     max_t: int,
     text_file: Path | None,
     gpu_memory_utilization: float = 0.90,
+    no_tile: bool = False,
 ) -> dict[str, Any]:
     """Run one vLLM prefill and return numpy K/V stacks plus metadata."""
     from vllm import LLM, SamplingParams
@@ -487,13 +488,23 @@ def capture_vendor_pages(
 
     tok = llm.get_tokenizer()
     # Exact max_t token ids; TokensPrompt avoids chat-template re-encode drift.
-    chunk = text[: max(max_t * 8, 50_000)]
+    # no_tile: the source must already cover max_t. Do not ids.extend.
+    if no_tile:
+        chunk = text
+    else:
+        chunk = text[: max(max_t * 8, 50_000)]
     ids = list(tok.encode(chunk))
     if not ids:
         raise RuntimeError("gdx vendor pages fail-closed: tokenizer produced no ids")
-    while len(ids) < max_t:
-        ids.extend(ids)
+    if no_tile and len(ids) < max_t:
+        raise RuntimeError(
+            f"gdx vendor pages fail-closed: no-tile tokens {len(ids)} < max_t {max_t}"
+        )
+    if not no_tile:
+        while len(ids) < max_t:
+            ids.extend(ids)
     ids = ids[:max_t]
+    token_ids = list(ids)
 
     dump: dict[str, Any] = {"ok": False, "last_ncomp": 0}
     stashed_ids: list[int] | None = None
@@ -543,6 +554,8 @@ def capture_vendor_pages(
                 block_ids_source=stashed_source or source,
             )
         )
+        dump["token_ids"] = token_ids
+        dump["no_tile"] = bool(no_tile)
         return out
 
     runner.execute_model = wrapped  # type: ignore[method-assign]
@@ -571,6 +584,8 @@ def capture_vendor_pages(
                     block_ids_source=stashed_source,
                 )
             )
+            dump["token_ids"] = token_ids
+            dump["no_tile"] = bool(no_tile)
     finally:
         runner.execute_model = orig  # type: ignore[method-assign]
 
@@ -594,6 +609,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-t", type=int, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--text-file", type=Path, default=None)
+    parser.add_argument(
+        "--no-tile",
+        action="store_true",
+        help="Fail closed if the text tokenizes shorter than max_t. Do not repeat ids.",
+    )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     args = parser.parse_args(argv)
     if not args.model_dir.is_dir():
@@ -613,6 +633,7 @@ def main(argv: list[str] | None = None) -> int:
             max_t=int(args.max_t),
             text_file=args.text_file,
             gpu_memory_utilization=float(args.gpu_memory_utilization),
+            no_tile=bool(args.no_tile),
         )
     except Exception as exc:  # noqa: BLE001 - meter must fail-closed
         print(
@@ -640,11 +661,15 @@ def main(argv: list[str] | None = None) -> int:
         "covered_t": dump.get("covered_t"),
         "layout": dump.get("layout"),
         "kv_source": "vendor_fa_pages",
+        "no_tile": bool(dump.get("no_tile")),
+        "n_token_ids": int(len(dump.get("token_ids") or [])),
     }
+    token_ids = np.asarray(dump.get("token_ids") or [], dtype=np.int32)
     np.savez_compressed(
         args.out,
         k=dump["k"],
         v=dump["v"],
+        token_ids=token_ids,
         meta_json=np.asarray([json.dumps(meta, sort_keys=True)]),
     )
     meta_path = args.out.with_suffix(args.out.suffix + ".meta.json")

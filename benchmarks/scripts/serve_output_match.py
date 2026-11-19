@@ -339,7 +339,7 @@ def capture_variant(
     seed: int,
     max_tokens: int,
     prompts: tuple[str, ...] = DEFAULT_PROMPTS,
-    timeout: float = 120.0,
+    timeout: float = 600.0,
     model_dir: Path | None = None,
 ) -> dict[str, Any]:
     base = api_url.rstrip("/")

@@ -103,6 +103,35 @@ def pct_gain_from_ratio(ratio: Any) -> str:
     return f"{gain}%"
 
 
+def speedup_nx(ratio: Any) -> str:
+    """Isiro / Baseline as a Cap-style multiplier (e.g. 1.23 → ``1.23x``)."""
+    if not isinstance(ratio, (int, float)) or float(ratio) <= 0:
+        return ""
+    return f"{float(ratio):.2f}x"
+
+
+def _tok_s_isiro_cell(b_tps: Any, t_tps: Any) -> str:
+    """Isiro Output tok/s cell: bold on win, Cap-style ``(Nx)`` when dens moves."""
+    tps_win = (
+        isinstance(b_tps, (int, float))
+        and isinstance(t_tps, (int, float))
+        and float(t_tps) > float(b_tps)
+    )
+    tps_cell = bold_win(number(t_tps), win=tps_win)
+    if (
+        isinstance(b_tps, (int, float))
+        and isinstance(t_tps, (int, float))
+        and float(b_tps) > 0.0
+    ):
+        ratio = float(t_tps) / float(b_tps)
+        # Skip noise ties (~1.00x); still show losses and real wins.
+        if abs(ratio - 1.0) >= 0.005:
+            nx = speedup_nx(ratio)
+            if nx:
+                tps_cell = f"{tps_cell} ({nx})"
+    return tps_cell
+
+
 def _arm_col() -> str:
     """Customer product arm column label (TIC weights + optional Isiro KV)."""
     return "Isiro"
@@ -796,6 +825,53 @@ def _section_kv_reservation(
     return lines
 
 
+def _capacity_scale_blurb(
+    capacity: dict[str, Any],
+    *,
+    b_seqs: Any,
+    t_seqs: Any,
+    seqs_matched: bool,
+) -> str:
+    arm = _arm_col()
+    scale_mode = str(capacity.get("seqs_scale_mode") or "")
+    if seqs_matched:
+        return (
+            f"Fixed concurrency {number(b_seqs, 0)} (same ceiling both arms). "
+            "ITL/TTFT at that conc."
+        )
+    if scale_mode == "kv_coded":
+        return (
+            f"{arm} concurrent requests = round(Baseline × "
+            f"{arm}/Baseline KV token capacity), then rounded up onto the "
+            "vLLM CUDA-graph capture stride (multiples of 8) so FULL decode "
+            "graphs cover concurrency."
+        )
+    if scale_mode == "kv_measured":
+        return (
+            f"{arm} concurrent requests = round(Baseline × {arm}/Baseline KV "
+            "token capacity) from a matched vLLM KV measurement, then rounded "
+            "up onto the vLLM CUDA-graph capture stride (multiples of 8) so "
+            "FULL decode graphs cover concurrency."
+        )
+    if scale_mode == "kv_skip":
+        return (
+            f"{arm} concurrent requests use last-W skip so Isiro seats more "
+            "8K sequences than vendor FA can hold at this prompt length. "
+            "Baseline stays at its max legal N."
+        )
+    if scale_mode == "kv_estimate":
+        return (
+            f"{arm} concurrent requests = round(Baseline × estimated KV "
+            "ratio), where estimated KV adds on-disk weight savings to "
+            "Baseline KV, then rounded up onto the vLLM CUDA-graph capture "
+            "stride when needed."
+        )
+    return (
+        f"{arm} concurrent requests match the configured Baseline "
+        "concurrent-request ceiling."
+    )
+
+
 def _section_c(
     capacity: dict[str, Any],
     kv: dict[str, Any],
@@ -803,53 +879,20 @@ def _section_c(
     prefix: str = "1",
     overflow_note: bool = False,
     gib_only: bool = False,
+    decode_rows: list[dict[str, Any]] | None = None,
 ) -> list[str]:
+    """Cap-style Capacity @N: one table with shape, tok/s (Nx), and latency."""
     b_seqs = (capacity.get("baseline") or {}).get("max_num_seqs")
     t_seqs = (capacity.get("tic") or {}).get("max_num_seqs")
-    scale_mode = str(capacity.get("seqs_scale_mode") or "")
     seqs_matched = (
         isinstance(b_seqs, (int, float))
         and isinstance(t_seqs, (int, float))
         and int(b_seqs) == int(t_seqs)
     )
     arm = _arm_col()
-    if seqs_matched:
-        scale_blurb = (
-            f"Concurrent requests are {number(b_seqs, 0)} on both sides. "
-            "Not scaled from KV token capacity."
-        )
-    elif scale_mode == "kv_coded":
-        scale_blurb = (
-            f"{arm} concurrent requests = round(Baseline × "
-            f"{arm}/Baseline KV token capacity), then rounded up onto the "
-            "vLLM CUDA-graph capture stride (multiples of 8) so FULL decode "
-            "graphs cover concurrency."
-        )
-    elif scale_mode == "kv_measured":
-        scale_blurb = (
-            f"{arm} concurrent requests = round(Baseline × {arm}/Baseline KV "
-            "token capacity) from a matched vLLM KV measurement, then rounded "
-            "up onto the vLLM CUDA-graph capture stride (multiples of 8) so "
-            "FULL decode graphs cover concurrency."
-        )
-    elif scale_mode == "kv_skip":
-        scale_blurb = (
-            f"{arm} concurrent requests use last-W skip so Isiro seats more "
-            "8K sequences than vendor FA can hold at this prompt length. "
-            "Baseline stays at its max legal N."
-        )
-    elif scale_mode == "kv_estimate":
-        scale_blurb = (
-            f"{arm} concurrent requests = round(Baseline × estimated KV "
-            "ratio), where estimated KV adds on-disk weight savings to "
-            "Baseline KV, then rounded up onto the vLLM CUDA-graph capture "
-            "stride when needed."
-        )
-    else:
-        scale_blurb = (
-            f"{arm} concurrent requests match the configured Baseline "
-            "concurrent-request ceiling."
-        )
+    scale_blurb = _capacity_scale_blurb(
+        capacity, b_seqs=b_seqs, t_seqs=t_seqs, seqs_matched=seqs_matched,
+    )
     batch_ratio_val = capacity.get("batch_ratio_derived")
     if (
         not isinstance(batch_ratio_val, (int, float))
@@ -868,21 +911,60 @@ def _section_c(
     if not seqs_matched and batch_gain:
         seqs_tic = f"{seqs_tic} ({bold_win(batch_gain, win=seqs_win)})"
     letter = str(prefix) if prefix in ("C", "D") else "D"
-    # KV tokens capacity lives under Section A (coded when Isiro KV is on).
+    head_n = t_seqs if isinstance(t_seqs, (int, float)) else b_seqs
+    head_n_txt = number(head_n, 0) if isinstance(head_n, (int, float)) else "?"
     _ = (gib_only, kv, overflow_note)
+    in_tok, out_tok = 32, 256
+    rows = decode_rows or []
+    if rows:
+        try:
+            in_tok = int(rows[0].get("input_tokens") or 32)
+            out_tok = int(rows[0].get("output_tokens") or 256)
+        except (TypeError, ValueError):
+            in_tok, out_tok = 32, 256
     lines = [
-        f"## {letter}. Capacity",
+        f"## {letter}. Capacity @{head_n_txt}",
         "",
         scale_blurb,
         "",
-        "Concurrent requests are the serve max concurrent sequences "
-        f"(`max_num_seqs`); the bench load matches that ceiling in this A/B.",
+        "Tok/s is aggregate system throughput across in-flight requests. "
+        "Per-request decode rate is reflected by ITL/TPOT. Equal-N latency "
+        "lives in section C when present.",
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
+        f"| Input tokens | {number(in_tok, 0)} | {number(in_tok, 0)} |",
+        f"| Output max tokens | {number(out_tok, 0)} | {number(out_tok, 0)} |",
         f"| Concurrent requests | {number(b_seqs, 0)} | {seqs_tic} |",
-        "",
     ]
+    tps = capacity.get("decode_output_tokens_per_sec") or {}
+    b_tps = t_tps = None
+    b_lat: dict[str, Any] = {}
+    t_lat: dict[str, Any] = {}
+    if tps:
+        b_tps = tps.get("baseline")
+        t_tps = tps.get("tic")
+    elif (
+        rows
+        and isinstance(rows[0].get("baseline"), dict)
+        and isinstance(rows[0].get("tic"), dict)
+    ):
+        b_thr = rows[0]["baseline"].get("throughput") or {}
+        t_thr = rows[0]["tic"].get("throughput") or {}
+        b_tps = b_thr.get("output_tokens_per_sec")
+        t_tps = t_thr.get("output_tokens_per_sec")
+    if b_tps is not None or t_tps is not None:
+        lines.append(
+            f"| Output tok/s | {number(b_tps)} | {_tok_s_isiro_cell(b_tps, t_tps)} |"
+        )
+    if rows and isinstance(rows[0].get("baseline"), dict) and isinstance(
+        rows[0].get("tic"), dict
+    ):
+        b_lat = rows[0]["baseline"].get("latency_ms") or {}
+        t_lat = rows[0]["tic"].get("latency_ms") or {}
+        if b_lat and t_lat:
+            lines.extend(_compact_latency_rows(b_lat, t_lat))
+    lines.append("")
     return lines
 
 
@@ -908,8 +990,17 @@ def _section_generation(
     mention_equal_batch: bool = True,
     as_subsection: bool = False,
 ) -> list[str]:
+    """Capacity throughput table. Prefer :func:`_section_c` when capacity meta exists."""
+    del mention_equal_batch, as_subsection
+    if capacity is not None:
+        return _section_c(
+            capacity,
+            {},
+            prefix=letter,
+            decode_rows=decode_rows,
+        )
+    # Decode-only fallback (no capacity meta): still Cap-shaped under letter.
     arm = _arm_col()
-    del mention_equal_batch
     in_tok, out_tok = 32, 256
     if decode_rows:
         try:
@@ -917,53 +1008,23 @@ def _section_generation(
             out_tok = int(decode_rows[0].get("output_tokens") or 256)
         except (TypeError, ValueError):
             in_tok, out_tok = 32, 256
-    gen_label = (
-        f"Generation (recall-matched KV, input {in_tok} / output {out_tok})"
-    )
-    heading = f"### {gen_label}" if as_subsection else f"## {letter}. {gen_label}"
     lines = [
-        heading,
+        f"## {letter}. Capacity",
         "",
-        "Tok/s is aggregate system throughput across in-flight requests. "
-        "Per-request decode rate is reflected by ITL/TPOT. Prefer section C "
-        "Concurrency for matched-N latency and tok/s.",
+        "Tok/s is aggregate system throughput across in-flight requests.",
         "",
         f"| Metric | Baseline | {arm} |",
         "|--------|----------|-------|",
+        f"| Input tokens | {number(in_tok, 0)} | {number(in_tok, 0)} |",
+        f"| Output max tokens | {number(out_tok, 0)} | {number(out_tok, 0)} |",
     ]
-    tps = (capacity or {}).get("decode_output_tokens_per_sec") or {}
-    if capacity is not None and tps:
-        b_tps = tps.get("baseline")
-        t_tps = tps.get("tic")
-        tps_win = (
-            isinstance(b_tps, (int, float))
-            and isinstance(t_tps, (int, float))
-            and float(t_tps) > float(b_tps)
-        )
-        tps_cell = bold_win(number(t_tps), win=tps_win)
-        if (
-            isinstance(b_tps, (int, float))
-            and isinstance(t_tps, (int, float))
-            and float(b_tps) > 0.0
-            and float(t_tps) != float(b_tps)
-        ):
-            gain = pct_gain_from_ratio(float(t_tps) / float(b_tps))
-            if gain:
-                tps_cell = f"{tps_cell} ({bold_win(gain, win=tps_win)})"
-        lines.append(
-            "| Output tok/s | "
-            f"{number(b_tps)} | "
-            f"{tps_cell} |"
-        )
-    elif decode_rows:
+    if decode_rows:
         row = decode_rows[0]
         b_tps = row["baseline"]["throughput"]["output_tokens_per_sec"]
         t_tps = row["tic"]["throughput"]["output_tokens_per_sec"]
         lines.append(
-            f"| Output tok/s | {number(b_tps)} | {number(t_tps)} |"
+            f"| Output tok/s | {number(b_tps)} | {_tok_s_isiro_cell(b_tps, t_tps)} |"
         )
-    if decode_rows:
-        row = decode_rows[0]
         lines.extend(
             _compact_latency_rows(
                 row["baseline"]["latency_ms"], row["tic"]["latency_ms"]
@@ -982,8 +1043,14 @@ def _concurrency_n(block: dict[str, Any]) -> int | None:
     return None
 
 
-def _section_concurrency_table(block: dict[str, Any]) -> list[str]:
-    """One matched-N Metric | Baseline | Isiro table (no tok/s % from N mismatch)."""
+def _section_concurrency_table(
+    block: dict[str, Any],
+    *,
+    subsection: bool = True,
+    default_input_tokens: int = 32,
+    default_output_tokens: int = 256,
+) -> list[str]:
+    """One matched-N Cap-style Metric | Baseline | Isiro table."""
     arm = _arm_col()
     tps = block.get("decode_output_tokens_per_sec") or {}
     latency = block.get("latency_ms") or {}
@@ -997,33 +1064,19 @@ def _section_concurrency_table(block: dict[str, Any]) -> list[str]:
     )
     in_tok = block.get("input_tokens")
     out_tok = block.get("output_tokens")
-    peak_t = block.get("peak_tokens_per_seq")
-    if peak_t is None and isinstance(in_tok, (int, float)) and isinstance(
-        out_tok, (int, float)
-    ):
-        peak_t = int(in_tok) + int(out_tok)
-    shape_bits: list[str] = []
-    if isinstance(in_tok, (int, float)) and isinstance(out_tok, (int, float)):
-        shape_bits.append(
-            f"input {number(in_tok, 0)} / output {number(out_tok, 0)}"
-        )
-    if isinstance(peak_t, (int, float)):
-        shape_bits.append(f"peak T={number(peak_t, 0)}/seq")
-    shape_line = (
-        f"Timed load: {'; '.join(shape_bits)}."
-        if shape_bits
-        else ""
-    )
-    lines = [
-        f"### Concurrent requests = {conc_txt}",
-        "",
-    ]
-    if shape_line:
-        lines.extend([shape_line, ""])
+    if not isinstance(in_tok, (int, float)):
+        in_tok = default_input_tokens
+    if not isinstance(out_tok, (int, float)):
+        out_tok = default_output_tokens
+    lines: list[str] = []
+    if subsection:
+        lines.extend([f"### Concurrent requests = {conc_txt}", ""])
     lines.extend(
         [
             f"| Metric | Baseline | {arm} |",
             "|--------|----------|-------|",
+            f"| Input tokens | {number(in_tok, 0)} | {number(in_tok, 0)} |",
+            f"| Output max tokens | {number(out_tok, 0)} | {number(out_tok, 0)} |",
             f"| Concurrent requests | {conc_txt} | {conc_txt} |",
         ]
     )
@@ -1042,12 +1095,10 @@ def _section_concurrency_table(block: dict[str, Any]) -> list[str]:
                 f"| TTFT (ms) p50 / p95 / p99 | n/a | {_compact_pct(t_lat, 'ttft')} |"
             )
     else:
+        b_tps = tps.get("baseline")
+        t_tps = tps.get("tic")
         lines.append(
-            (
-                "| Output tok/s | "
-                f"{number(tps.get('baseline'))} | "
-                f"{number(tps.get('tic'))} |"
-            )
+            f"| Output tok/s | {number(b_tps)} | {_tok_s_isiro_cell(b_tps, t_tps)} |"
         )
         if b_lat and t_lat:
             lines.extend(_compact_latency_rows(b_lat, t_lat))
@@ -1055,9 +1106,13 @@ def _section_concurrency_table(block: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _section_concurrency(blocks: list[dict[str, Any]]) -> list[str]:
+def _section_concurrency(
+    blocks: list[dict[str, Any]],
+    *,
+    decode_rows: list[dict[str, Any]] | None = None,
+) -> list[str]:
     lines = [
-        "## C. Concurrency",
+        "## C. Equal-N (same concurrency)",
         "",
         (
             "Same concurrent-request ceiling both arms at each N "
@@ -1066,8 +1121,24 @@ def _section_concurrency(blocks: list[dict[str, Any]]) -> list[str]:
         ),
         "",
     ]
+    in_tok, out_tok = 32, 256
+    rows = decode_rows or []
+    if rows:
+        try:
+            in_tok = int(rows[0].get("input_tokens") or 32)
+            out_tok = int(rows[0].get("output_tokens") or 256)
+        except (TypeError, ValueError):
+            in_tok, out_tok = 32, 256
+    multi = len(blocks) > 1
     for block in blocks:
-        lines.extend(_section_concurrency_table(block))
+        lines.extend(
+            _section_concurrency_table(
+                block,
+                subsection=multi,
+                default_input_tokens=in_tok,
+                default_output_tokens=out_tok,
+            )
+        )
     return lines
 
 
@@ -1270,7 +1341,7 @@ def _mode_sections(
             raise ValueError(
                 "concurrency fairness: " + "; ".join(bad)
             )
-        lines.extend(_section_concurrency(conc_blocks))
+        lines.extend(_section_concurrency(conc_blocks, decode_rows=decode_rows))
     if (
         capacity is not None
         and experiment_kind == "capacity"
@@ -1284,14 +1355,7 @@ def _mode_sections(
                 prefix=cap_letter,
                 overflow_note=False,
                 gib_only=isiro_kv_on,
-            )
-        )
-        lines.extend(
-            _section_generation(
-                capacity,
-                decode_rows,
-                mention_equal_batch=False,
-                as_subsection=True,
+                decode_rows=decode_rows,
             )
         )
     elif not conc_blocks:

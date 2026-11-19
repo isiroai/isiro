@@ -1,0 +1,127 @@
+Loading .tic metadata from …/gemma-4-12B-it-fp8/rtx-5090-report-cold-attend/logs/tic-bundle-probe ...
+  Config/tokenizer : …/gemma-4-12B-it-fp8/rtx-5090-report-cold-attend/logs/tic-bundle-probe (from TIC bundle)
+Using serve settings from …/rtx-5090-report-cold-attend/logs/tic-bundle-probe/serve.yaml (CLI --host/--port override when set)
+Starting engine (kernel cache speeds later starts)...
+ISIRO_GDX=bf16 route=path_a; beside vendor_fa; kv_cache_dtype=bfloat16; LIVE_WINDOW=512
+
+────────────────────────────────────────────────────────────────────────
+Isiro Runtime · Powered by TIC
+
+      █████████    █████     ███████            runtime:  v0.1.1
+          █         ███     █                   target:   vllm 0.31.0
+          █          █      █                   model:    google/gemma-4-12B-it
+          █         ███     █                   format:   v0.1.0  .tic
+          █        █████     ███████            weights ↓ 4.7%
+────────────────────────────────────────────────────────────────────────
+
+license: developer
+Runtime target tags: isiro status --compat
+────────────────────────────────────────────────────────────────────────
+
+(MainProcess pid=7) INFO 10-13 17:57:01 [model.py:699] Resolved architecture: Gemma4UnifiedForConditionalGeneration
+(MainProcess pid=7) INFO 10-13 17:57:01 [model.py:2109] Using max model len 8192
+(MainProcess pid=7) INFO 10-13 17:57:11 [arg_utils.py:3089] Raising max_num_batched_tokens from 2048 to 2496 to accommodate 'video' input for prefix-LM model /home/kunle/repos/isiroai/isiro/benchmarks/gemma-4-12B-it-fp8/rtx-5090-report-cold-attend/logs/tic-bundle-probe.
+(MainProcess pid=7) INFO 10-13 17:57:11 [scheduler.py:308] Chunked prefill is enabled with max_num_batched_tokens=2496.
+(MainProcess pid=7) WARNING 10-13 17:57:12 [vllm.py:1706] Enforce eager set, disabling torch.compile, CUDAGraphs, and JIT kernel warmup. This is equivalent to setting -cc.mode=none -cc.cudagraph_mode=none and --kernel_config.enable_jit_warmup=False
+(MainProcess pid=7) WARNING 10-13 17:57:12 [vllm.py:1750] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(MainProcess pid=7) INFO 10-13 17:57:12 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(MainProcess pid=7) INFO 10-13 17:57:12 [vllm.py:1968] Cudagraph is disabled under eager mode
+(MainProcess pid=7) WARNING 10-13 17:57:12 [cuda.py:339] Forcing --disable_chunked_mm_input for models with multimodal-bidirectional attention.
+(MainProcess pid=7) INFO 10-13 17:57:12 [compilation.py:331] Enabled custom fusions: norm_quant, act_quant
+(EngineCore pid=219) INFO 10-13 17:57:32 [__init__.py:113] Registered model loader `TICModelLoader` with load format `tic`
+(EngineCore pid=219) INFO 10-13 17:57:35 [register.py:100] maxil: registered Maxil linear kernels (maxil=Marlin twin + W=A; maxil_gemm=alias) on platform=CUDA
+(EngineCore pid=219) INFO 10-13 17:57:35 [parallel_state.py:1825] world_size=1 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_0bc30bfc31cd4457b6fc5d3078e7d6ae backend=nccl
+(EngineCore pid=219) INFO 10-13 17:57:35 [parallel_state.py:2269] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, ETP rank 0, EP rank N/A, EPLB rank N/A
+(EngineCore pid=219) INFO 10-13 17:57:35 [gpu_worker.py:479] Using V2 Model Runner
+(EngineCore pid=219) INFO 10-13 17:57:37 [model_runner.py:375] Loading model from scratch...
+Loading weights: 1/1005 layers
+Loading weights: 16/1005 layers
+(EngineCore pid=219) INFO 10-13 17:57:39 [cuda.py:466] Using AttentionBackendEnum.CUSTOM backend.
+(EngineCore pid=219) INFO 10-13 17:57:39 [cuda.py:466] Using AttentionBackendEnum.CUSTOM backend.
+Loading weights: 17/1005 layers
+Loading weights: 361/1005 layers
+Loading weights: 364/1005 layers
+Loading weights: 378/1005 layers
+Loading weights: 397/1005 layers
+Loading weights: 414/1005 layers
+Loading weights: 431/1005 layers
+Loading weights: 448/1005 layers
+Loading weights: 470/1005 layers
+Loading weights: 487/1005 layers
+(MainProcess pid=7) INFO 10-13 17:57:43 [base.py:255] Multi-modal warmup completed in 20.134s
+Loading weights: 505/1005 layers
+Loading weights: 526/1005 layers
+Loading weights: 543/1005 layers
+Loading weights: 560/1005 layers
+Loading weights: 575/1005 layers
+Loading weights: 599/1005 layers
+Loading weights: 619/1005 layers
+Loading weights: 635/1005 layers
+Loading weights: 655/1005 layers
+Loading weights: 673/1005 layers
+Loading weights: 697/1005 layers
+Loading weights: 714/1005 layers
+Loading weights: 733/1005 layers
+Loading weights: 753/1005 layers
+Loading weights: 778/1005 layers
+Loading weights: 795/1005 layers
+Loading weights: 812/1005 layers
+Loading weights: 831/1005 layers
+Loading weights: 851/1005 layers
+Loading weights: 868/1005 layers
+Loading weights: 887/1005 layers
+Loading weights: 908/1005 layers
+Loading weights: 925/1005 layers
+Loading weights: 949/1005 layers
+Loading weights: 966/1005 layers
+Loading weights: 985/1005 layers
+Loading weights: 100%|████████████████████████████| 1005/1005 layers
+(EngineCore pid=219) INFO 10-13 17:57:53 [model_runner.py:407] Model loading took 12.09 GiB memory and 16.527363 seconds
+(EngineCore pid=219) INFO 10-13 17:57:53 [topk_topp_sampler.py:96] FlashInfer top-p/top-k sampling disabled via VLLM_USE_FLASHINFER_SAMPLER=0.
+(EngineCore pid=219) INFO 10-13 17:57:53 [torch_utils.py:286] Reducing Torch threads from 16 to 1 for serving. Set OMP_NUM_THREADS in the external environment to override.
+(EngineCore pid=219) INFO 10-13 17:57:53 [utils.py:343] Using LBNHC KV cache layout.
+(EngineCore pid=219) INFO 10-13 17:58:11 [encoder_runner.py:131] Encoder cache will be initialized with a budget of 2496 tokens, and profiled with 1 video items of the maximum feature size.
+[rank0]:[W1013 17:58:11.184709916 CUDACachingAllocator.cpp:508] expandable_segments: memory mapping failed with OOM on device 0 while trying to map 20971520 bytes (free: 35717120, total: 33671348224).
+(EngineCore pid=219) INFO 10-13 17:58:13 [gpu_worker.py:692] Available KV cache memory: 14.9 GiB
+gdx_kv_o1 attach n=96 alphabet=bf16 live_hbm=on fa_wrap=0 triton_warm=1 triton_warm_shape=1 warm_ms=188
+pf_hybrid_reopen_after_kv hybrid=1 lean=1 mode=hybrid_flag_only dense_w_slots=8
+(EngineCore pid=219) INFO 10-13 17:58:13 [kv_cache_utils.py:2464] GPU KV cache size: 62,093 tokens, Maximum concurrency for 8,192 tokens per request: 7.58x
+(EngineCore pid=219) INFO 10-13 17:58:14 [kernel_warmup.py:255] Skipping FlashInfer autotune because it is disabled.
+(EngineCore pid=219) INFO 10-13 17:58:15 [core.py:380] init engine (profile, create kv cache, warmup model) took 22.25 s
+(EngineCore pid=219) INFO 10-13 17:58:15 [kv_cache_utils.py:772] kv cache group sizes [16, 16, 16, 16, 16, 64]
+(EngineCore pid=219) INFO 10-13 17:58:15 [kv_cache_utils.py:773] kv lcm block sizes 64
+(EngineCore pid=219) WARNING 10-13 17:58:15 [vllm.py:1706] Enforce eager set, disabling torch.compile, CUDAGraphs, and JIT kernel warmup. This is equivalent to setting -cc.mode=none -cc.cudagraph_mode=none and --kernel_config.enable_jit_warmup=False
+(EngineCore pid=219) WARNING 10-13 17:58:15 [vllm.py:1750] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(EngineCore pid=219) INFO 10-13 17:58:15 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(EngineCore pid=219) INFO 10-13 17:58:15 [vllm.py:1968] Cudagraph is disabled under eager mode
+(EngineCore pid=219) INFO 10-13 17:58:15 [compilation.py:331] Enabled custom fusions: norm_quant, act_quant
+(MainProcess pid=7) INFO 10-13 17:58:15 [factories.py:76] Scale-out endpoints are disabled. Set --enable-scale-out to enable them.
+(MainProcess pid=7) INFO 10-13 17:58:17 [hf.py:646] Detected the chat template content format to be 'openai'. You can set `--chat-template-content-format` to override this.
+
+Engine ready (API not open yet)
+Warming inference kernels...
+(MainProcess pid=7) WARNING 10-13 17:58:17 [input_processor.py:375] Passing raw prompts to InputProcessor is deprecated and will be removed in the future. You should instead pass the outputs of Renderer.render_cmpl() or Renderer.render_chat().
+gdx_kv_o1 meter={'n_attach': 96, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True, 'dbg_seq_tok': 14, 'dbg_q_tok': 14, 'dbg_mq': 14, 'dbg_persist': 0}
+Kernel warmup complete.
+
+ISIRO serve ready
+  Base URL:   http://127.0.0.1:8000/v1
+  Health:     http://127.0.0.1:8000/health
+  Metrics:    http://127.0.0.1:8000/metrics
+  API:        POST /v1/chat/completions  GET /v1/models
+  Extensions: GET /v1/stats  GET /v1/license
+  Chat UI:    http://localhost:3000  (Open WebUI)
+  Attention:  vendor FA (CUSTOM drop-in; ISIRO_ATTN unset; ISIRO_ATTN=0 for vendor auto-select)
+
+INFO:     Started server process [7]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     172.17.0.1:41804 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     172.17.0.1:41814 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     172.17.0.1:41828 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(EngineCore pid=219) INFO 10-13 17:58:21 [core.py:1409] [shutdown] EngineCore: trigger received signal=SIGTERM
+(EngineCore pid=219) INFO 10-13 17:58:21 [core.py:1558] [shutdown] EngineCore: start mode=abort timeout=0s
+(EngineCore pid=219) INFO 10-13 17:58:21 [core.py:1589] [shutdown] EngineCore: request processing complete; starting resource teardown
+(EngineCore pid=219) INFO 10-13 17:58:21 [core.py:1422] [shutdown] EngineCore: exiting busy loop
+gdx_kv_o1 meter={'n_attach': 96, 'n_skip_unarmed': 144, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True, 'dbg_seq_tok': 14, 'dbg_q_tok': 14, 'dbg_mq': 14, 'dbg_persist': 0}

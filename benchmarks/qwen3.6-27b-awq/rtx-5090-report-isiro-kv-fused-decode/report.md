@@ -1,6 +1,6 @@
 # ISIRO Benchmark Report: `qwen3.6-27b-awq`
 
-`awq` | `rtx-5090` | compiler `kv-only` | runtime `kv-only` | 2026-11-06 13:03 UTC
+`awq` | `rtx-5090` | compiler `kv-only` | runtime `kv-only` | 2026-11-06 15:20 UTC
 
 Tooling:
 
@@ -9,11 +9,11 @@ Tooling:
 Compared:
 
 - **Baseline:** vLLM (`vllm serve` / Docker `vllm/vllm-openai`) with `--kv-cache-dtype fp8`
-- **Isiro KV-only:** `vllm serve` + `ISIRO_KV=fp8` (same AWQ/HF weights as baseline; no TIC weight claim)
+- **Isiro KV-only:** `vllm serve` + `ISIRO_KV=fp8` + fused dens (`FUSED_ATTEND=1` `FUSED_DECODE=1`; same AWQ/HF weights; no TIC weight claim)
 
-Section A: loaded weights and Available KV GiB are shared (same raw weights, same vendor util). KV tokens capacity and Capacity concurrency follow the measured Isiro/Baseline token ratio on that budget. KV bytes vs context are under KV vs context when the curve ran.
+Section A: loaded weights and Available KV GiB are shared (same raw weights, same vendor util). This dens scrape used W=16 so short equalize deposits cold; FA EngineArgs clamp lands in a follow-on remeter.
 
-TIME claim: **NO GO** on equal-batch (conc=1; tok/s 68.54 vs 72.92; ITL 14.20 vs 13.53; TTFT 90.73 vs 35.31).
+TIME claim: **NO GO** on equal-batch (conc=1; tok/s 69.24 vs 72.83; ITL 13.42 vs 13.57; TTFT 95.97 vs 41.15). Side-stream codes stamp improved ITL to beat baseline; TTFT still ~2.3×. Stamp stays `attend=(a)`.
 
 ## Correctness
 
@@ -36,7 +36,7 @@ Loaded weights are identical on both arms (no TIC weight claim).
 
 | Metric | Value |
 |--------|-------|
-| Available KV | 4.11 GiB |
+| Available KV | 4.09 GiB |
 
 Available KV is the vendor reserved pool on the GPU (same util target both arms; no TIC weight headroom).
 
@@ -46,42 +46,31 @@ Available KV is the vendor reserved pool on the GPU (same util target both arms;
 
 ## C. Equal batch
 
-Same concurrent-request ceiling as Baseline (latency-matched surface). Capacity-matched generation in D raises concurrency for aggregate tok/s; ITL/TTFT there are not the equal-batch claim.
+Same concurrent-request ceiling as Baseline (latency-matched surface). Dens scrape forces cold deposit (W=16, in=64).
 
 | Metric | Baseline | Isiro |
 |--------|----------|-------|
 | Concurrent requests | 1 | 1 |
-| Output tok/s | 72.92 | 68.54 |
-| ITL (ms) p50 / p95 / p99 | 13.53 / 14.34 / 14.50 | 14.20 / 16.13 / 16.52 |
-| TPOT (ms) p50 / p95 / p99 | 13.63 / 13.63 / 13.63 | 14.29 / 14.29 / 14.29 |
-| TTFT (ms) p50 / p95 / p99 | 35.31 / 35.31 / 35.31 | 90.73 / 90.73 / 90.73 |
-
-## D. Generation (recall-matched KV, input 32 / output 256)
-
-Tok/s is aggregate system throughput across in-flight requests. Per-request decode rate is reflected by ITL/TPOT. Concurrent requests are in Capacity. Not equal batch (C). Latency-matched wins live in Equal batch (same conc as Baseline). Higher Capacity concurrency raises aggregate tok/s and can move TTFT/ITL.
-
-| Metric | Baseline | Isiro |
-|--------|----------|-------|
-| Output tok/s | 72.92 | 68.54 |
-| ITL (ms) p50 / p95 / p99 | 13.53 / 14.34 / 14.50 | 14.20 / 16.13 / 16.52 |
-| TPOT (ms) p50 / p95 / p99 | 13.63 / 13.63 / 13.63 | 14.29 / 14.29 / 14.29 |
-| TTFT (ms) p50 / p95 / p99 | 35.31 / 35.31 / 35.31 | 90.73 / 90.73 / 90.73 |
+| Output tok/s | 72.83 | 69.24 |
+| ITL (ms) p50 / p95 / p99 | 13.57 / 14.39 / 14.56 | 13.42 / 16.80 / 27.20 |
+| TPOT (ms) p50 / p95 / p99 | 13.62 / 13.62 / 13.62 | 14.12 / 14.12 / 14.12 |
+| TTFT (ms) p50 / p95 / p99 | 41.15 / 41.15 / 41.15 | 95.97 / 95.97 / 95.97 |
 
 ## Config
 
 | Item | Value |
 |------|-------|
 | System | `rtx-5090` |
-| CUDA graphs | on (eager prefill, graph decode) |
+| CUDA graphs | on (PIECEWISE dens) |
 | Weights | `awq` |
 | KV cache | dtype `fp8`; `ISIRO_KV=fp8` on Isiro |
 | Compiler | `kv-only` |
 | Runtime | `kv-only` |
 | vLLM | 0.31.0 |
 | GPU | NVIDIA GeForce RTX 5090 x 1 |
-| Driver / CUDA | 590.44.01 / 13.1 |
 | ISIRO_KV | `fp8` |
-| Isiro attention | `FLASH_ATTN` (`ISIRO_ATTN` unset) |
+| Isiro attention | fused dens a+ (lab; product TIME stays path a) |
 | Baseline attention | `FLASH_ATTN` |
+| Remeter | `20261106T151543Z` |
 
 Fairness check: **PASS**.

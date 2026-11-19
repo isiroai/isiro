@@ -1,0 +1,133 @@
+Loading .tic metadata from …/rtx-5090-report-cold-attend/logs/tic-bundle-residency ...
+  Config/tokenizer : …/rtx-5090-report-cold-attend/logs/tic-bundle-residency (from TIC bundle)
+Using serve settings from …/rtx-5090-report-cold-attend/logs/tic-bundle-residency/serve.yaml (CLI --host/--port override when set)
+Starting engine (kernel cache speeds later starts)...
+ISIRO_GDX=bf16 route=path_a; beside vendor_fa; kv_cache_dtype=bfloat16; LIVE_WINDOW=512
+
+────────────────────────────────────────────────────────────────────────
+Isiro Runtime · Powered by TIC
+
+      █████████    █████     ███████            runtime:  v0.1.1
+          █         ███     █                   target:   vllm 0.31.0
+          █          █      █                   model:    google/gemma-4-12B-it
+          █         ███     █                   format:   v0.1.0  .tic
+          █        █████     ███████            weights ↓ 4.7%
+────────────────────────────────────────────────────────────────────────
+
+license: developer
+Runtime target tags: isiro status --compat
+────────────────────────────────────────────────────────────────────────
+
+(MainProcess pid=7) INFO 10-13 17:41:36 [model.py:699] Resolved architecture: Gemma4UnifiedForConditionalGeneration
+(MainProcess pid=7) INFO 10-13 17:41:36 [model.py:2109] Using max model len 8192
+(MainProcess pid=7) INFO 10-13 17:41:46 [arg_utils.py:3089] Raising max_num_batched_tokens from 2048 to 2496 to accommodate 'video' input for prefix-LM model /home/kunle/repos/isiroai/isiro/benchmarks/gemma-4-12B-it-fp8/rtx-5090-report-cold-attend/logs/tic-bundle-residency.
+(MainProcess pid=7) INFO 10-13 17:41:46 [scheduler.py:308] Chunked prefill is enabled with max_num_batched_tokens=2496.
+(MainProcess pid=7) INFO 10-13 17:41:47 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native'])
+(MainProcess pid=7) WARNING 10-13 17:41:47 [cuda.py:339] Forcing --disable_chunked_mm_input for models with multimodal-bidirectional attention.
+(EngineCore pid=219) INFO 10-13 17:42:08 [__init__.py:113] Registered model loader `TICModelLoader` with load format `tic`
+(EngineCore pid=219) INFO 10-13 17:42:10 [register.py:100] maxil: registered Maxil linear kernels (maxil=Marlin twin + W=A; maxil_gemm=alias) on platform=CUDA
+(EngineCore pid=219) INFO 10-13 17:42:11 [parallel_state.py:1825] world_size=1 rank=0 local_rank=0 distributed_init_method=file:///tmp/vllm_dist_6952dc01dfdf4893be85c07496122945 backend=nccl
+(EngineCore pid=219) INFO 10-13 17:42:11 [parallel_state.py:2269] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, ETP rank 0, EP rank N/A, EPLB rank N/A
+(EngineCore pid=219) INFO 10-13 17:42:11 [gpu_worker.py:479] Using V2 Model Runner
+(EngineCore pid=219) INFO 10-13 17:42:12 [model_runner.py:375] Loading model from scratch...
+Loading weights: 1/1005 layers
+Loading weights: 16/1005 layers
+(EngineCore pid=219) INFO 10-13 17:42:14 [cuda.py:466] Using AttentionBackendEnum.CUSTOM backend.
+(EngineCore pid=219) INFO 10-13 17:42:14 [cuda.py:466] Using AttentionBackendEnum.CUSTOM backend.
+Loading weights: 17/1005 layers
+Loading weights: 287/1005 layers
+Loading weights: 362/1005 layers
+Loading weights: 364/1005 layers
+Loading weights: 379/1005 layers
+Loading weights: 395/1005 layers
+Loading weights: 414/1005 layers
+Loading weights: 431/1005 layers
+Loading weights: 448/1005 layers
+Loading weights: 467/1005 layers
+Loading weights: 487/1005 layers
+Loading weights: 508/1005 layers
+(MainProcess pid=7) INFO 10-13 17:42:18 [base.py:255] Multi-modal warmup completed in 20.169s
+Loading weights: 532/1005 layers
+Loading weights: 554/1005 layers
+Loading weights: 574/1005 layers
+Loading weights: 593/1005 layers
+Loading weights: 610/1005 layers
+Loading weights: 627/1005 layers
+Loading weights: 644/1005 layers
+Loading weights: 663/1005 layers
+Loading weights: 683/1005 layers
+Loading weights: 700/1005 layers
+Loading weights: 722/1005 layers
+Loading weights: 742/1005 layers
+Loading weights: 767/1005 layers
+Loading weights: 789/1005 layers
+Loading weights: 809/1005 layers
+Loading weights: 826/1005 layers
+Loading weights: 846/1005 layers
+Loading weights: 865/1005 layers
+Loading weights: 882/1005 layers
+Loading weights: 901/1005 layers
+Loading weights: 921/1005 layers
+Loading weights: 946/1005 layers
+Loading weights: 963/1005 layers
+Loading weights: 980/1005 layers
+Loading weights: 100%|████████████████████████████| 1005/1005 layers
+(EngineCore pid=219) INFO 10-13 17:42:27 [model_runner.py:407] Model loading took 12.09 GiB memory and 15.849963 seconds
+(EngineCore pid=219) INFO 10-13 17:42:27 [topk_topp_sampler.py:96] FlashInfer top-p/top-k sampling disabled via VLLM_USE_FLASHINFER_SAMPLER=0.
+(EngineCore pid=219) INFO 10-13 17:42:27 [torch_utils.py:286] Reducing Torch threads from 16 to 1 for serving. Set OMP_NUM_THREADS in the external environment to override.
+(EngineCore pid=219) INFO 10-13 17:42:27 [utils.py:343] Using LBNHC KV cache layout.
+(EngineCore pid=219) INFO 10-13 17:42:45 [encoder_runner.py:131] Encoder cache will be initialized with a budget of 2496 tokens, and profiled with 1 video items of the maximum feature size.
+(EngineCore pid=219) INFO 10-13 17:42:46 [caching.py:342] reconstructed serializable fn from standalone compile artifacts. num_artifacts=6 num_submods=49
+(EngineCore pid=219) INFO 10-13 17:42:46 [decorators.py:312] Directly load AOT compilation from path /isiro/.isiro/cache/vllm/torch_compile_cache/torch_aot_compile/bea7faf9d46668aa32ef362fa2836251fd3f54551202b9446462107690122136/rank_0_0/model
+(EngineCore pid=219) INFO 10-13 17:42:46 [monitor.py:53] torch.compile took 0.31 s in total
+(EngineCore pid=219) INFO 10-13 17:42:46 [monitor.py:81] Initial profiling/warmup run took 0.03 s
+Capturing CUDA graphs (PIECEWISE):   0%|          | 0/11 [00:00<?, ?it/s]Capturing CUDA graphs (PIECEWISE):   9%|▉         | 1/11 [00:00<00:01,  6.20it/s]Capturing CUDA graphs (PIECEWISE):  45%|████▌     | 5/11 [00:00<00:00, 20.72it/s]Capturing CUDA graphs (PIECEWISE):  82%|████████▏ | 9/11 [00:00<00:00, 25.61it/s]Capturing CUDA graphs (PIECEWISE): 100%|██████████| 11/11 [00:00<00:00, 23.86it/s]
+Capturing CUDA graphs (FULL):   0%|          | 0/2 [00:00<?, ?it/s]Capturing CUDA graphs (FULL): 100%|██████████| 2/2 [00:00<00:00, 41.56it/s]
+(EngineCore pid=219) INFO 10-13 17:42:49 [model_runner.py:1087] Graph capturing finished in 2 secs, took 0.11 GiB
+(EngineCore pid=219) INFO 10-13 17:42:50 [gpu_worker.py:692] Available KV cache memory: 14.77 GiB
+(EngineCore pid=219) INFO 10-13 17:42:50 [gpu_worker.py:707] CUDA graph memory profiling is enabled (default since v0.21.0). The current --gpu-memory-utilization=0.9000 is equivalent to --gpu-memory-utilization=0.8958 without CUDA graph memory profiling. To maintain the same effective KV cache size as before, increase --gpu-memory-utilization to 0.9042. To disable, set VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=0.
+gdx_kv_o1 attach n=96 alphabet=bf16 live_hbm=on fa_wrap=0 triton_warm=1 triton_warm_shape=1 warm_ms=56
+pf_hybrid_reopen_after_kv hybrid=1 lean=1 mode=hybrid_flag_only dense_w_slots=8
+(EngineCore pid=219) INFO 10-13 17:42:50 [kv_cache_utils.py:2464] GPU KV cache size: 61,527 tokens, Maximum concurrency for 8,192 tokens per request: 7.51x
+(EngineCore pid=219) INFO 10-13 17:42:51 [kernel_warmup.py:172] JIT kernel warmup starting.
+(EngineCore pid=219) INFO 10-13 17:42:51 [kernel_warmup.py:185] JIT kernel warmup finished in 0.00s.
+(EngineCore pid=219) INFO 10-13 17:42:51 [kernel_warmup.py:255] Skipping FlashInfer autotune because it is disabled.
+Capturing CUDA graphs (PIECEWISE):   0%|          | 0/11 [00:00<?, ?it/s]Capturing CUDA graphs (PIECEWISE):  36%|███▋      | 4/11 [00:00<00:00, 38.04it/s]Capturing CUDA graphs (PIECEWISE):  73%|███████▎  | 8/11 [00:00<00:00, 38.45it/s]Capturing CUDA graphs (PIECEWISE): 100%|██████████| 11/11 [00:00<00:00, 38.13it/s]
+Capturing CUDA graphs (FULL):   0%|          | 0/7 [00:00<?, ?it/s]Capturing CUDA graphs (FULL):  71%|███████▏  | 5/7 [00:00<00:00, 47.47it/s]Capturing CUDA graphs (FULL): 100%|██████████| 7/7 [00:00<00:00, 46.89it/s]
+(EngineCore pid=219) INFO 10-13 17:42:53 [model_runner.py:1087] Graph capturing finished in 2 secs, took 0.04 GiB
+(EngineCore pid=219) INFO 10-13 17:42:53 [gpu_worker.py:892] CUDA graph pool memory: 0.04 GiB (actual), 0.13 GiB (estimated), difference: 0.09 GiB (240.0%).
+(EngineCore pid=219) INFO 10-13 17:42:54 [jit_monitor.py:84] Kernel JIT monitor activated; monitored JIT compilations during inference will use mode=warn.
+(EngineCore pid=219) INFO 10-13 17:42:54 [core.py:373] init engine (profile, create kv cache, warmup model) took 27.33 s (compilation: 0.31 s)
+(EngineCore pid=219) INFO 10-13 17:42:54 [kv_cache_utils.py:772] kv cache group sizes [16, 16, 16, 16, 16, 64]
+(EngineCore pid=219) INFO 10-13 17:42:54 [kv_cache_utils.py:773] kv lcm block sizes 64
+(EngineCore pid=219) INFO 10-13 17:42:54 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native'])
+(MainProcess pid=7) INFO 10-13 17:42:55 [factories.py:76] Scale-out endpoints are disabled. Set --enable-scale-out to enable them.
+(MainProcess pid=7) INFO 10-13 17:42:57 [hf.py:646] Detected the chat template content format to be 'openai'. You can set `--chat-template-content-format` to override this.
+
+Engine ready (API not open yet)
+Warming inference kernels...
+(MainProcess pid=7) WARNING 10-13 17:42:57 [input_processor.py:375] Passing raw prompts to InputProcessor is deprecated and will be removed in the future. You should instead pass the outputs of Renderer.render_cmpl() or Renderer.render_chat().
+(EngineCore pid=219) WARNING 10-13 17:42:57 [jit_monitor.py:140] Triton kernel JIT compilation during inference: kernel_unified_attention. This causes a latency spike; consider extending warmup to cover this shape/config.
+Kernel warmup complete.
+
+ISIRO serve ready
+  Base URL:   http://127.0.0.1:8000/v1
+  Health:     http://127.0.0.1:8000/health
+  Metrics:    http://127.0.0.1:8000/metrics
+  API:        POST /v1/chat/completions  GET /v1/models
+  Extensions: GET /v1/stats  GET /v1/license
+  Chat UI:    http://localhost:3000  (Open WebUI)
+  Attention:  vendor FA (CUSTOM drop-in; ISIRO_ATTN unset; ISIRO_ATTN=0 for vendor auto-select)
+
+INFO:     Started server process [7]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     172.17.0.1:33648 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     172.17.0.1:33662 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     172.17.0.1:33678 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(EngineCore pid=219) INFO 10-13 17:43:03 [core.py:1409] [shutdown] EngineCore: trigger received signal=SIGTERM
+(EngineCore pid=219) INFO 10-13 17:43:03 [core.py:1558] [shutdown] EngineCore: start mode=abort timeout=0s
+(EngineCore pid=219) INFO 10-13 17:43:03 [core.py:1589] [shutdown] EngineCore: request processing complete; starting resource teardown
+(EngineCore pid=219) INFO 10-13 17:43:03 [core.py:1422] [shutdown] EngineCore: exiting busy loop
+gdx_kv_o1 meter={'n_attach': 96, 'attend_class': 'a', 'deposit_alphabet': 'bf16', 'live_hbm': True}

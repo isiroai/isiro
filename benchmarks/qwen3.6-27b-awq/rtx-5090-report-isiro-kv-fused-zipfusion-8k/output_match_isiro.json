@@ -1,0 +1,53 @@
+{
+  "enable_thinking": false,
+  "kind": "capture",
+  "max_tokens": 32,
+  "model": "QuantTrio/Qwen3.6-27B-AWQ",
+  "prompt_count": 4,
+  "prompts": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "prompt": "Reply with exactly one word: ping",
+      "text": "pong",
+      "token_ids": [
+        57104,
+        248044
+      ]
+    },
+    {
+      "finish_reason": "stop",
+      "index": 1,
+      "prompt": "What is 2+2? Answer with only the number.",
+      "text": "4",
+      "token_ids": [
+        19,
+        248044
+      ]
+    },
+    {
+      "finish_reason": "stop",
+      "index": 2,
+      "prompt": "Name the capital of France in one word.",
+      "text": "Paris",
+      "token_ids": [
+        57590,
+        248044
+      ]
+    },
+    {
+      "finish_reason": "stop",
+      "index": 3,
+      "prompt": "Reply with exactly one word in lowercase: hello",
+      "text": "hello",
+      "token_ids": [
+        14556,
+        248044
+      ]
+    }
+  ],
+  "schema": "isiro-benchmark-output-match-v1",
+  "seed": 17,
+  "temperature": 0.0,
+  "variant": "isiro"
+}
