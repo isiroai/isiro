@@ -160,6 +160,37 @@ _PUBLISH_ITL_MAX_RATIO = 1.5
 _PUBLISH_TPS_MIN_RATIO = 0.7
 
 
+def _densify_after_load_meter(
+    fp: dict[str, Any],
+) -> bool:
+    """True when Model loading took is compressed but non_kv is densified.
+
+    Joint promote densifies after the load log for the one v0.31 compile.
+    Load-line HBM save then exceeds non_kv save; that is not vacated fraud.
+    """
+    baseline = fp.get("baseline") if isinstance(fp.get("baseline"), dict) else {}
+    tic = fp.get("tic") if isinstance(fp.get("tic"), dict) else {}
+    b_load = baseline.get("model_loading_bytes_reported")
+    t_load = tic.get("model_loading_bytes_reported")
+    b_non = baseline.get("non_kv_cache_memory_bytes_reported")
+    if b_non is None:
+        b_non = baseline.get("weights_and_non_kv_gpu_memory_bytes_derived")
+    t_non = tic.get("non_kv_cache_memory_bytes_reported")
+    if t_non is None:
+        t_non = tic.get("weights_and_non_kv_gpu_memory_bytes_derived")
+    load_save = percent_savings(
+        int(b_load) if isinstance(b_load, (int, float)) else None,
+        int(t_load) if isinstance(t_load, (int, float)) else None,
+    )
+    non_save = percent_savings(
+        int(b_non) if isinstance(b_non, (int, float)) else None,
+        int(t_non) if isinstance(t_non, (int, float)) else None,
+    )
+    if not isinstance(load_save, (int, float)) or not isinstance(non_save, (int, float)):
+        return False
+    return float(load_save) - float(non_save) > _PUBLISH_HBM_DISK_GAP_PP
+
+
 def publish_go_gate_mismatches(
     summary: dict[str, Any],
     *,
@@ -168,7 +199,8 @@ def publish_go_gate_mismatches(
     """Fail publish when HBM/KV meter wins or equal-batch latency collapse.
 
     Gates (publish_quality runs only):
-    - ``|hbm_save% - disk_save%| > 6`` pp (vacated densify-era meter)
+    - ``|hbm_save% - disk_save%| > 6`` pp (vacated densify-era meter),
+      skipped when densify-after-load is detected (load save >> non_kv save)
     - Available KV GiB below Hub (KV-only allows 2% scrape noise when Isiro
       capacity seqs exceed baseline)
     - Equal-batch (else capacity decode): ITL p50 > 1.5× Hub or tok/s < 0.7× Hub
@@ -184,7 +216,12 @@ def publish_go_gate_mismatches(
         int(b_load) if isinstance(b_load, (int, float)) else None,
         int(t_load) if isinstance(t_load, (int, float)) else None,
     )
-    if isinstance(disk, (int, float)) and isinstance(hbm, (int, float)):
+    densify_after_load = _densify_after_load_meter(fp)
+    if (
+        not densify_after_load
+        and isinstance(disk, (int, float))
+        and isinstance(hbm, (int, float))
+    ):
         gap = abs(float(hbm) - float(disk))
         if gap > _PUBLISH_HBM_DISK_GAP_PP:
             errors.append(

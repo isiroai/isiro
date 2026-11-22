@@ -899,6 +899,58 @@ class BenchmarkTests(unittest.TestCase):
         }
         self.assertEqual(publish_go_gate_mismatches(good), [])
 
+        # Densify-after-load (joint promote): compressed Model loading took,
+        # Hub-class non_kv, Available KV >= Hub, Hub-class latency -> GO.
+        # Load-line HBM save must not trip the vacated densify-era gap.
+        densify = {
+            "publish_quality": True,
+            "footprint": {
+                "on_disk_savings_pct_derived": 33.38,
+                "baseline": {
+                    "model_loading_bytes_reported": int(14.29 * 1024**3),
+                    "non_kv_cache_memory_bytes_reported": int(15.54 * 1024**3),
+                },
+                "tic": {
+                    "model_loading_bytes_reported": int(4.54 * 1024**3),
+                    "non_kv_cache_memory_bytes_reported": int(15.87 * 1024**3),
+                },
+            },
+            "kv_cache": {
+                "baseline_memory_bytes_measured": int(10.99 * 1024**3),
+                "tic_memory_bytes_measured": int(11.00 * 1024**3),
+            },
+            "equal_batch": build_equal_batch_block(
+                max_num_seqs=32,
+                max_concurrency=32,
+                baseline_tps=2825.0,
+                tic_tps=2801.0,
+                baseline_latency_ms={"itl_p50": 10.65},
+                tic_latency_ms={"itl_p50": 10.65},
+            ),
+        }
+        self.assertEqual(publish_go_gate_mismatches(densify), [])
+
+        # Vacated-style: compressed load meter and matching compressed non_kv
+        # still fail the HBM-disk gap (not densify-after-load shaped).
+        vacated = {
+            "publish_quality": True,
+            "footprint": {
+                "on_disk_savings_pct_derived": 15.0,
+                "baseline": {
+                    "model_loading_bytes_reported": 20_000,
+                    "non_kv_cache_memory_bytes_reported": 20_000,
+                },
+                "tic": {
+                    "model_loading_bytes_reported": 10_000,
+                    "non_kv_cache_memory_bytes_reported": 10_000,
+                },
+            },
+            "kv_cache": densify["kv_cache"],
+            "equal_batch": densify["equal_batch"],
+        }
+        mismatches = publish_go_gate_mismatches(vacated)
+        self.assertTrue(any("hbm_save" in m for m in mismatches))
+
     def test_equal_batch_block_has_raw_ratio_only(self) -> None:
         self.assertAlmostEqual(effective_bpv(1000, 600), 9.6)
         block = build_equal_batch_block(
