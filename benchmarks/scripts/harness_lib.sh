@@ -610,6 +610,12 @@ start_tic_serve() {
     if [[ -n "${ISIRO_KV_FA_RECLAIM:-}" ]]; then
       export ISIRO_KV_FA_RECLAIM
     fi
+    if [[ -n "${ISIRO_KV_LIVE_HBM:-}" ]]; then
+      export ISIRO_KV_LIVE_HBM
+    fi
+    if [[ -n "${ISIRO_JOINT_PROMOTE_AFTER_KV:-}" ]]; then
+      export ISIRO_JOINT_PROMOTE_AFTER_KV
+    fi
   else
     unset ISIRO_KV || true
   fi
@@ -881,7 +887,12 @@ if isiro_kv:
     isiro_kv_meter = os.environ.get("ISIRO_KV_METER", "").strip()
     if isiro_kv_meter:
         doc["tic_serve_env"]["ISIRO_KV_METER"] = isiro_kv_meter
-    for _k in ("ISIRO_KV_FUSED_ATTEND", "ISIRO_KV_FUSED_DECODE"):
+    for _k in (
+        "ISIRO_KV_FUSED_ATTEND",
+        "ISIRO_KV_FUSED_DECODE",
+        "ISIRO_KV_LIVE_HBM",
+        "ISIRO_JOINT_PROMOTE_AFTER_KV",
+    ):
         _v = os.environ.get(_k, "").strip()
         if _v:
             doc["tic_serve_env"][_k] = _v
